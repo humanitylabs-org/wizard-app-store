@@ -1,0 +1,14 @@
+services:
+  hermes-frontend-3:
+    image: ghcr.io/humanitylabs-org/hermes-frontend-3:1af684e-1
+    user: "101:101"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      HERMES_BACKEND_URL: ${HERMES_BACKEND_URL}
+    x-runtipi:
+      is_main: true
+      internal_port: 8080
+x-runtipi:
+  schema_version: 2
+  overrides: []

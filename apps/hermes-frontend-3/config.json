@@ -1,0 +1,36 @@
+{
+  "name": "Hermes Frontend 3",
+  "id": "hermes-frontend-3",
+  "available": false,
+  "short_desc": "Hermes Desktop-style browser UI for your existing Hermes Agent.",
+  "author": "przbadu / Nous Research; packaged by Humanity Labs",
+  "port": 9120,
+  "categories": [
+    "ai"
+  ],
+  "description": "Community browser extraction of Hermes Desktop. Connects to a separately installed Hermes Agent without replacing it.",
+  "tipi_version": 1,
+  "version": "1af684e-1",
+  "source": "https://github.com/przbadu/hermes-ui",
+  "website": "https://github.com/przbadu/hermes-ui",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791199719541,
+  "updated_at": 1791199719541,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 101,
+  "gid": 101,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Existing Hermes backend URL",
+      "env_variable": "HERMES_BACKEND_URL",
+      "required": true,
+      "hint": "Private HTTP(S) origin reachable from this container, e.g. http://hermes-agent:9119 for a single Hermes installation on the same Runtipi network. No trailing slash, path, or credentials."
+    }
+  ]
+}

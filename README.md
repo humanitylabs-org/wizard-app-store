@@ -18,9 +18,13 @@ Requires Runtipi 4.8.0 or newer. Install **Hermes Agent**, choose its dashboard 
 
 Keep it on a trusted private network. Disabling Runtipi domain exposure is not a firewall; secure the published app port on a public VPS. See the [app notes](apps/hermes-agent/metadata/description.md).
 
+**Hermes Frontend 3** — Desktop-style browser UI from the community project [przbadu/hermes-ui](https://github.com/przbadu/hermes-ui), packaged separately with no upstream UI changes. It connects to the existing Hermes backend through its API and native authentication; it does not install another agent. See [connection instructions and limitations](apps/hermes-frontend-3/metadata/description.md). This is a proof of concept, not an official Nous browser release.
+
 ## Validation
 
 `npm ci && npm test` validates metadata, native Compose structure, and packaging safety. `python3 scripts/smoke.py` exercises the real pinned image with disposable data, checks authentication and restart persistence, and removes its own test resources. It makes no model calls and uses no real credentials. These tests do not replace a first installation check on your Runtipi host.
+
+The browser image has an additional real-container Playwright smoke test: `uv run --with playwright python scripts/smoke-frontend.py`. The image build workflow verifies native login, session API access, desktop/mobile loading and live WebSocket traffic before publishing. Model turns are not tested. Build instructions and source attribution are in [the image notes](images/hermes-frontend-3/README.md).
 
 ## Attribution
 

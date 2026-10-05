@@ -23,6 +23,7 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       if (result instanceof type.errors) throw new Error(result.summary);
       expect(compose["x-runtipi"].schema_version).toBe(2);
     });
+    if (id === "hermes-agent") {
     test("unmodified pinned image and supported startup", () => {
       const s = compose.services[id];
       expect(s.image).toMatch(new RegExp(`^nousresearch/hermes-agent:${config.version.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`));
@@ -48,5 +49,23 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       expect(pwd.required).toBe(true);
       expect(pwd.default).toBeUndefined();
     });
+    }
+    if (id === "hermes-frontend-3") {
+      test("separate unprivileged frontend with no agent state or secrets", () => {
+        const s = compose.services[id];
+        expect(Object.keys(compose.services)).toEqual([id]);
+        expect(s.image).toStartWith(`ghcr.io/humanitylabs-org/hermes-frontend-3:${config.version}`);
+        expect(s.user).toBe("101:101");
+        expect(s.cap_drop).toEqual(["ALL"]);
+        expect(s.security_opt).toEqual(["no-new-privileges:true"]);
+        expect(s.environment).toEqual({HERMES_BACKEND_URL: "${HERMES_BACKEND_URL}"});
+        expect(s["x-runtipi"]).toEqual({is_main: true, internal_port: 8080});
+        for (const key of ["volumes", "privileged", "network_mode", "pid", "devices", "cap_add", "build", "command", "entrypoint"]) expect(s[key]).toBeUndefined();
+        expect(config.exposable).toBe(false);
+        expect(config.form_fields).toHaveLength(1);
+        expect(config.form_fields[0].required).toBe(true);
+        expect(config.form_fields[0].env_variable).toBe("HERMES_BACKEND_URL");
+      });
+    }
   });
 }
