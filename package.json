@@ -1,26 +1,11 @@
 {
-  "name": "example-appstore",
+  "name": "wizard-app-store",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
   "type": "module",
-  "scripts": {
-    "test": "bun test"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "@types/bun": "latest",
-    "@types/node": "^22.14.1",
-    "arktype": "^2.1.29"
-  },
-  "dependencies": {
-    "@runtipi/common": "^1.1.3",
-    "bun": "^1.2.10",
-    "zod-validation-error": "^3.4.0"
-  },
-  "peerDependencies": {
-    "typescript": "^5.0.0"
-  }
+  "description": "Humanity Labs community Runtipi app recipes",
+  "license": "WTFPL",
+  "scripts": {"test": "bun test"},
+  "devDependencies": {"@types/bun": "latest", "@types/node": "^22.14.1", "arktype": "^2.1.29", "typescript": "^5.0.0"},
+  "dependencies": {"@runtipi/common": "1.1.3", "bun": "1.3.11", "yaml": "^2.8.1"}
 }

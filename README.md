@@ -1,31 +1,27 @@
-# Example App Store Template
+# Wizard App Store
 
-This repository serves as a template for creating your own custom app store for the Runtipi platform. Use this as a starting point to create and share your own collection of applications.
+A small [Runtipi](https://runtipi.io/) community app store by Humanity Labs. Upstream software, standard Runtipi packaging, no custom Hermes fork.
 
-## Repository Structure
+## Add the store
 
-- **apps/**: Contains individual app directories
+In Runtipi, open **Settings → App Stores → Add App Store** and enter:
 
-  - Each app has its own folder (e.g., `whoami/`) with the following structure:
-    - `config.json`: App configuration file
-    - `docker-compose.json`: Docker setup for the app
-    - `metadata/`: Contains app visuals and descriptions
-      - `description.md`: Markdown description of the app
-      - `logo.jpg`: App logo image
+```
+https://github.com/humanitylabs-org/wizard-app-store
+```
 
-- **tests/**: Contains test files for the app store
+Requires Runtipi 4.8.0 or newer. Install **Hermes Agent**, choose its dashboard credentials, then configure your model/provider in the native Hermes dashboard.
 
-  - `apps.test.ts`: Test suite for validating apps
+## Included
 
-## Getting Started
+**Hermes Agent** — official `nousresearch/hermes-agent` image, pinned by version and multi-architecture digest; native dashboard; persistent `/opt/data`; no Docker-admin access. amd64 and arm64 images are published upstream; runtime smoke tests run on amd64.
 
-This repository is intended to serve as a template for creating your own app store. Follow these steps to get started:
+Keep it on a trusted private network. Disabling Runtipi domain exposure is not a firewall; secure the published app port on a public VPS. See the [app notes](apps/hermes-agent/metadata/description.md).
 
-1. Click the "Use this template" button to create a new repository based on this template
-2. Customize the apps or add your own app folders in the `apps/` directory
-3. Test your app store by using it with Runtipi
+## Validation
 
-## Documentation
+`npm ci && npm test` validates metadata, native Compose structure, and packaging safety. `python3 scripts/smoke.py` exercises the real pinned image with disposable data, checks authentication and restart persistence, and removes its own test resources. It makes no model calls and uses no real credentials. These tests do not replace a first installation check on your Runtipi host.
 
-For detailed instructions on creating your own app store, please refer to the official guide:
-[Create Your Own App Store Guide](https://runtipi.io/docs/guides/create-your-own-app-store)
+## Attribution
+
+Store structure adapted from [runtipi/example-appstore](https://github.com/runtipi/example-appstore); its license is retained. Hermes Agent and its logo belong to [Nous Research](https://github.com/NousResearch/hermes-agent); upstream code remains unmodified and under its own license. The app logo is converted from `website/static/img/logo.png` at the pinned Hermes release. This is community packaging, not an official Nous Research or Runtipi store.

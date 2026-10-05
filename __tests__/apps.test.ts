@@ -1,78 +1,52 @@
-import { expect, test, describe } from "bun:test";
-import { appInfoSchema, dynamicComposeSchema } from '@runtipi/common/schemas'
-import { fromError } from 'zod-validation-error';
-import fs from 'node:fs'
-import path from 'node:path'
+import { describe, expect, test } from "bun:test";
+import { appInfoSchema, dynamicComposeSchemaYaml } from "@runtipi/common/schemas";
 import { type } from "arktype";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { parse } from "yaml";
 
-const getApps = async () => {
-  const appsDir = await fs.promises.readdir(path.join(process.cwd(), 'apps'))
-
-  const appDirs = appsDir.filter((app) => {
-    const stat = fs.statSync(path.join(process.cwd(), 'apps', app))
-    return stat.isDirectory()
-  })
-
-  return appDirs
-};
-
-const getFile = async (app: string, file: string) => {
-  const filePath = path.join(process.cwd(), 'apps', app, file)
-  try {
-    const file = await fs.promises.readFile(filePath, 'utf-8')
-    return file
-  } catch (err) {
-    return null
-  }
+for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)) {
+  const dir = `apps/${id}`;
+  const config = JSON.parse(readFileSync(`${dir}/config.json`, "utf8"));
+  const compose = parse(readFileSync(`${dir}/docker-compose.yml`, "utf8"));
+  describe(id, () => {
+    test("required metadata and real JPEG", () => {
+      expect(existsSync(`${dir}/metadata/description.md`)).toBe(true);
+      expect(readFileSync(`${dir}/metadata/logo.jpg`).subarray(0, 3).toString("hex")).toBe("ffd8ff");
+      expect(config.id).toBe(id);
+    });
+    test("official Runtipi metadata schema", () => {
+      const result = appInfoSchema.omit("urn")(config);
+      if (result instanceof type.errors) throw new Error(result.summary);
+    });
+    test("official native Compose schema", () => {
+      const result = dynamicComposeSchemaYaml(compose);
+      if (result instanceof type.errors) throw new Error(result.summary);
+      expect(compose["x-runtipi"].schema_version).toBe(2);
+    });
+    test("unmodified pinned image and supported startup", () => {
+      const s = compose.services[id];
+      expect(s.image).toMatch(new RegExp(`^nousresearch/hermes-agent:${config.version.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`));
+      expect(s.command).toEqual(["gateway", "run"]);
+      expect(s.entrypoint).toBeUndefined();
+      expect(s.user).toBeUndefined();
+      expect(s["x-runtipi"]).toEqual({is_main: true, internal_port: 9119});
+    });
+    test("isolated data, no host privileges or auth bypass", () => {
+      const s = compose.services[id];
+      expect(Object.keys(compose.services)).toEqual([id]);
+      expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data"]);
+      for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build"]) expect(s[key]).toBeUndefined();
+      expect(s.environment.HERMES_DASHBOARD_INSECURE).toBeUndefined();
+      expect(s.environment.HERMES_UMBREL_APP_PROXY_AUTH).toBeUndefined();
+      expect(config.exposable).toBe(false);
+      for (const suffix of ["USERNAME", "PASSWORD", "SECRET"]) {
+        const key = `HERMES_DASHBOARD_BASIC_AUTH_${suffix}`;
+        expect(s.environment[key]).toBe(`\${${key}}`);
+        expect(config.form_fields.some((f: {env_variable: string}) => f.env_variable === key)).toBe(true);
+      }
+      const pwd = config.form_fields.find((f: {env_variable: string}) => f.env_variable.endsWith("PASSWORD"));
+      expect(pwd.required).toBe(true);
+      expect(pwd.default).toBeUndefined();
+    });
+  });
 }
-
-describe("each app should have the required files", async () => {
-  const apps = await getApps()
-
-  for (const app of apps) {
-    const files = ['config.json', 'docker-compose.json', 'metadata/logo.jpg', 'metadata/description.md']
-
-    for (const file of files) {
-      test(`app ${app} should have ${file}`, async () => {
-        const fileContent = await getFile(app, file)
-        expect(fileContent).not.toBeNull()
-      })
-    }
-  }
-})
-
-describe("each app should have a valid config.json", async () => {
-  const apps = await getApps()
-
-  for (const app of apps) {
-    test(`app ${app} should have a valid config.json`, async () => {
-      const fileContent = await getFile(app, 'config.json')
-      const parsed = appInfoSchema.omit('urn')(JSON.parse(fileContent || '{}'))
-
-      if (parsed instanceof type.errors) {
-        const validationError = fromError(parsed);
-        console.error(`Error parsing config.json for app ${app}:`, validationError.toString());
-      }
-
-      expect(parsed instanceof type.errors).toBe(false)
-    })
-  }
-})
-
-describe("each app should have a valid docker-compose.json", async () => {
-  const apps = await getApps()
-
-  for (const app of apps) {
-    test(`app ${app} should have a valid docker-compose.json`, async () => {
-      const fileContent = await getFile(app, 'docker-compose.json')
-      const parsed = dynamicComposeSchema(JSON.parse(fileContent || '{}'))
-
-      if (parsed instanceof type.errors) {
-        const validationError = fromError(parsed);
-        console.error(`Error parsing docker-compose.json for app ${app}:`, validationError.toString());
-      }
-
-      expect(parsed instanceof type.errors).toBe(false)
-    })
-  }
-});
