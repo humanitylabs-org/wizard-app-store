@@ -19,10 +19,10 @@ python3 service.py
 Do not commit `.local-data` or credentials. The default listener is loopback port 8787. To use a container, build from this directory:
 
 ```sh
-docker build -t wizard-defleur-video:0.2.0-review-1 .
+docker build -t wizard-defleur-video:0.2.1-testing .
 ```
 
-The Runtipi recipe remains **`available:false`** pending original-workflow parity, licensing, remote publication and user-host installation validation. Intended amd64 image: `ghcr.io/humanitylabs-org/defleur-video:0.2.0-review-1`. It owns `/data` with no Hermes dependency, Docker socket or host agent directories. The workflow builds only this directory; its allowlisted context excludes vendor source, Git history, evidence and user data. Publication and public registry visibility are separate steps. Local tests are not a completed Runtipi dashboard install.
+The Runtipi recipe remains **`available:false`** pending original-workflow parity, licensing, remote publication and user-host installation validation. Intended amd64 image: `ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing`. It owns `/data` with no Hermes dependency, Docker socket or host agent directories. The workflow builds only this directory; its allowlisted context excludes vendor source, Git history, evidence and user data. Publication and public registry visibility are separate steps. Local tests are not a completed Runtipi dashboard install.
 
 **Fresh-bind permissions:** Runtipi 4.8.0's actual translator is exercised by the lifecycle smoke. `uid`/`gid` metadata does not chown the bind. Runtipi runs `chmod -Rf a+rwx` on app data **after** Compose starts; initial permission failures can precede the translated `unless-stopped` restart. The resulting data root is broadly writable and lifecycle operations may also broaden existing file permissions. Keep this a private, single-owner host. For manual deployment, provision the bind for container UID/GID 1000 before starting, accounting for rootless user-namespace mapping. `exposable:false` is not a firewall: opening the app port can publish it on all host interfaces.
 

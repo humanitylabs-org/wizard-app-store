@@ -40,17 +40,14 @@ test("image context and release workflow contain only the original service", () 
   const commands = workflow.jobs["video-image"].steps.map((step: {run?: string}) => step.run || "").join("\n");
   expect(commands).toContain("sh images/defleur-video/test-container.sh");
   expect(commands).toContain("python3 scripts/smoke-video.py");
-  expect(commands).toContain("docker push ghcr.io/humanitylabs-org/defleur-video:0.2.0-review-1");
+  expect(commands).toContain("docker push ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing");
 });
 
-test("video testing release is private, no-GUI and token-gated", () => {
+test("video testing release is private, no-GUI and needs no token form", () => {
   expect(config.available).toBe(true);
   expect(config.exposable).toBe(false);
   expect(config.no_gui).toBe(true);
-  expect(config.form_fields).toHaveLength(1);
-  expect(config.form_fields[0].required).toBe(true);
-  expect(config.form_fields[0].min).toBe(32);
-  expect(config.form_fields[0].default).toBeUndefined();
+  expect(config.form_fields).toBeUndefined();
 });
 
 test("video has independent state, no agent volumes, bounded unprivileged service", () => {
@@ -65,9 +62,9 @@ test("video has independent state, no agent volumes, bounded unprivileged servic
   expect(service.memswap_limit).toBe(service.mem_limit);
   expect(service.cpus).toBe(2);
   expect(service.pids_limit).toBe(64);
-  expect(config.version).toBe("0.2.0-review-1");
+  expect(config.version).toBe("0.2.1-testing");
   expect(service.image).toBe(`ghcr.io/humanitylabs-org/defleur-video:${config.version}`);
-  expect(service.environment.VIDEO_API_TOKEN).toBe("${VIDEO_API_TOKEN}");
+  expect(service.environment.VIDEO_API_TOKEN).toBeUndefined();
   for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "depends_on"]) {
     expect(service[key]).toBeUndefined();
   }

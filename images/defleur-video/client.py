@@ -19,15 +19,16 @@ class Client:
         parsed = urlsplit(url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
             raise ValueError("URL must be an http(s) origin without credentials/path/query")
-        if not token:
-            raise ValueError("set VIDEO_API_TOKEN in environment")
         self.origin, self.host, self.token = parsed, parsed.hostname, token
+
+    def auth(self):
+        return {"Authorization": "Bearer " + self.token} if self.token else {}
 
     def request(self, method, path, data=None, kind="application/json", missing_ok=False, raw=False) -> Any:
         connection_type = http.client.HTTPSConnection if self.origin.scheme == "https" else http.client.HTTPConnection
         c = connection_type(self.host, self.origin.port, timeout=70)
         try:
-            c.request(method, path, body=data, headers={"Authorization": "Bearer " + self.token, "Content-Type": kind})
+            c.request(method, path, body=data, headers={**self.auth(), "Content-Type": kind})
             response = c.getresponse()
             content = response.read(134217729)
             if len(content) > 134217728:
@@ -51,7 +52,7 @@ class Client:
             cls = http.client.HTTPSConnection if self.origin.scheme == "https" else http.client.HTTPConnection
             c = cls(self.origin.hostname, self.origin.port, timeout=120)
             try:
-                c.request("POST", "/v1/projects", body=source, headers={"Authorization": "Bearer " + self.token,
+                c.request("POST", "/v1/projects", body=source, headers={**self.auth(),
                     "Content-Type": "video/mp4", "Content-Length": str(path.stat().st_size)})
                 response = c.getresponse()
                 data = response.read(65537)

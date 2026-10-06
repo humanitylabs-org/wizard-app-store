@@ -1,6 +1,6 @@
 # Original agent-operated workflow: implementation map
 
-**Incomplete port, not an accepted preview-only product.** The target is James/DeFleur's existing workflow, with Hermes making editorial decisions and the standalone service owning media, jobs and bounded execution. An autonomous creative-director daemon or another LLM is not required. `0.2.0-review-1` is a private development tag; the store stays disabled.
+**Incomplete port, not an accepted preview-only product.** The target is James/DeFleur's existing workflow, with Hermes making editorial decisions and the standalone service owning media, jobs and bounded execution. An autonomous creative-director daemon or another LLM is not required. `0.2.1-testing` is a private development tag; the store stays disabled.
 
 ## Recovered contract and current implementation
 

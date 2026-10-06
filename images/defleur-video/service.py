@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import cast
 from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.2.0-review-1"
+VERSION = "0.2.1-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PROJECTS = 8
@@ -514,6 +514,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def authorize(self):
+        token = cast(VideoServer, self.server).token
+        if not token:
+            return True  # Open mode: network access (e.g. Tailscale-only host) is the boundary.
         values = self.headers.get_all("Authorization", [])
         if len(values) != 1 or not hmac.compare_digest(values[0].encode(), ("Bearer " + cast(VideoServer, self.server).token).encode()):
             self.send(401, {"error": "bearer authentication required"})
@@ -636,8 +639,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(root, token, host="127.0.0.1", port=8787):
-    if len(token) < 32 or not token.isascii() or any(c.isspace() for c in token):
-        raise ValueError("VIDEO_API_TOKEN must be at least 32 non-whitespace ASCII characters")
+    if token and (len(token) < 32 or not token.isascii() or any(c.isspace() for c in token)):
+        raise ValueError("VIDEO_API_TOKEN, when set, must be at least 32 non-whitespace ASCII characters")
     server = VideoServer((host, port), Handler)
     server.token = token
     server.store = Store(root)

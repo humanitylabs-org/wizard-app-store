@@ -6,12 +6,12 @@ Hermes is only an HTTP **client** here. Do not install the recovered plugin, cha
 
 ## Connection
 
-The user must authorize the source file, target service and editing scope. Supply `VIDEO_API_URL` (an http(s) origin) and `VIDEO_API_TOKEN` through the invoking process's private environment. Do not put the token in chat, URLs, plan JSON, command arguments or review HTML. Default URL is loopback; for a separate host use the private reachable app URL, preferably HTTPS. A container's localhost is not another container's localhost. Copy `client.py` to the client's machine; it uses Python's standard library only. Use a dedicated credential for this video service, never an agent/provider credential. Current authorization is service-wide single-owner: it permits reading/mutating/deleting all this service's projects, not per-project or read-only scopes. Do not share it with untrusted clients. Configure its environment using your existing private credential mechanism; no Hermes core/plugin modification or global model switch is needed.
+The user must authorize the source file, target service and editing scope. Supply `VIDEO_API_URL` (an http(s) origin, e.g. `http://<tailscale-host>:8787`). The default install needs no token; only if the administrator set one, also supply `VIDEO_API_TOKEN` through the invoking process's private environment. Do not put the token in chat, URLs, plan JSON, command arguments or review HTML. Default URL is loopback; for a separate host use the private reachable app URL, preferably HTTPS. A container's localhost is not another container's localhost. Copy `client.py` to the client's machine; it uses Python's standard library only. Use a dedicated credential for this video service, never an agent/provider credential. Current authorization is service-wide single-owner: it permits reading/mutating/deleting all this service's projects, not per-project or read-only scopes. Do not share it with untrusted clients. Configure its environment using your existing private credential mechanism; no Hermes core/plugin modification or global model switch is needed.
 
 Ask the service for its actual contract before acting (from the directory containing `client.py`):
 
 ```sh
-python3 -c 'import os; from client import Client; print(Client(os.environ["VIDEO_API_URL"], os.environ["VIDEO_API_TOKEN"]).request("GET", "/v1/capabilities"))'
+python3 -c 'import os; from client import Client; print(Client(os.environ["VIDEO_API_URL"], os.environ.get("VIDEO_API_TOKEN", "")).request("GET", "/v1/capabilities"))'
 python3 client.py upload /authorized/path/source.mp4
 ```
 

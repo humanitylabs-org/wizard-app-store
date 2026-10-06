@@ -1,6 +1,6 @@
 services:
   defleur-video:
-    image: ghcr.io/humanitylabs-org/defleur-video:0.2.0-review-1
+    image: ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing
     user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
@@ -11,7 +11,6 @@ services:
     cpus: 2.0
     tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
     environment:
-      VIDEO_API_TOKEN: ${VIDEO_API_TOKEN}
       VIDEO_DATA_DIR: /data
       VIDEO_BIND: 0.0.0.0
     volumes:

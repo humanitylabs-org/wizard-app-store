@@ -1,4 +1,4 @@
-# Private development candidate: 0.2.0-review-1
+# Private development candidate: 0.2.1-testing
 
 **NOT approved as a preview-only release.** Latest scope requires the original agent-operated workflow. Preserve these packaging fixes but keep the listing disabled and manual publication off. See [WORKFLOW-PARITY.md](WORKFLOW-PARITY.md) for actual helpers/stages and unfinished work; remote publication alone would not make this the requested app.
 
@@ -21,7 +21,7 @@ The public-facing provenance is retained in the image README without linking to 
 `.github/workflows/video.yml` follows this store's GitHub Actions/GHCR convention: checkout, Node/npm validation, bounded local build/tests, actual translator/lifecycle smoke, verification-log artifact, GHCR login with `GITHUB_TOKEN`, then tag and push the **exact tested local image** as:
 
 ```
-ghcr.io/humanitylabs-org/defleur-video:0.2.0-review-1
+ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing
 ```
 
 Normal pushes test only. GHCR login/push require an explicit workflow_dispatch `publish:true` (default false), reserved for approved original-workflow parity and licensing. The build context is only `images/defleur-video`, enforced by `.dockerignore`. amd64 only. The workflow does not mutate the app's availability or package visibility. No workflow has been dispatched and no image has been pushed as part of local preparation.

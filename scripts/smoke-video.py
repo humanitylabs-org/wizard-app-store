@@ -16,7 +16,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = os.environ.get("VIDEO_TEST_IMAGE", "wizard-defleur-video:0.2.0-review-1")
+IMAGE = os.environ.get("VIDEO_TEST_IMAGE", "wizard-defleur-video:0.2.1-testing")
 sys.path.insert(0, str(ROOT / "images/defleur-video"))
 from client import Client  # pyright: ignore[reportMissingImports]
 
@@ -37,7 +37,7 @@ def main():
         compose = translated["compose"]
         service = compose["services"]["defleur-video"]
         assert service["restart"] == "unless-stopped"
-        assert service["image"] == "ghcr.io/humanitylabs-org/defleur-video:0.2.0-review-1"
+        assert service["image"] == "ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing"
         assert service["user"] == "1000:1000" and service["read_only"] is True
         assert service["ports"] == ["${APP_PORT}:8787"]
         # Test-only substitutions: cached image, loopback ephemeral port, isolated network.
@@ -47,7 +47,7 @@ def main():
         compose["networks"]["tipi_main_network"] = {"name": name, "external": True}
         app = tmp / "app-data"
         app.mkdir()
-        env = {**os.environ, "APP_DATA_DIR": str(app), "VIDEO_API_TOKEN": token}
+        env = {**os.environ, "APP_DATA_DIR": str(app)}
         recipe = tmp / "compose.json"
         recipe.write_text(json.dumps(compose))
         cmd = ["docker", "compose", "-p", name, "-f", str(recipe)]
@@ -73,7 +73,7 @@ def main():
                 while True:
                     try:
                         port = run(*cmd, "port", "defleur-video", "8787", env=env).rsplit(":", 1)[1]
-                        client = Client("http://127.0.0.1:" + port, token)
+                        client = Client("http://127.0.0.1:" + port, "")  # open mode, as installed
                         return client, client.request("GET", "/healthz")
                     except (OSError, http.client.HTTPException, subprocess.CalledProcessError, IndexError):
                         if time.monotonic() >= deadline:
@@ -83,7 +83,8 @@ def main():
                             raise RuntimeError("container did not recover after Runtipi permission step")
                         time.sleep(.25)
             client, health = ready()
-            assert health["version"] == "0.2.0-review-1"
+            assert Client("http://127.0.0.1:" + run(*cmd, "port", "defleur-video", "8787", env=env).rsplit(":", 1)[1], "").request("GET", "/v1/capabilities")["operations"]
+            assert health["version"] == "0.2.1-testing"
             report["health"] = health
             inspect = json.loads(run("docker", "inspect", cid))[0]
             assert inspect["Config"]["User"] == "1000:1000"

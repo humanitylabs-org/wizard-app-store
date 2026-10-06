@@ -8,9 +8,9 @@
   "categories": [
     "media"
   ],
-  "description": "Testing release for hands-on feedback. Private API that Hermes (or any HTTP client) drives: upload an MP4, save edit decisions, render a 9:16 preview with cuts, burned captions and a fixed portrait crop, then download review artifacts. No browser UI. Transcription/alignment, audio lock, semantic motion and final delivery are not built yet. See HERMES.md for connection steps.",
-  "tipi_version": 2,
-  "version": "0.2.0-review-1",
+  "description": "Testing release for hands-on feedback. API that Hermes (or any HTTP client) drives: upload an MP4, save edit decisions, render a 9:16 preview with cuts, burned captions and a fixed portrait crop, then download review artifacts. No browser UI. Transcription/alignment, audio lock, semantic motion and final delivery are not built yet. No token needed: keep it reachable only on your private network (e.g. Tailscale). See HERMES.md for connection steps.",
+  "tipi_version": 3,
+  "version": "0.2.1-testing",
   "source": "https://github.com/humanitylabs-org/wizard-app-store",
   "exposable": false,
   "no_gui": true,
@@ -20,15 +20,5 @@
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,
-  "gid": 1000,
-  "form_fields": [
-    {
-      "type": "password",
-      "label": "Private video API bearer token",
-      "env_variable": "VIDEO_API_TOKEN",
-      "required": true,
-      "min": 32,
-      "hint": "At least 32 random ASCII characters, no spaces. Keep this single-owner API private."
-    }
-  ]
+  "gid": 1000
 }

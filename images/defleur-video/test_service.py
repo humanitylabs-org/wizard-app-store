@@ -197,6 +197,22 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/resolve-preset", json.dumps(value))[0], 422)
         self.assertEqual(self.request("DELETE", f"/v1/projects/{pid}")[0], 200)
 
+    def test_open_mode_without_token(self):
+        from client import Client
+        server = service.make_server(self.root / "open-data", "", port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            c.request("GET", "/v1/capabilities")
+            self.assertEqual(c.getresponse().status, 200)
+            c.close()
+            self.assertIn("operations", Client(f"http://127.0.0.1:{server.server_port}", "").request("GET", "/v1/capabilities"))
+        finally:
+            server.shutdown(); server.store.close(); thread.join(timeout=5); server.server_close()
+        with self.assertRaises(ValueError):
+            service.make_server(self.root / "short", "too-short", port=0)
+
     def test_auth_and_capabilities(self):
         self.assertEqual(self.request("GET", "/healthz", auth=False)[0], 200)
         self.assertEqual(self.request("GET", "/v1/capabilities", auth=False)[0], 401)
