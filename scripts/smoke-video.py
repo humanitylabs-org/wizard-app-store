@@ -57,15 +57,17 @@ def main():
             cid = run(*cmd, "ps", "-aq", env=env)
             assert cid
             # Docker creates a fresh absent bind directory as container root.
-            def helper(code):
-                return run("docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+            def helper(code, host_root=False):
+                # Runtipi's permission step runs as real host root; inspection helpers stay unprivileged.
+                caps = [] if host_root else ["--cap-drop", "ALL"]
+                return run("docker", "run", "--rm", "--network", "none", "--read-only", *caps,
                            "--user", "0:0", "--mount", f"type=bind,source={app},target=/fixture",
                            "--entrypoint", "/usr/bin/python3", IMAGE, "-c", code)
             before = json.loads(helper("import os,json; s=os.stat('/fixture/data'); print(json.dumps({'uid':s.st_uid,'gid':s.st_gid,'mode':oct(s.st_mode & 511)}))"))
             assert before["uid"] == 0 and before["mode"] == "0o755", before
             report["fresh_bind_before_runtipi_permission_step"] = before
             # Exactly Runtipi 4.8.0's verified post-up permission command, on disposable data only.
-            helper("import subprocess; subprocess.run(['chmod','-Rf','a+rwx','/fixture'],check=True)")
+            helper("import subprocess; subprocess.run(['chmod','-Rf','a+rwx','/fixture'],check=True)", host_root=True)
             def ready():
                 deadline = time.monotonic() + 45
                 while True:
