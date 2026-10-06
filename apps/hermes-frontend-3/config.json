@@ -1,7 +1,7 @@
 {
   "name": "Hermes Frontend 3",
   "id": "hermes-frontend-3",
-  "available": false,
+  "available": true,
   "short_desc": "Hermes Desktop-style browser UI for your existing Hermes Agent.",
   "author": "przbadu / Nous Research; packaged by Humanity Labs",
   "port": 9120,
