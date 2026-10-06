@@ -1,0 +1,24 @@
+services:
+  defleur-video:
+    image: ghcr.io/humanitylabs-org/defleur-video:0.2.0-review-1
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: 2.0
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    environment:
+      VIDEO_API_TOKEN: ${VIDEO_API_TOKEN}
+      VIDEO_DATA_DIR: /data
+      VIDEO_BIND: 0.0.0.0
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+    x-runtipi:
+      is_main: true
+      internal_port: 8787
+x-runtipi:
+  schema_version: 2
+  overrides: []

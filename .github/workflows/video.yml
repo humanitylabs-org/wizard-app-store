@@ -1,0 +1,43 @@
+name: Build video editing review API
+on:
+  push:
+    branches: [main]
+    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'scripts/smoke-video.py', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  video-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci && npm test && npx tsc --noEmit
+      - name: Build and test original standalone service in bounded container
+        run: sh images/defleur-video/test-container.sh |& tee "$RUNNER_TEMP/video-container.log"
+      - name: Actual Runtipi translation, fresh bind permissions and HTTP lifecycle
+        run: python3 scripts/smoke-video.py | tee "$RUNNER_TEMP/video-lifecycle.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: video-review-verification
+          path: |
+            ${{ runner.temp }}/video-container.log
+            ${{ runner.temp }}/video-lifecycle.json
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the exact tested standalone image (amd64)
+        run: |
+          docker tag wizard-defleur-video:0.2.0-review-1 ghcr.io/humanitylabs-org/defleur-video:0.2.0-review-1
+          docker push ghcr.io/humanitylabs-org/defleur-video:0.2.0-review-1
+# Publishes only after unit, container and Runtipi lifecycle smoke pass.
