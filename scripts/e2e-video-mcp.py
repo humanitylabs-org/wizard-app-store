@@ -141,11 +141,12 @@ async def flow(url, fixture, truth, report):
             tools = {t.name: t.description or "" for t in (await s.list_tools()).tools}
             report["server"] = {"name": init.server_info.name, "version": init.server_info.version, "tools": sorted(tools)}
             assert set(tools) == {"workflow_guide", "capabilities", "create_upload", "start_edit", "apply_cuts", "render_final",
-                                  "get_status", "list_projects", "delete_project"}, tools
+                                  "get_status", "list_projects", "delete_project", "preview_framing", "submit_motion",
+                                  "create_asset_upload", "capture_motion"}, tools
             assert "motion" in tools["render_final"].lower() and "1080x1920" in tools["render_final"]
             assert "approval" in tools["start_edit"] and "get_status" in tools["start_edit"]
             guide = await tool(s, "workflow_guide")
-            assert any("motion" in x.lower() for x in guide["not_built_yet"])
+            assert "renderFrame" in json.dumps(guide["motion_contract"]) and not any("motion" in x.lower() and "not" in x.lower() for x in guide["not_built_yet"])
             assert not any("burned captions" in x.lower() or "1080x1920 encode" in x.lower() for x in guide["not_built_yet"]), guide["not_built_yet"]
             assert any("render_final" in x for x in guide["steps"])
             caps = await tool(s, "capabilities")

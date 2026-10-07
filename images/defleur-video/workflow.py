@@ -215,6 +215,18 @@ def _cgroup(name):
         return None
 
 
+def _anon_memory():
+    """Non-reclaimable app memory (anon); memory.current also counts page cache, which the kernel drops under pressure."""
+    try:
+        for line in Path("/sys/fs/cgroup/memory.stat").read_text().splitlines():
+            k, v = line.split()
+            if k == "anon":
+                return int(v)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def resources():
     mem = {}
     try:
@@ -241,7 +253,7 @@ def ensure_resources(frames, label, memory_bytes=1536 * 1024**2):
     free = shutil.disk_usage(Path(os.environ.get("VIDEO_DATA_DIR", "/data")) if Path(os.environ.get("VIDEO_DATA_DIR", "/data")).is_dir() else "/").free
     if free < need:
         raise Rejected(f"{label} needs about {need // 1024**2} MiB free disk for {frames} frames; {free // 1024**2} MiB free. Delete old projects (delete_project) or free disk.")
-    limit, used = _cgroup("memory.max"), _cgroup("memory.current")
+    limit, used = _cgroup("memory.max"), _anon_memory()
     if limit and used is not None and limit - used < memory_bytes:
         raise Rejected(f"{label} needs about {memory_bytes // 1024**2} MiB of free app memory; {(limit - used) // 1024**2} MiB free under the app limit. Wait for other jobs or raise the app memory limit.")
 
@@ -976,10 +988,11 @@ def _motion_root(ctx, value, mode):
         raise Rejected("the motion composition changed since this capture was requested; capture again")
     if not CAPTURE_SCRIPT.is_file() or not GSAP.is_file():
         raise Rejected("capture runtime missing from the image")
-    edit_map, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edit-map.json", "edit-map.json")
-    ledger_path, _ = ctx.ref(value["crop_job"], {"face-crop"}, "crop-ledger.json", "crop-ledger.json")
-    ctx.ref(value["crop_job"], {"face-crop"}, "face-audit.json", "face-audit.json")
-    asr, _ = ctx.ref(value["edited_asr_job"], {"asr"}, "asr.json", "edited-asr.json")
+    # Hash-verified reads in place (no links into ctx.root: final-render already linked these names).
+    edit_map, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edit-map.json")
+    ledger_path, _ = ctx.ref(value["crop_job"], {"face-crop"}, "crop-ledger.json")
+    ctx.ref(value["crop_job"], {"face-crop"}, "face-audit.json")
+    asr, _ = ctx.ref(value["edited_asr_job"], {"asr"}, "asr.json")
     mapped = json.loads(edit_map.read_text())
     if float(mapped["duration"]) > MAX_OUTPUT_S:
         raise Rejected(f"edited video is {mapped['duration']:.0f} s; the limit is {MAX_OUTPUT_S:.0f} s of output")

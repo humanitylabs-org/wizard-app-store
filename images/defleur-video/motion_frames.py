@@ -29,7 +29,8 @@ def src_input(path: Path) -> list[str]:
 
 
 def probe_size(path: Path) -> tuple[int, int]:
-    out = subprocess.check_output(["ffprobe", "-v", "error", *src_input(path)[:-2], "-select_streams", "v:0",
+    out = subprocess.check_output(["ffprobe", "-v", "error", "-protocol_whitelist", "file", "-f", "mov", "-enable_drefs", "0",
+                                   "-use_absolute_path", "0", "-select_streams", "v:0",
                                    "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)], text=True)
     w, h = out.strip().split(",")[:2]
     return int(w), int(h)
@@ -75,6 +76,7 @@ def base(a) -> None:
         b = ids["base_frames"][f]
         if b >= INSERT_BASE:
             inserts.setdefault((b - INSERT_BASE) // INSERT_STRIDE, set()).add(b)
+            live.setdefault(ids["source_frames"][f], f)  # the live frame an insert replaces: reference for the pixel check
         else:
             live.setdefault(b, f)
     W, H = probe_size(a.source)
@@ -202,6 +204,7 @@ def check(a) -> None:
     out_band = lambda img: np.concatenate([img[:btop].reshape(-1, 3), img[bbot:].reshape(-1, 3)])
     band = lambda img: img[top:bottom, left:right]
     mad = lambda x, y: round(float(np.mean(np.abs(x - y))), 2)
+    chg = lambda x, y: round(float(np.mean(np.abs(x - y).max(axis=-1) > 40)), 5)  # fraction of clearly changed pixels
     rows = []
     for i, f in enumerate(order):
         fin = np.frombuffer(raw[i * W * H * 3:(i + 1) * W * H * 3], np.uint8).reshape(H, W, 3).astype(np.int16)
@@ -212,21 +215,22 @@ def check(a) -> None:
         row = {"frame": f, "t": round(t, 3), "window": sample[f], "base_frame": b, "cue_on": cue(f),
                "in_beat": inside(t, beats), "in_insert": inside(t, inserts), "suppressed": inside(t, sup), "words_spoken": spoken(f),
                "capture_vs_base_outside_band": mad(out_band(cap), out_band(base)),
+               "changed_fraction_vs_base": chg(out_band(cap), out_band(base)),
                "final_vs_capture_outside_band": mad(out_band(fin), out_band(cap)),
                "caption_band_final_vs_capture": mad(band(fin), band(cap))}
         if row["in_insert"]:
             lp = a.base_dir / f"{timeline_source(ids, f):06d}.jpg"
             if lp.is_file():
-                row["capture_vs_live_source_outside_band"] = mad(out_band(cap), out_band(load(lp)))
+                row["changed_fraction_vs_live_source"] = chg(out_band(cap), out_band(load(lp)))
         rows.append(row)
     live_rows = [r for r in rows if not r["in_beat"] and not r["in_insert"]]
-    live_max = max([r["capture_vs_base_outside_band"] for r in live_rows], default=0.0)
-    beats_ok = {f"beat-{k}": max([r["capture_vs_base_outside_band"] for r in rows if r["window"] == f"beat-{k}"], default=0.0) >= a.motion_threshold
+    live_max = max([r["changed_fraction_vs_base"] for r in live_rows], default=0.0)
+    beats_ok = {f"beat-{k}": max([r["changed_fraction_vs_base"] for r in rows if r["window"] == f"beat-{k}"], default=0.0) >= a.motion_threshold
                 for k in range(len(beats))}
     ins_ok = {}
     for k in range(len(inserts)):
         rr = [r for r in rows if r["window"] == f"insert-{k}"]
-        ins_ok[f"insert-{k}"] = bool(rr) and all(r.get("capture_vs_live_source_outside_band", 0) > max(a.motion_threshold, r["capture_vs_base_outside_band"]) for r in rr)
+        ins_ok[f"insert-{k}"] = bool(rr) and all(r.get("changed_fraction_vs_live_source", 0) >= 0.05 and r["changed_fraction_vs_base"] < a.live_threshold for r in rr)
     on = [r["caption_band_final_vs_capture"] for r in rows if r["cue_on"]]
     off = [r["caption_band_final_vs_capture"] for r in rows if not r["cue_on"]]
     sup_rows = [r for r in rows if r["suppressed"]]
@@ -270,8 +274,8 @@ def main() -> None:
     for n in ("final", "base_map", "project", "base_dir", "picture_dir", "out"):
         c.add_argument(n, type=Path)
     c.add_argument("--caption-dir", type=Path, required=True)
-    c.add_argument("--live-threshold", type=float, default=4.0)
-    c.add_argument("--motion-threshold", type=float, default=6.0)
+    c.add_argument("--live-threshold", type=float, default=0.002, help="max changed-pixel fraction outside planned windows")
+    c.add_argument("--motion-threshold", type=float, default=0.003, help="min changed-pixel fraction somewhere in each beat")
     a = ap.parse_args()
     {"base": base, "sheet": sheet, "check": check}[a.cmd](a)
 
