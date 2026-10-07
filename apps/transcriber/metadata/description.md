@@ -4,7 +4,7 @@ A shared, local speech-to-text service for your Wizard server. Install it once; 
 
 This is the unmodified [Speaches](https://github.com/speaches-ai/speaches) CPU server (MIT), pinned to an exact image.
 
-**Try it:** open the app from Runtipi for the built-in test page, or call the API:
+**Try it:** it has no web page; call the API:
 
 ```
 curl http://<server>:8791/v1/audio/transcriptions \

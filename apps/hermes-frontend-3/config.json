@@ -1,12 +1,13 @@
 {
   "name": "Hermes Frontend 3",
   "id": "hermes-frontend-3",
+  "wizard_type": "view",
   "available": true,
-  "short_desc": "Hermes Desktop-style browser UI for your existing Hermes Agent.",
+  "short_desc": "View: Hermes Desktop-style browser UI for your existing Hermes Agent.",
   "author": "przbadu / Nous Research; packaged by Humanity Labs",
   "port": 9120,
   "categories": [
-    "ai"
+    "media"
   ],
   "description": "Community browser extraction of Hermes Desktop. Connects to a separately installed Hermes Agent without replacing it.",
   "tipi_version": 1,

@@ -1,8 +1,9 @@
 {
   "name": "Hermes Agent",
   "id": "hermes-agent",
+  "wizard_type": "agent",
   "available": true,
-  "short_desc": "The self-improving AI agent by Nous Research.",
+  "short_desc": "Agent: The self-improving AI agent by Nous Research.",
   "author": "Nous Research",
   "port": 9119,
   "categories": [

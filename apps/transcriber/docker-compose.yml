@@ -7,6 +7,7 @@ services:
     tmpfs: ["/tmp:rw,nosuid,size=256m"]
     environment:
       LOG_LEVEL: info
+      ENABLE_UI: "false"
       WHISPER__COMPUTE_TYPE: int8
       PRELOAD_MODELS: '["${TRANSCRIBER_MODEL}"]'
     volumes:

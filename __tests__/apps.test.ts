@@ -23,6 +23,19 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       if (result instanceof type.errors) throw new Error(result.summary);
       expect(compose["x-runtipi"].schema_version).toBe(2);
     });
+    test("Wizard app type: agent, service, view or external", () => {
+      // Runtipi's category list is fixed upstream, so the Wizard type lives in `wizard_type`,
+      // is mirrored as the short_desc prefix (visible in the Runtipi UI) and maps to one native category.
+      const types: Record<string, [string, string]> = {
+        agent: ["Agent", "ai"], service: ["Service", "utilities"], view: ["View", "media"], external: ["External", "network"],
+      };
+      expect(Object.keys(types)).toContain(config.wizard_type);
+      const [label, category] = types[config.wizard_type]!;
+      expect(config.short_desc.startsWith(`${label}: `)).toBe(true);
+      expect(config.categories).toEqual([category]);
+      if (config.wizard_type === "service" || config.wizard_type === "external") expect(config.no_gui).toBe(true);
+      if (config.wizard_type === "view") expect(config.no_gui ?? false).toBe(false);
+    });
     if (id === "hermes-agent") {
     test("unmodified pinned image and supported startup", () => {
       const s = compose.services[id];

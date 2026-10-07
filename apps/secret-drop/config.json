@@ -1,16 +1,16 @@
 {
   "name": "Secret Drop",
   "id": "secret-drop",
+  "wizard_type": "service",
   "available": true,
-  "short_desc": "One-time encrypted links for handing an API key or password to an AI agent without chat.",
+  "short_desc": "Service: One-time encrypted links for handing an API key or password to an AI agent without chat.",
   "author": "Humanity Labs",
   "port": 8792,
   "categories": [
-    "security",
-    "ai"
+    "utilities"
   ],
   "description": "Write-only, one-time credential handoff from a human to any agent (Hermes or others). The agent asks for a key and sends you a link; you type the value there; your browser encrypts it to that agent's own public key; the agent picks it up once and decrypts it locally. This app only relays ciphertext and keeps nothing long-term. It is not a password manager.",
-  "tipi_version": 1,
+  "tipi_version": 2,
   "version": "0.1.1",
   "source": "https://github.com/humanitylabs-org/wizard-app-store",
   "exposable": false,
@@ -40,5 +40,6 @@
       "required": false,
       "hint": "Leave empty on a Tailscale-only server. If set (32+ characters), agents must send it as a bearer token to create and pick up requests. The human link never needs it."
     }
-  ]
+  ],
+  "no_gui": true
 }
