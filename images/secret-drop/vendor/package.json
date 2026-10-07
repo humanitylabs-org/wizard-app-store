@@ -1,0 +1,14 @@
+{
+  "name": "secret-drop-browser-crypto",
+  "private": true,
+  "description": "Pinned build inputs for the vendored browser crypto bundle",
+  "license": "MIT",
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

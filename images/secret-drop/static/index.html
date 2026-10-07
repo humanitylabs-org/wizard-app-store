@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="referrer" content="no-referrer">
+<title>Secret Drop</title>
+<link rel="stylesheet" href="/static/app.css" integrity="{{sri:app.css}}">
+</head>
+<body>
+<main>
+<section class="panel" aria-live="polite">
+  <div class="brand">Secret <span>Drop</span><span class="countdown" id="countdown" aria-label="Time remaining" hidden></span></div>
+  <h1 id="heading">Secret Drop</h1>
+  <dl class="meta" id="meta" hidden>
+    <dt>Requested by</dt><dd id="requester"></dd>
+    <dt>Saved as</dt><dd><code id="key"></code></dd>
+    <dt>Agent key</dt><dd><code id="fingerprint"></code></dd>
+  </dl>
+  <p class="feedback" id="feedback" role="alert" hidden></p>
+  <form id="secret-form" autocomplete="off" hidden>
+    <label class="sr-only" for="value" id="value-label">Secret value</label>
+    <div class="field">
+      <input id="value" name="value" type="password" required autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button id="reveal" class="reveal" type="button" aria-label="Show value" title="Show value"></button>
+    </div>
+    <button id="submit" class="submit" type="submit">Encrypt and send</button>
+    <p class="note">Encrypted in this browser to the agent's key before it is sent. This relay cannot read it. Works once.</p>
+  </form>
+  <noscript><p class="feedback">This page needs JavaScript to encrypt the value before sending.</p></noscript>
+  <p class="foot">Secret Drop {{version}}</p>
+</section>
+</main>
+<script src="/static/noble-crypto.js" integrity="{{sri:noble-crypto.js}}"></script>
+<script src="/static/hpke.js" integrity="{{sri:hpke.js}}"></script>
+<script src="/static/app.js" integrity="{{sri:app.js}}"></script>
+</body>
+</html>
