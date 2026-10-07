@@ -5,3 +5,4 @@ stable-ts
 torch==2.11.0+cpu
 onnxruntime
 mcp==2.0.0
+opencv-python-headless<5

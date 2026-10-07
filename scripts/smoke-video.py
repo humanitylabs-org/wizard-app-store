@@ -16,7 +16,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = os.environ.get("VIDEO_TEST_IMAGE", "wizard-defleur-video:0.4.0-testing")
+IMAGE = os.environ.get("VIDEO_TEST_IMAGE", "wizard-defleur-video:0.5.0-testing")
 sys.path.insert(0, str(ROOT / "images/defleur-video"))
 from client import Client  # pyright: ignore[reportMissingImports]
 
@@ -37,7 +37,7 @@ def main():
         compose = translated["compose"]
         service = compose["services"]["defleur-video"]
         assert service["restart"] == "unless-stopped"
-        assert service["image"] == "ghcr.io/humanitylabs-org/defleur-video:0.4.0-testing"
+        assert service["image"] == "ghcr.io/humanitylabs-org/defleur-video:0.5.0-testing"
         assert service["user"] == "1000:1000" and service["read_only"] is True
         assert service["ports"] == ["${APP_PORT}:8787"]
         # Test-only substitutions: cached image, loopback ephemeral port, isolated network.
@@ -86,7 +86,7 @@ def main():
                         time.sleep(.25)
             client, health = ready()
             assert Client("http://127.0.0.1:" + run(*cmd, "port", "defleur-video", "8787", env=env).rsplit(":", 1)[1], "").request("GET", "/v1/capabilities")["operations"]
-            assert health["version"] == "0.4.0-testing"
+            assert health["version"] == "0.5.0-testing"
             report["health"] = health
             inspect = json.loads(run("docker", "inspect", cid))[0]
             assert inspect["Config"]["User"] == "1000:1000"

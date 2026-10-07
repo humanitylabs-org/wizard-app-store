@@ -26,6 +26,9 @@ APP_ROOT = Path(__file__).resolve().parent
 HELPER_PYTHON = os.environ.get("VIDEO_HELPER_PYTHON") or ("/opt/venv/bin/python" if Path("/opt/venv/bin/python").exists() else sys.executable)
 MODELS_DIR = Path(os.environ.get("VIDEO_MODELS_DIR", "/data/models"))
 FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
+FACE_MODEL = Path(os.environ.get("VIDEO_FACE_MODEL", "/opt/models/yunet.onnx"))
+FACE_MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"  # opencv_zoo YuNet 2023mar (MIT)
+CANVAS = (1080, 1920)
 
 # Exact upstream bytes (commit 30768288eb1308b18216a5df5eb4648fbce3e55b). Verified before every run.
 HELPERS = {
@@ -39,6 +42,8 @@ HELPERS = {
     "speech_cut_audit": ("skills/defleur-audio/scripts/speech_cut_audit.py", "b0762b7bf53abe16f2664887a0b06446481840eae99317b800850a63b9bbfcd4"),
     "assemble_pcm": ("skills/defleur-audio/scripts/assemble_pcm.py", "96731e90aac18c4209e4408e0469751e5e8029fe7cb62a4f6795d1e51bde7c1e"),
     "audio_gate": ("skills/defleur-audio/scripts/audio_gate.py", "aa2d5965b0cc8f19103f42899cfe3be09c6b9760c3e16a2717bf4441a81431ce"),
+    "encode": ("skills/defleur-motion/scripts/encode.py", "1b431ca6012804d4add45841437a0737038dc36d7318e06d4975bcbddddcb76d"),
+    "caption_layer": ("skills/defleur-motion/scripts/caption_layer.py", "b096a9d36f04ef71ba3779e5bc9acffaa88412d7fbcf8d209c4188190ac413fe"),
     "test_audio_gate": ("skills/defleur-audio/scripts/test_audio_gate.py", "09bba3c7ed527149aba5d9d034e8d8fe210ce230eacf9c961302c01b2707b177"),
 }
 DEFAULTS = ("defaults/neutral-preset.json", "d4992d28e6b0219778e377d696bd6a8db8d5db90bce64f87784d2a4e38f47072")
@@ -69,6 +74,9 @@ STAGES = {
     "acoustic-scan": (600, "scan_windows.py full-coverage edited windows (app-original)"),
     "dialogue-gate": (300, "audio-gate.json receipt + audio_gate.py --stage dialogue"),
     "validate-project": (60, "validate_project.py on client planning records"),
+    "face-crop": (600, "face_audit.py (app-original, OpenCV YuNet) -> fixed per-setup crop-ledger.json + face audit receipts"),
+    "final-render": (3600, "final_render.py live frames (no motion layer) + James' caption_layer.py/encode.py + encode.py --verify-only + decoded-pixel checks"),
+    "delivery-gate": (300, "delivery audio-gate.json receipt + audio_gate.py --stage delivery"),
 }
 
 
@@ -215,7 +223,7 @@ def validate(stage, value, metadata, lookup):
     elif stage == "asr":
         _obj(value, {"audio_job", "language"})
         _lang(value["language"], allow_auto=True)
-        lookup(value["audio_job"], {"source-audio", "pcm-assemble"})
+        lookup(value["audio_job"], {"source-audio", "pcm-assemble", "final-render"})
     elif stage == "align":
         _obj(value, {"asr_job", "language"}, {"model"})
         _lang(value["language"])
@@ -258,7 +266,7 @@ def validate(stage, value, metadata, lookup):
                     _text(row[k], k, 500)
     elif stage == "acoustic-scan":
         _obj(value, {"assemble_job"}, {"window_s"})
-        lookup(value["assemble_job"], {"pcm-assemble"})
+        lookup(value["assemble_job"], {"pcm-assemble", "final-render"})
         if "window_s" in value and not 1 <= _num(value["window_s"], "window_s") <= 20:
             raise Rejected("window_s must be 1..20")
     elif stage == "dialogue-gate":
@@ -293,6 +301,35 @@ def validate(stage, value, metadata, lookup):
             if type(edge["segment"]) is not int or edge["edge"] not in ("start", "end") or not isinstance(edge["decision"], str):
                 raise Rejected("reviewed edge needs integer segment, edge start|end, decision")
             _text(edge["findings"], "edge findings", 2000, required=False)
+    elif stage == "face-crop":
+        _obj(value, {"assemble_job"})
+        lookup(value["assemble_job"], {"pcm-assemble"})
+    elif stage == "final-render":
+        _obj(value, {"assemble_job", "crop_job", "edited_asr_job"}, {"preset_job"})
+        assemble, _ = lookup(value["assemble_job"], {"pcm-assemble"})
+        crop, _ = lookup(value["crop_job"], {"face-crop"})
+        asr, _ = lookup(value["edited_asr_job"], {"asr"})
+        if crop["result"]["summary"]["assemble_job"] != value["assemble_job"] or asr["result"]["summary"]["audio_job"] != value["assemble_job"]:
+            raise Rejected("crop_job and edited_asr_job must both come from this assemble_job")
+        if "preset_job" in value:
+            lookup(value["preset_job"], {"resolve-preset"})
+    elif stage == "delivery-gate":
+        _obj(value, {"render_job", "final_asr_job", "final_scan_job", "dialogue_gate_job"}, {"acoustic_review"})
+        render, _ = lookup(value["render_job"], {"final-render"})
+        gate, _ = lookup(value["dialogue_gate_job"], {"dialogue-gate"})
+        asr, _ = lookup(value["final_asr_job"], {"asr"})
+        scan, _ = lookup(value["final_scan_job"], {"acoustic-scan"})
+        if asr["result"]["summary"]["audio_job"] != value["render_job"] or scan["result"]["summary"]["assemble_job"] != value["render_job"]:
+            raise Rejected("final_asr_job and final_scan_job must both read this render_job's decoded final audio")
+        if gate["plan"]["input"]["assemble_job"] != render["plan"]["input"]["assemble_job"]:
+            raise Rejected("dialogue_gate_job and render_job must come from the same assemble_job")
+        rows = value.get("acoustic_review")
+        if rows is not None:
+            if not isinstance(rows, list) or len(rows) > 2000:
+                raise Rejected("acoustic_review must be a list of {window, findings}")
+            for row in rows:
+                _obj(row, {"window", "findings"})
+                _text(row["findings"], "window findings", 2000)
     elif stage == "validate-project":
         _obj(value, {"locked_timeline", "visual_plan", "crop_ledger"}, {"pts_picture_ledger"})
         if not all(isinstance(v, dict) for v in value.values()):
@@ -314,11 +351,17 @@ class Ctx:
                 "XDG_CACHE_HOME": str(MODELS_DIR), "TORCH_HOME": str(MODELS_DIR / "torch"),
                 "NUMBA_CACHE_DIR": str(self.scratch / "numba"), "PYTHONUNBUFFERED": "1"}
 
-    def run(self, name, args, timeout, check=True, **kw):
+    def run(self, name, args, timeout, check=True, flags=("-I",), **kw):
         script = helper(name)
         self.used[name] = HELPERS[name][1]
-        return self.native([HELPER_PYTHON, "-I", script, *args], timeout=timeout, cwd=self.root,
+        return self.native([HELPER_PYTHON, *flags, script, *args], timeout=timeout, cwd=self.root,
                            env_extra=self.env(), check=check, explain=True, **kw)
+
+    def app(self, script, args, timeout, **kw):
+        path = APP_ROOT / script
+        self.used[f"{script} (app-original)"] = sha(path)
+        return self.native([HELPER_PYTHON, "-I", path, *args], timeout=timeout, cwd=self.root, env_extra=self.env(),
+                           explain=True, **kw)
 
     def write(self, name, obj):
         (self.root / name).write_text(json.dumps(obj, allow_nan=False, indent=2))
@@ -355,10 +398,10 @@ def run(stage, value, source, root, metadata, native, lookup, deadline, input_ar
         shutil.rmtree(ctx.scratch, ignore_errors=True)
     artifacts = []
     for path in sorted(root.iterdir()):
-        if path.suffix not in {".json", ".wav", ".png"} or not path.is_file() or path.is_symlink():
+        if path.suffix not in {".json", ".wav", ".png", ".mp4"} or not path.is_file() or path.is_symlink():
             raise Rejected(f"Unexpected helper output: {path.name}")
         artifacts.append({"name": path.name, "sha256": sha(path), "bytes": path.stat().st_size,
-                          "content_type": {".wav": "audio/wav", ".png": "image/png"}.get(path.suffix, "application/json")})
+                          "content_type": {".wav": "audio/wav", ".png": "image/png", ".mp4": "video/mp4"}.get(path.suffix, "application/json")})
     return {"stage": stage, "helpers": ctx.used, "helper_sha256": next(iter(ctx.used.values()), None),
             "summary": summary, "artifacts": artifacts,
             "scope": "Real mechanics with hash-bound artifacts. Evidence for operator review; not human listening, not delivery approval."}
@@ -431,9 +474,9 @@ def _preflight(ctx, value, source, metadata):
 
 
 def _asr(ctx, value, source, metadata):
-    job, _ = ctx.lookup(value["audio_job"], {"source-audio", "pcm-assemble"})
-    name = "source.wav" if job["result"]["stage"] == "source-audio" else "edited.wav"
-    wav, _ = ctx.ref(value["audio_job"], {"source-audio", "pcm-assemble"}, name)
+    job, _ = ctx.lookup(value["audio_job"], {"source-audio", "pcm-assemble", "final-render"})
+    name = {"source-audio": "source.wav", "pcm-assemble": "edited.wav", "final-render": "final-audio.wav"}[job["result"]["stage"]]
+    wav, _ = ctx.ref(value["audio_job"], {"source-audio", "pcm-assemble", "final-render"}, name)
     ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", "-i", wav, "-ac", "1", "-ar", "16000",
                 "-c:a", "pcm_s16le", "-threads", "1", ctx.root / "asr-input.wav"], timeout=120, file_limit=256 * 1024 * 1024, cpu=200)
     receipt, raw = transcriber.transcribe(ctx.root / "asr-input.wav", value["language"], ctx.deadline)
@@ -517,7 +560,9 @@ def _speech_cut_audit(ctx, value, source, metadata):
 
 
 def _acoustic_scan(ctx, value, source, metadata):
-    wav, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edited.wav", "edited.wav")
+    job, _ = ctx.lookup(value["assemble_job"], {"pcm-assemble", "final-render"})
+    name = "final-audio.wav" if job["result"]["stage"] == "final-render" else "edited.wav"
+    wav, _ = ctx.ref(value["assemble_job"], {"pcm-assemble", "final-render"}, name, "edited.wav")
     script = APP_ROOT / "scan_windows.py"
     ctx.used["scan_windows.py (app-original)"] = sha(script)
     ctx.native([HELPER_PYTHON, "-I", script, wav, ctx.root, "--window", str(value.get("window_s", 5.0))],
@@ -525,7 +570,7 @@ def _acoustic_scan(ctx, value, source, metadata):
     edited_sha = sha(wav)
     (ctx.root / "edited.wav").unlink()  # already bound in the assemble job; keep the scan bundle small
     data = json.loads((ctx.root / "acoustic-windows.json").read_text())
-    return {"assemble_job": value["assemble_job"], "windows": len(data["windows"]), "duration_s": data["duration"],
+    return {"assemble_job": value["assemble_job"], "audio": name, "windows": len(data["windows"]), "duration_s": data["duration"],
             "edited_wav_sha256": edited_sha}
 
 
@@ -595,8 +640,212 @@ def _validate_project(ctx, value, source, metadata):
     return result
 
 
+def _norm(word):
+    return re.sub(r"[^\w']+", "", str(word).lower()).strip("'")
+
+
+def _words_diff(expected, got):
+    import difflib
+    a, b = [w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w]
+    lost, added = [], []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op in ("delete", "replace"):
+            lost += a[i1:i2]
+        if op in ("insert", "replace"):
+            added += b[j1:j2]
+    return lost, added
+
+
+def _face_model():
+    if not FACE_MODEL.is_file() or FACE_MODEL.is_symlink() or sha(FACE_MODEL) != FACE_MODEL_SHA256:
+        raise Rejected(f"face model missing or hash mismatch at {FACE_MODEL}")
+    return FACE_MODEL
+
+
+def _caption_style(ctx, value):
+    """Resolve James' preset (neutral defaults + optional resolve-preset job) and return its caption block."""
+    if "preset_job" in value:
+        path, _ = ctx.ref(value["preset_job"], {"resolve-preset"}, "preset-resolution.json", "preset-resolution.json")
+    else:
+        defaults = UPSTREAM_ROOT / DEFAULTS[0]
+        if defaults.is_symlink() or sha(defaults) != DEFAULTS[1]:
+            raise Rejected("Bundled preset defaults mismatch")
+        ctx.run("preset", [ctx.root / "preset-resolution.json", "--defaults", defaults], timeout=30)
+        path = ctx.root / "preset-resolution.json"
+    resolved = json.loads(path.read_text())["preset"]
+    canvas = resolved.get("video", {}).get("canvas", list(CANVAS))
+    if list(canvas) != list(CANVAS):
+        raise Rejected("only the 1080x1920 canvas is supported")
+    return resolved["caption"]
+
+
+def _face_crop(ctx, value, source, metadata):
+    model = _face_model()
+    edit_map, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edit-map.json", "edit-map.json")
+    defaults = json.loads((UPSTREAM_ROOT / DEFAULTS[0]).read_text())
+    top = int(defaults["caption"]["safe_rect"][1])
+    ctx.used["yunet.onnx (opencv_zoo f12e127, MIT)"] = FACE_MODEL_SHA256
+    ctx.app("face_audit.py", [source, edit_map, ctx.root, "--model", model, "--canvas", f"{CANVAS[0]}x{CANVAS[1]}",
+                              "--caption-top", str(top)], timeout=580, cpu=1200, as_limit=4 * 1024**3, nofile=128,
+            file_limit=64 * 1024**2, threads="2")
+    audit = json.loads((ctx.root / "face-audit.json").read_text())
+    return {"assemble_job": value["assemble_job"], "pass": audit["pass"], "setups": audit["setups"], "flags": audit["flags"],
+            "samples": audit["samples"], "caption_band_top_px": top}
+
+
+def _locked_words(asr_words, duration):
+    """Edited-audio ASR word timings -> caption words James' caption_layer accepts (ordered, positive)."""
+    words, adjusted, last = [], 0, 0.0
+    for w in asr_words:
+        token = str(w.get("word", "")).strip()
+        if not token:
+            continue
+        start = max(float(w["start"]), last)
+        end = min(max(float(w["end"]), start + 0.02), duration)
+        if start >= duration - 0.01:
+            adjusted += 1
+            continue
+        if end <= start:
+            end = min(duration, start + 0.02)
+        adjusted += (start, end) != (float(w["start"]), float(w["end"]))
+        words.append({"word": token, "start": round(start, 3), "end": round(end, 3)})
+        last = start
+    return words, adjusted
+
+
+def _final_render(ctx, value, source, metadata):
+    root = ctx.root
+    free = shutil.disk_usage(root.parent).free
+    asm, _ = ctx.lookup(value["assemble_job"], {"pcm-assemble"})
+    frames = int(asm["result"]["summary"]["frames"])
+    if free < frames * 450_000 + 512 * 1024**2:
+        raise Rejected(f"final-render needs about {(frames * 450_000) // 1024**2 + 512} MiB free disk for {frames} frames")
+    edit_map, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edit-map.json", "edit-map.json")
+    ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edited.wav", "edited.wav")
+    ctx.ref(value["assemble_job"], {"pcm-assemble"}, "source.wav", "source.wav")
+    ledger, _ = ctx.ref(value["crop_job"], {"face-crop"}, "crop-ledger.json", "crop-ledger.json")
+    ctx.ref(value["crop_job"], {"face-crop"}, "face-audit.json", "face-audit.json")
+    asr, _ = ctx.ref(value["edited_asr_job"], {"asr"}, "asr.json", "edited-asr.json")
+    style = _caption_style(ctx, value)
+    mapped = json.loads(edit_map.read_text())
+    words, adjusted = _locked_words(json.loads(asr.read_text())["words"], float(mapped["duration"]))
+    if not words:
+        raise Rejected("the edited-audio transcript has no words; captions need at least one")
+    ctx.write("caption-style.json", style)
+    ctx.write("locked-timeline.json", {"duration": mapped["duration"], "fps": mapped["fps"], "frames": mapped["frames"],
+                                       "canvas": list(CANVAS), "words": words, "transcript": " ".join(w["word"] for w in words),
+                                       "word_source": "Transcriber ASR of the edited audio (apply_cuts' edited-asr job)",
+                                       "timing_adjustments": adjusted})
+    # No motion layer (piece 3): an explicit empty plan, so encode.py's suppression check has nothing to allow.
+    ctx.write("visual-plan.json", {"beats": [], "caption_suppress": [],
+                                   "note": "No HTML/SVG/GSAP motion layer yet: live footage only, captions never suppressed."})
+    ctx.app("final_render.py", ["render", source, edit_map, ledger, root], timeout=1200, cpu=2400, as_limit=4 * 1024**3,
+            nofile=128, file_limit=64 * 1024**2, threads="2")
+    big = dict(timeout=2400, cpu=7200, as_limit=6 * 1024**3, nofile=256, file_limit=4 * 1024**3, max_log=1024 * 1024, threads="2")
+    helper("caption_layer")
+    ctx.used["caption_layer"] = HELPERS["caption_layer"][1]
+    ctx.run("encode", [root], flags=("-s", "-E"), **big)
+    shutil.rmtree(root / "picture-frames")
+    code, out, err = ctx.run("encode", [root, "--verify-only"], flags=("-s", "-E"), check=False, **big)
+    if code:
+        raise Rejected("encode.py --verify-only failed: " + _tail(err))
+    verified = json.loads(out)
+    ctx.app("final_render.py", ["check", source, edit_map, ledger, root, "--caption-dir", helper("encode").parent],
+            timeout=600, cpu=1200, as_limit=4 * 1024**3, nofile=128, file_limit=64 * 1024**2, threads="2")
+    with wave.open(str(root / "edited.wav")) as w:
+        channels = w.getnchannels()
+    ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", "-threads", "1", "-i", root / "final.mp4", "-map", "0:a:0",
+                "-c:a", "pcm_s16le", "-ar", "48000", "-ac", str(channels), root / "final-audio.wav"],
+               timeout=300, cpu=600, file_limit=1024**3, as_limit=2 * 1024**3, cwd=root)
+    md5 = ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-threads", "1", "-i", root / "final.mp4", "-map", "0:v:0",
+                      "-f", "framemd5", "-"], timeout=900, cpu=1800, as_limit=2 * 1024**3, max_log=8 * 1024 * 1024, cwd=root)
+    frame_hashes = [line.rsplit(",", 1)[1].strip() for line in md5.decode().splitlines() if line and not line.startswith("#")]
+    regions = json.loads(ctx.app("final_render.py", ["regions", root / "source.wav", root / "final-audio.wav", edit_map],
+                                 timeout=300, cpu=600, as_limit=4 * 1024**3, nofile=64))
+    live = json.loads((root / "live-check.json").read_text())
+    composite = json.loads((root / "caption-composite.json").read_text())
+    capture = json.loads((root / "capture-full.json").read_text())
+    with wave.open(str(root / "final-audio.wav")) as w:
+        final_samples = w.getnframes()
+    ctx.write("decoded-final.json", {"final_sha256": sha(root / "final.mp4"), "video_frames_decoded": len(frame_hashes),
+                                     "video_framemd5_sha256": __import__("hashlib").sha256("\n".join(frame_hashes).encode()).hexdigest(),
+                                     "audio_pcm": "final-audio.wav", "audio_pcm_sha256": sha(root / "final-audio.wav"),
+                                     "audio_samples": final_samples, "decoder": "ffmpeg -xerror (framemd5 + PCM s16 48 kHz)"})
+    picture_ok = (live["crop_matches_ledger"] and capture["indices"] == list(range(mapped["frames"]))
+                  and len(frame_hashes) == mapped["frames"] == verified["frames"])
+    integrity = {"full_decode_pass": verified["full_decode_pass"] is True and len(frame_hashes) == mapped["frames"],
+                 "caption_bounds_pass": composite.get("caption_bounds_pass") is True and live["caption_band_changes_with_cues"],
+                 "picture_map_verified": bool(picture_ok), "source_regions": regions,
+                 "media_verification_sha256": sha(root / "media-verification.json"), "live_check_sha256": sha(root / "live-check.json"),
+                 "scope": "encode.py --verify-only, full FFmpeg decode, decoded-pixel crop/caption checks and source-region audio "
+                          "correlation; machine evidence, not a viewing or listening review."}
+    ctx.write("final-integrity.json", integrity)
+    face = json.loads((root / "face-audit.json").read_text())
+    return {"assemble_job": value["assemble_job"], "crop_job": value["crop_job"], "width": verified["width"], "height": verified["height"],
+            "frames": verified["frames"], "fps": verified["fps"], "duration_s": round(verified["audio_duration"], 3),
+            "final_sha256": verified["sha256"], "final_bytes": (root / "final.mp4").stat().st_size,
+            "captions": {"cues": live.get("caption_cues"), "words": len(words), "frames_with_cue": live["cue_on_frames"],
+                         "font": style["font_path"], "timing_adjustments": adjusted},
+            "crop": {"setups": face["setups"], "face_pass": face["pass"], "flags": face["flags"]},
+            "checks": {"full_decode": integrity["full_decode_pass"], "caption_bounds_and_band": integrity["caption_bounds_pass"],
+                       "crop_matches_ledger": live["crop_matches_ledger"], "picture_map_verified": integrity["picture_map_verified"],
+                       "min_source_region_correlation": min(r["correlation"] for r in regions)},
+            "motion_layer": "none (piece 3): live footage only"}
+
+
+def _delivery_gate(ctx, value, source, metadata):
+    root = ctx.root
+    gate_job = value["dialogue_gate_job"]
+    dialogue, gate_dir = ctx.lookup(gate_job, {"dialogue-gate"})
+    base = json.loads((gate_dir / "audio-gate.json").read_text())
+    for key in ("source", "edited", "edit_map", "phonetic_regions", "cut_regression", "filler_review", "edited_acoustic_scan"):
+        ctx.ref(gate_job, {"dialogue-gate"}, base[key]["path"], base[key]["path"])
+    for edge in base["reviewed_edges"]:
+        for kind in ("waveform", "spectrogram"):
+            if edge.get(f"{kind}_path"):
+                ctx.ref(gate_job, {"dialogue-gate"}, edge[f"{kind}_path"], edge[f"{kind}_path"])
+    rj = value["render_job"]
+    for name in ("final.mp4", "decoded-final.json", "final-integrity.json", "final-audio.wav", "edited-asr.json"):
+        ctx.ref(rj, {"final-render"}, name, name)
+    ctx.ref(value["final_asr_job"], {"asr"}, "asr.json", "final-asr.json")
+    windows, _ = ctx.ref(value["final_scan_job"], {"acoustic-scan"}, "acoustic-windows.json")
+    review = {r["window"]: r["findings"] for r in value.get("acoustic_review") or []}
+    final_words = json.loads((root / "final-asr.json").read_text())["words"]
+    edited_words = json.loads((root / "edited-asr.json").read_text())["words"]
+    rows = []
+    for w in json.loads(windows.read_text())["windows"]:
+        wave_path, _ = ctx.ref(value["final_scan_job"], {"acoustic-scan"}, w["waveform"], "final-" + w["waveform"])
+        spec_path, _ = ctx.ref(value["final_scan_job"], {"acoustic-scan"}, w["spectrogram"], "final-" + w["spectrogram"])
+        heard = " ".join(x["word"] for x in final_words if x["start"] < w["end"] and x["end"] > w["start"])[:300]
+        rows.append({"start": w["start"], "end": w["end"], "window": w["index"], "rms_dbfs": w["rms_dbfs"],
+                     "findings": review.get(w["index"]) or (f"Automated: final audio {w['start']:.2f}-{w['end']:.2f} s, RMS "
+                                                            f"{w['rms_dbfs'] if w['rms_dbfs'] is not None else 'digital silence'} dBFS; "
+                                                            f"final ASR: '{heard}'. Not human listening."),
+                     "waveform_sha256": sha(wave_path), "spectrogram_sha256": sha(spec_path)})
+    ctx.write("final-acoustic-scan.json", rows)
+    lost, added = _words_diff([w["word"] for w in edited_words], [w["word"] for w in final_words])
+    ctx.write("final-asr-compare.json", {"edited_words": len(edited_words), "final_words": len(final_words),
+                                         "words_lost": lost, "words_added": added,
+                                         "basis": "Transcriber ASR of the edited WAV vs the decoded final MP4 audio, normalized word sequence diff"})
+    receipt = dict(base)
+    for key, name in [("final", "final.mp4"), ("decoded_final", "decoded-final.json"), ("final_asr", "final-asr.json"),
+                      ("final_acoustic_scan", "final-acoustic-scan.json"), ("final_integrity", "final-integrity.json")]:
+        receipt[key] = {"path": name, "sha256": sha(root / name)}
+    ctx.write("audio-gate.json", receipt)
+    code, out, err = ctx.run("audio_gate", [root, "--stage", "delivery"], timeout=120, check=False, as_limit=2 * 1024**3)
+    result = {"pass": code == 0, "exit_code": code, "stage": "delivery", "output": json.loads(out) if code == 0 else None,
+              "error": None if code == 0 else _tail(err), "receipt_sha256": sha(root / "audio-gate.json"),
+              "words_lost_vs_edited": lost, "words_added_vs_edited": added,
+              "scope": "Evidence completeness and custody per audio_gate.py --stage delivery; not human listening approval."}
+    ctx.write("delivery-gate-result.json", result)
+    del dialogue
+    return {"delivery_gate_pass": result["pass"], "error": result["error"], "words_lost_vs_edited": lost,
+            "words_added_vs_edited": added, "final_scan_windows": len(rows), "render_job": rj}
+
+
 STAGE_RUNNERS = {
     "source-audio": _source_audio, "resolve-preset": _resolve_preset, "preflight": _preflight, "asr": _asr,
     "align": _align, "acoustic-ctc": _ctc, "pcm-assemble": _pcm_assemble, "speech-cut-audit": _speech_cut_audit,
     "acoustic-scan": _acoustic_scan, "dialogue-gate": _dialogue_gate, "validate-project": _validate_project,
+    "face-crop": _face_crop, "final-render": _final_render, "delivery-gate": _delivery_gate,
 }

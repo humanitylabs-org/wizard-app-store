@@ -27,7 +27,7 @@ import secrets
 from typing import cast
 from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.4.0-testing"
+VERSION = "0.5.0-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PROJECTS = 8
@@ -45,9 +45,9 @@ ID = re.compile(r"^[a-f0-9]{32}$")
 # Delivery is never approved by this app. Piece 1 supplies the audio/edit
 # stages (ASR, alignment, per-edge evidence, dialogue gate) as operator tools.
 GATES = ["coherent-thought/editorial-review (operator)", "audio-dialogue-lock (dialogue-gate stage, operator evidence)",
-         "fixed-per-setup-face-audit (not built)", "semantic-HTML-SVG-GSAP-motion (not built)",
-         "burned-aligned-captions via caption_layer (not built)", "1080x1920 encode (not built)",
-         "phone-size-and-motion-review (operator)", "delivery-audio-receipt (not built)"]
+         "fixed-per-setup-face-audit (face-crop stage, sampled frames)", "semantic-HTML-SVG-GSAP-motion (not built)",
+         "burned-aligned-captions via caption_layer (final-render stage)", "1080x1920 encode via encode.py (final-render stage)",
+         "phone-size-and-motion-review (operator)", "delivery-audio-receipt (delivery-gate stage)"]
 
 
 NATIVE_CONTEXT = threading.local()
