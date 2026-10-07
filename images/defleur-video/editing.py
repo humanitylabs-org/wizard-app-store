@@ -182,11 +182,11 @@ def cut_regions(words, blocks, duration):
     return regions, removed, kept
 
 
-def align_words(a, b):
+def align_words(a, b, indices=False):
     """Minimal-edit word alignment (banded Levenshtein on normalized tokens). Returns (lost, added): tokens of `a`
     missing from `b` and tokens of `b` not in `a`. Unlike difflib's longest-block matching, repeated phrases can't
     shift the alignment by a whole repetition, so one dropped word in a long repetitive transcript is reported as
-    exactly that word."""
+    exactly that word. indices=True returns positions in `a` and `b` instead of tokens."""
     n, m = len(a), len(b)
     band = abs(n - m) + 256
     INF = n + m + 1
@@ -217,10 +217,13 @@ def align_words(a, b):
         c = cost(i, j)
         if i > 0 and j > 0 and c == cost(i - 1, j - 1) + (a[i - 1] != b[j - 1]):
             if a[i - 1] != b[j - 1]:
-                lost.append(a[i - 1]); added.append(b[j - 1])
+                lost.append(i - 1); added.append(j - 1)
             i, j = i - 1, j - 1
         elif i > 0 and c == cost(i - 1, j) + 1:
-            lost.append(a[i - 1]); i -= 1
+            lost.append(i - 1); i -= 1
         else:
-            added.append(b[j - 1]); j -= 1
-    return lost[::-1], added[::-1]
+            added.append(j - 1); j -= 1
+    lost, added = lost[::-1], added[::-1]
+    if indices:
+        return lost, added
+    return [a[k] for k in lost], [b[k] for k in added]

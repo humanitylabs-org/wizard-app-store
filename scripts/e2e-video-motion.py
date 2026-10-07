@@ -94,6 +94,76 @@ def long_fixture(fixture, seconds):
     return out
 
 
+def _pcm(fixture, src):
+    """Decode the source to 16 kHz mono s16 (host stdlib only) for energy measurements."""
+    import array
+    import wave
+    name = src.stem + ".energy.wav"
+    e2e.ff("ffmpeg", "-v", "error", "-y", "-i", src.name, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", name, cwd=fixture)
+    with wave.open(str(fixture / name)) as w:
+        data = array.array("h", w.readframes(w.getnframes()))
+    (fixture / name).unlink()
+    return data
+
+
+def _db(samples):
+    import math
+    if not samples:
+        return None
+    ms = sum(x * x for x in samples) / len(samples)
+    return round(10 * math.log10(ms / 32768.0 ** 2), 1) if ms > 0 else -120.0
+
+
+def cut_evidence(fixture, src, src_words, cuts, edited_words):
+    """Step-1 evidence: RMS inside every applied cut vs the file's speech level, and each lost word's source time
+    with the cut covering it. Computed on the host from the uploaded source, independent of the app."""
+    sys.path.insert(0, str(e2e.ROOT / "images/defleur-video"))
+    from editing import align_words
+    pcm, sr = _pcm(fixture, src), 16000
+    seg = lambda a, b: pcm[max(0, int(a * sr)):max(0, int(b * sr))]
+    word_db = sorted(d for d in (_db(seg(w["start"], w["end"])) for w in src_words if w["end"] - w["start"] >= 0.08) if d is not None)
+    speech_db = word_db[len(word_db) // 2] if word_db else None
+    fillers = [w for w in src_words if norm(w["word"]) in ("um", "uh", "er", "erm", "ah", "oh", "umm", "uhm", "hmm")]
+    in_filler = lambda t: any(f["start"] - 0.05 <= t <= f["end"] + 0.05 for f in fillers)
+    rows = []
+    for c in cuts:
+        # 20 ms frames inside the cut, excluding the transcribed filler's own span (the intended "um" is speech-like by design)
+        ts = [c["start_s"] + 0.02 * i for i in range(int((c["end_s"] - c["start_s"]) / 0.02))]
+        frames = [_db(seg(t, t + 0.02)) for t in ts if not in_filler(t + 0.01)]
+        loud = [f for f in frames if f is not None and speech_db is not None and f > speech_db - 15]
+        rows.append({"start_s": c["start_s"], "end_s": c["end_s"], "dur_s": round(c["end_s"] - c["start_s"], 3),
+                     "reason": c["reason"][:90], "rms_dbfs": _db(seg(c["start_s"], c["end_s"])),
+                     "max_20ms_dbfs": max((f for f in frames if f is not None), default=None),
+                     "speech_like_s": round(0.02 * len(loud), 2)})
+    in_cut = lambda t: any(c["start_s"] <= t <= c["end_s"] for c in cuts)
+    kept = [w for w in src_words if not in_cut((w["start"] + w["end"]) / 2) and norm(w["word"])]
+    got = [norm(w["word"]) for w in edited_words if norm(w["word"])]
+    lost_idx, _ = align_words([norm(w["word"]) for w in kept], got, indices=True)
+    lost = []
+    for k in lost_idx:
+        w = kept[k]
+        covering = [c for c in rows if c["start_s"] - 0.4 <= w["end"] and w["start"] <= c["end_s"] + 0.4]
+        lost.append({"word": w["word"], "source_start_s": w["start"], "source_end_s": w["end"], "cut_within_0.4s": covering[:2]})
+    gaps_with_sound = []
+    for a, b in zip(src_words, src_words[1:]):
+        if b["start"] - a["end"] >= 0.5:
+            fr = [_db(seg(t, t + 0.02)) for t in [a["end"] + 0.02 * i for i in range(int((b["start"] - a["end"]) / 0.02))]]
+            sl = round(0.02 * sum(1 for f in fr if f is not None and speech_db is not None and f > speech_db - 15), 2)
+            if sl >= 0.3:
+                gaps_with_sound.append({"after_word": a["word"], "gap": [a["end"], b["start"]], "speech_like_s": sl})
+    pause_rows = [r for r in rows if "pause" in r["reason"] or "silence" in r["reason"]]
+    lost_near = [w for w in lost if w["cut_within_0.4s"]]
+    return {"speech_level_dbfs_median_word": speech_db,
+            "source_transcript_last_word_end_s": src_words[-1]["end"] if src_words else None,
+            "lost_words_total": len(lost), "lost_words_with_cut_within_0.4s": len(lost_near),
+            "threshold_note": "speech_like = 20 ms frames louder than (speech level - 15 dB), excluding transcribed filler word spans (+-50 ms)",
+            "cuts": rows, "pause_cuts": len(pause_rows),
+            "pause_cuts_with_speech_like_audio": sum(1 for r in pause_rows if r["speech_like_s"] >= 0.2),
+            "speech_like_seconds_inside_cuts": round(sum(r["speech_like_s"] for r in rows), 2),
+            "source_gaps_over_0.5s_with_speech_like_audio": gaps_with_sound[:80],
+            "lost_words": lost}
+
+
 def plan_for(words, duration):
     """One explanatory beat over the first spoken phrase (captions suppressed: the card says it), one insert later."""
     ws = [w for w in words if w["end"] > w["start"]]
@@ -141,7 +211,7 @@ async def flow(url, fixture, truth, report):
             pid = project["id"]
             report["upload"] = {"seconds": round(time.monotonic() - t0, 2), "duration": project["duration"], "source": src.name}
             log = []
-            timings = {}
+            timings = report.setdefault("timings_s", {})
             t0 = time.monotonic()
             edit = await wait_run(s, (await tool(s, "start_edit", {"project_id": pid, "language": "en"}))["run_id"], log, budget=7200)
             timings["start_edit"] = round(time.monotonic() - t0, 1)
@@ -162,6 +232,18 @@ async def flow(url, fixture, truth, report):
                                                          "words_added_vs_source", "dialogue_gate", "cut_audit_pass")},
                                     "cuts_applied": len(cut["cuts_applied"]), "lost_word_occurrences": near[:60]}
             report["source_word_count"] = len(src_words)
+            report["start_edit"] = {k: edit.get(k) for k in ("untranscribed_sound", "pause_screen") if k in edit}
+            report["start_edit"]["proposed_cuts"] = len(cuts)
+            report["start_edit"]["proposed_seconds"] = round(sum(c["end_s"] - c["start_s"] for c in cuts), 2)
+            if LONG or cut["words_lost_vs_source"]:
+                edited_asr = json.loads(http_call("GET", cut["downloads"]["edited_transcript_json"])[1])
+                report["cut_evidence"] = cut_evidence(fixture, src, src_words, cut["cuts_applied"], edited_asr["words"])
+            for k in ("fillers_heard_in_edit_only", "fillers_in_source_only"):
+                if k in cut:
+                    report["apply_cuts"][k] = cut[k]
+            if "--stop-after-cuts" in sys.argv:
+                report["timings_s"] = timings
+                return
             assert cut["dialogue_gate"]["pass"], cut["dialogue_gate"]
             deferred = [] if not cut["words_lost_vs_source"] else [f"words lost vs source: {cut['words_lost_vs_source']}"]
             if deferred and not LONG:
@@ -348,17 +430,30 @@ def main():
         peaks = {"video": e2e.Peak(vcid), "browser": e2e.Peak(bcid)}
         for p in peaks.values():
             p.start()
+        report["timings_s"] = {}
         t0 = time.monotonic()
         asyncio.run(flow(vbase + "/mcp", fixture, truth, report))
         report["mcp_flow_wall_s"] = round(time.monotonic() - t0, 1)
-        report["wall_time_s"] = round(time.monotonic() - t_all, 1)
-        time.sleep(1.5)
-        report["memory"] = {k: {"cgroup_peak_bytes": p.peak, "max_sampled_current_bytes": p.max_current} for k, p in peaks.items()}
-        report["memory"]["video"]["limit_bytes"] = json.loads(run("docker", "inspect", vcid))[0]["HostConfig"]["Memory"]
-        report["memory"]["browser"]["limit_bytes"] = json.loads(run("docker", "inspect", bcid))[0]["HostConfig"]["Memory"]
+        report["result"] = "pass"
+    except BaseException as exc:
+        report["result"] = f"FAIL: {type(exc).__name__}: {str(exc)[:1500]}"
+        raise
     finally:
-        for p in peaks.values():
+        report["wall_time_s"] = round(time.monotonic() - t_all, 1)
+        # Always record memory, even on failure: final cgroup memory.peak read + the sampled maxima.
+        for key, p in peaks.items():
             p.stop.set()
+            try:
+                p.peak = max(p.peak, int(run("docker", "exec", p.cid, "cat", "/sys/fs/cgroup/memory.peak", timeout=10)))
+            except (subprocess.SubprocessError, ValueError):
+                pass
+        report["memory"] = {k: {"cgroup_peak_bytes": p.peak, "cgroup_peak_gib": round(p.peak / 1024**3, 2),
+                                "max_sampled_current_bytes": p.max_current} for k, p in peaks.items()}
+        for key, p in peaks.items():
+            try:
+                report["memory"][key]["limit_bytes"] = json.loads(run("docker", "inspect", p.cid))[0]["HostConfig"]["Memory"]
+            except (subprocess.SubprocessError, ValueError, IndexError):
+                pass
         for key, env in (("v", venv), ("b", benv), ("t", tenv)):
             if "--keep" not in sys.argv:
                 logs = subprocess.run([*cmds[key], "logs", "--no-color", "--tail", "200"], env=env, capture_output=True, text=True).stdout
