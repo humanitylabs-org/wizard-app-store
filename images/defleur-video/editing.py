@@ -363,8 +363,13 @@ def cut_sound_check(cuts, env, words):
             "override": "set owner_approved_sound: true on a cut only after the owner listened and approved removing that sound"}
 
 
-def split_fillers(lost, added):
-    """Move filler tokens out of lost/added word lists: ASR can omit fillers, so a filler in one transcript and not
-    the other is reported separately, never as lost or added content."""
-    return ([w for w in lost if w not in REPORT_FILLERS], [w for w in added if w not in REPORT_FILLERS],
-            [w for w in lost if w in REPORT_FILLERS], [w for w in added if w in REPORT_FILLERS])
+def diff_words(expected, got):
+    """Content words lost/added between two normalized token lists, with fillers diffed separately.
+
+    Fillers are removed before the alignment (ASR can omit them, James' asr.py), so a filler present in only one
+    transcript can never pair with, or hide, a real content word. Returns (lost, added, fillers_only_in_expected,
+    fillers_only_in_got)."""
+    from collections import Counter
+    lost, added = align_words([w for w in expected if w not in REPORT_FILLERS], [w for w in got if w not in REPORT_FILLERS])
+    fe, fg = Counter(w for w in expected if w in REPORT_FILLERS), Counter(w for w in got if w in REPORT_FILLERS)
+    return lost, added, sorted((fe - fg).elements()), sorted((fg - fe).elements())

@@ -938,21 +938,22 @@ print(json.dumps([a, b]))
         self.assertNotIn("owner_approved_sound", merged[0])
 
     def test_fillers_reported_separately_from_lost_content(self):
-        from editing import align_words, split_fillers
+        from editing import diff_words
         src = "so um this is the plan and uh we ship it".split()
         edit = "so this is the plan oh and we ship".split()
-        lost, added, f_lost, f_added = split_fillers(*align_words(src, edit))
+        lost, added, f_lost, f_added = diff_words(src, edit)
         self.assertEqual(lost, ["it"])
         self.assertEqual(added, [])
         self.assertEqual(sorted(f_lost), ["uh", "um"])
         self.assertEqual(f_added, ["oh"])
 
     def test_short_repetitive_transcript_loses_no_words_when_identical(self):
-        from editing import align_words, split_fillers
+        from editing import diff_words
         loop = "hello this is a short test um of the video editor".split()
         a = loop * 4
         b = [w for w in a if w != "um"]  # ASR dropped every filler on the re-transcription
-        self.assertEqual(split_fillers(*align_words(a, b))[:2], ([], []))
+        self.assertEqual(diff_words(a, b), ([], [], ["um"] * 4, []))
+        self.assertEqual(diff_words(a, b[:-3] + b[-2:])[:2], (["video"], []))
 
     def test_capabilities_report_browser_and_resources(self):
         os.environ["BROWSER_URL"] = "http://127.0.0.1:9"

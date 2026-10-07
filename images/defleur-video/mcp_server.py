@@ -24,7 +24,7 @@ from typing import Any
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # run with -I: make the app's pure helpers importable
 from editing import (FILLERS, HANDLE_S, PAUSE_S, REPORT_FILLERS, align_words, candidates_from,  # noqa: E402,F401
-                     cut_regions, cut_sound_check, split_fillers)
+                     cut_regions, cut_sound_check, diff_words)
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -383,8 +383,7 @@ def do_apply_cuts(run: dict) -> dict:
     edited_words = [w for w in artifact(easr["id"], "asr.json")["words"]]
     got = [norm(w["word"]) for w in edited_words if norm(w["word"])]
     expected = [e for e in expected if e]
-    lost, added = align_words(expected, got)
-    lost, added, fillers_source_only, fillers_edit_only = split_fillers(lost, added)
+    lost, added, fillers_source_only, fillers_edit_only = diff_words(expected, got)
     fillers_left = [w for w in got if w in FILLERS]
     sound = cut_sound_check(cuts, artifact(edit["jobs"]["source_audio"], "energy.json"), words)
 

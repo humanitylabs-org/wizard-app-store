@@ -775,8 +775,8 @@ def _norm(word):
 
 
 def _words_diff(expected, got, with_fillers=False):
-    from editing import align_words, split_fillers
-    lost, added, f_lost, f_added = split_fillers(*align_words([w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w]))
+    from editing import diff_words
+    lost, added, f_lost, f_added = diff_words([w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w])
     return (lost, added, f_lost, f_added) if with_fillers else (lost, added)
 
 
