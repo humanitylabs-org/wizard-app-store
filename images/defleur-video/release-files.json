@@ -45,6 +45,8 @@
   "images/defleur-video/defleur/skills/defleur-motion/scripts/encode.py",
   "images/defleur-video/defleur/wizard-module.json",
   "images/defleur-video/editing.py",
+  "images/defleur-video/face_audit.py",
+  "images/defleur-video/final_render.py",
   "images/defleur-video/mcp_server.py",
   "images/defleur-video/release-files.json",
   "images/defleur-video/requirements.in",

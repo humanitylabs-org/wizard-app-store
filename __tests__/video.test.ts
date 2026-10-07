@@ -29,7 +29,7 @@ test("publication allowlist excludes recovered vendor, history, evidence and loc
 test("image bundles James' helpers byte-for-byte with NOTICE, no faster-whisper", () => {
   expect(readFileSync("images/defleur-video/.dockerignore", "utf8").trim().split("\n"))
     .toEqual(["*", "!Dockerfile", "!service.py", "!editing.py", "!client.py", "!workflow.py", "!transcriber.py",
-              "!scan_windows.py", "!mcp_server.py", "!NOTICE", "!requirements.lock", "!defleur", "!defleur/**", "defleur/.gitignore"]);
+              "!scan_windows.py", "!mcp_server.py", "!face_audit.py", "!final_render.py", "!NOTICE", "!requirements.lock", "!defleur", "!defleur/**", "defleur/.gitignore"]);
   const dockerfile = readFileSync("images/defleur-video/Dockerfile", "utf8");
   expect(dockerfile).toContain("COPY defleur/ /opt/defleur/");
   expect(dockerfile).toContain("COPY NOTICE /opt/defleur/NOTICE");
