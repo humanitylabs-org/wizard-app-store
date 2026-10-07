@@ -11,7 +11,7 @@
   ],
   "description": "Write-only, one-time credential handoff from a human to any agent (Hermes or others). The agent asks for a key and sends you a link; you type the value there; your browser encrypts it to that agent's own public key; the agent picks it up once and decrypts it locally. This app only relays ciphertext and keeps nothing long-term. It is not a password manager.",
   "tipi_version": 1,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "source": "https://github.com/humanitylabs-org/wizard-app-store",
   "exposable": false,
   "supported_architectures": [
@@ -19,7 +19,7 @@
     "arm64"
   ],
   "created_at": 1791352412289,
-  "updated_at": 1791352412289,
+  "updated_at": 1791353075893,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Secret Drop agent client (single file; needs only `cryptography` >= 46 for HPKE).
+"""Secret Drop agent client (single file; needs only `cryptography` >= 47 for HPKE).
 
 Lets an agent receive one credential from a human without it passing through chat:
 
@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-CLIENT_VERSION = "0.1.0"
+CLIENT_VERSION = "0.1.1"
 SUITE = "HPKE-base/DHKEM-X25519-HKDF-SHA256/HKDF-SHA256/AES-256-GCM"
 INFO_PREFIX = "wizard-secret-drop/v1"
 PICKUP_HEADER = "X-Secret-Drop-Pickup"
@@ -54,7 +54,7 @@ def _crypto():
         from cryptography.hazmat.primitives import hpke, serialization
         from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
     except ImportError as exc:  # pragma: no cover - environment dependent
-        raise ClientError("This client needs the `cryptography` package, version 46 or newer (HPKE support).") from exc
+        raise ClientError("This client needs the `cryptography` package, version 47 or newer (HPKE support).") from exc
     suite = hpke.Suite(hpke.KEM.X25519, hpke.KDF.HKDF_SHA256, hpke.AEAD.AES_256_GCM)
     return suite, serialization, X25519PrivateKey, X25519PublicKey
 

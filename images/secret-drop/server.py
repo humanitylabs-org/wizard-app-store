@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 SUITE = "HPKE-base/DHKEM-X25519-HKDF-SHA256/HKDF-SHA256/AES-256-GCM"
 INFO_PREFIX = "wizard-secret-drop/v1"
 DEFAULT_TTL_MINUTES = 120

@@ -1,7 +1,7 @@
 ---
 name: secret-drop-request
 description: Use when you need an API key, token, or password from a human. Get it via a one-time encrypted Secret Drop link, never chat.
-version: 0.1.0
+version: 0.1.1
 author: Humanity Labs
 license: MIT
 platforms: [linux, macos]
@@ -34,8 +34,8 @@ curl -fsS "$RELAY/client.py" -o ~/.secret-drop/secret_drop_client.py
 curl -fsS "$RELAY/api/v1/info"   # shows client_sha256; compare with: sha256sum ~/.secret-drop/secret_drop_client.py
 ```
 
-It needs Python 3.10+ and `cryptography` >= 46 (HPKE). Hermes' own venv already has it; otherwise use
-`uv run --with 'cryptography>=46' python ...`. Check with `python -c "from cryptography.hazmat.primitives import hpke"`.
+It needs Python 3.10+ and `cryptography` >= 47 (HPKE). Hermes' own venv already has it; otherwise use
+`uv run --with 'cryptography>=47' python ...`. Check with `python -c "from cryptography.hazmat.primitives import hpke"`.
 
 ## 2. Create a key pair (once per agent)
 

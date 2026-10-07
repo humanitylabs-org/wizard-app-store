@@ -25,7 +25,7 @@ HPKE base mode, RFC 9180: `DHKEM(X25519, HKDF-SHA256)`, `HKDF-SHA256`, `AES-256-
 name; the browser recomputes `request_id = SHA-256(capability)` itself rather than trusting the server.
 
 Why this scheme: it is a standard (not a home-grown ECIES), X25519 keys are 32 bytes (easy to show
-as a fingerprint), Python `cryptography` >= 46 implements it natively (the agent side has no custom crypto),
+as a fingerprint), Python `cryptography` >= 47 implements it natively (the agent side has no custom crypto),
 and the browser side needs only three audited primitives. RSA-OAEP would need WebCrypto or a much larger,
 slower pure-JS RSA implementation.
 

@@ -1,6 +1,6 @@
 services:
   secret-drop:
-    image: ghcr.io/humanitylabs-org/secret-drop:0.1.0
+    image: ghcr.io/humanitylabs-org/secret-drop:0.1.1
     user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
