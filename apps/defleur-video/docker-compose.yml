@@ -1,6 +1,6 @@
 services:
   defleur-video:
-    image: ghcr.io/humanitylabs-org/defleur-video:0.3.0-testing
+    image: ghcr.io/humanitylabs-org/defleur-video:0.4.0-testing
     user: "1000:1000"
     read_only: true
     cap_drop: [ALL]

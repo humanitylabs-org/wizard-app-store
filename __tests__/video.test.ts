@@ -91,7 +91,7 @@ test("video has independent state, no agent volumes, bounded unprivileged servic
   expect(service.memswap_limit).toBe(service.mem_limit);
   expect(service.cpus).toBe(2);
   expect(service.pids_limit).toBe(64);
-  expect(config.version).toBe("0.3.0-testing");
+  expect(config.version).toBe("0.4.0-testing");
   expect(service.image).toBe(`ghcr.io/humanitylabs-org/defleur-video:${config.version}`);
   expect(service.environment.VIDEO_API_TOKEN).toBeUndefined();
   for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "depends_on"]) {

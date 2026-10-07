@@ -35,6 +35,8 @@ FILLERS = {"um", "umm", "uhm", "uh", "uhh", "erm", "er", "ah", "hmm", "mm", "mhm
 PAUSE_S = 0.5     # gaps between words longer than this are pause candidates
 HANDLE_S = 0.12   # silence kept on each side of a cut
 LOCK = threading.Lock()
+LANG_NAMES = {"english": "en", "spanish": "es", "french": "fr", "german": "de", "italian": "it", "portuguese": "pt",
+              "dutch": "nl", "japanese": "ja", "chinese": "zh", "korean": "ko", "russian": "ru", "arabic": "ar", "hindi": "hi"}
 
 NOT_BUILT = ["face audit / fixed 9:16 crop", "burned captions", "final 1080x1920 encode",
              "HTML/SVG/GSAP motion graphics", "delivery gate and final MP4 delivery"]
@@ -257,7 +259,8 @@ def do_start_edit(run: dict) -> dict:
     summary = src["result"]["summary"]
     asr = stage(run, "asr", {"audio_job": src["id"], "language": lang})
     detected = asr["result"]["summary"].get("language_detected") or (lang if lang != "auto" else None)
-    if not detected:
+    detected = LANG_NAMES.get(str(detected).lower(), str(detected).lower()) if detected else None
+    if not detected or not re.fullmatch(r"[a-z]{2,3}", detected):
         raise ToolError("ASR did not report a language; call start_edit again with language='en' (or the right code)")
     pre = stage(run, "preflight", {"language": detected})
     al = stage(run, "align", {"asr_job": asr["id"], "language": detected})
