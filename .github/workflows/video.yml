@@ -2,7 +2,7 @@ name: Build video editing review API
 on:
   push:
     branches: [main]
-    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'apps/transcriber/**', 'scripts/smoke-video.py', 'scripts/e2e-video-audio.py', 'scripts/e2e-video-mcp.py', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
+    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'apps/transcriber/**', 'scripts/smoke-video.py', 'scripts/e2e-video-audio.py', 'scripts/e2e-video-mcp.py', 'scripts/e2e-video-motion.py', 'apps/browser/**', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,7 +10,7 @@ permissions:
 jobs:
   video-image:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,6 +34,11 @@ jobs:
         run: |
           set -o pipefail
           E2E_OUT="$RUNNER_TEMP/e2e" E2E_CACHE="$RUNNER_TEMP/e2e-cache" TMPDIR="$RUNNER_TEMP" python3 scripts/e2e-video-mcp.py | tee "$RUNNER_TEMP/video-mcp.json"
+      - name: Three-app MCP motion flow (Transcriber + Browser + video) - framing, B-roll insert, GSAP beat, smoke/proof capture, render_final with motion
+        shell: bash
+        run: |
+          set -o pipefail
+          E2E_OUT="$RUNNER_TEMP/e2e" E2E_CACHE="$RUNNER_TEMP/e2e-cache" TMPDIR="$RUNNER_TEMP" python3 scripts/e2e-video-motion.py | tee "$RUNNER_TEMP/video-motion.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -45,6 +50,8 @@ jobs:
             ${{ runner.temp }}/e2e/report.json
             ${{ runner.temp }}/video-mcp.json
             ${{ runner.temp }}/e2e/mcp-report.json
+            ${{ runner.temp }}/video-motion.json
+            ${{ runner.temp }}/e2e/motion-report.json
             ${{ runner.temp }}/e2e/*.log
       - uses: docker/login-action@v3
         with:

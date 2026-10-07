@@ -819,7 +819,7 @@ def submit_motion(project_id: str, files: dict, plan: dict, replace: bool = True
             raise ToolError("a run is in progress for this project; wait for it with get_status first")
         st = api("POST", f"/v1/projects/{project_id}/motion", {"files": files, "plan": plan, "replace": replace})
         return {**{k: v for k, v in st.items() if k != "plan"},
-                "next": "Call capture_motion(project_id, 'smoke') and look at the returned frames."}
+                "next": "Call capture_motion(project_id, 'smoke') and look at the returned frames. The capture checks the page contract at runtime and reports any error."}
     return _result(go)
 
 

@@ -162,15 +162,22 @@ def validate_plan(plan, duration: float | None, files: set[str]) -> dict:
     return plan
 
 
-def check_index(text: str) -> None:
-    need = {"defleur/ledger.js": "include <script src=\"defleur/ledger.js\"></script> (defines sourceFrameForOutputFrame)",
-            "renderFrame": "define window.renderFrame = (t) => {...}", 'id="live"': "have an <img id=\"live\"> element (live footage)"}
-    low = text.replace("'", '"')
-    missing = [msg for key, msg in need.items() if key not in low]
-    if missing:
-        raise Rejected("index.html must " + "; ".join(missing))
-    if re.search(r"""(src|href)\s*=\s*["']\s*(https?:)?//""", text, re.I) or "@import url(http" in text:
-        raise Rejected("index.html references a remote URL; vendor every asset into the composition (GSAP: defleur/gsap.min.js)")
+def lint(staging: Path) -> list[str]:
+    """Light checks only. capture.cjs checks the real contract at runtime (renderFrame, #live, sourceFrameForOutputFrame)
+    and the smoke capture reports any failure in plain words. Returns advisory warnings."""
+    texts = {p.relative_to(staging).as_posix(): p.read_text(errors="replace") for p in staging.rglob("*")
+             if p.is_file() and p.suffix in (".html", ".js")}
+    if not any("renderFrame" in t for t in texts.values()):
+        raise Rejected("no uploaded HTML/JS file mentions renderFrame; the page must define window.renderFrame(t) (James' contract)")
+    warnings = []
+    joined = "\n".join(texts.values())
+    if "defleur/ledger.js" not in joined:
+        warnings.append("index.html does not seem to load defleur/ledger.js; capture needs window.sourceFrameForOutputFrame (defined there)")
+    if "live" not in joined:
+        warnings.append("no #live element found; capture needs <img id=\"live\">")
+    if re.search(r"""(src|href)\s*=\s*["']\s*(https?:)?//""", joined, re.I):
+        warnings.append("remote URLs found; they are blocked during capture: vendor every asset (GSAP: defleur/gsap.min.js)")
+    return warnings
 
 
 def submit(project: Path, files, plan, duration: float, replace: bool = True) -> dict:
@@ -200,11 +207,6 @@ def submit(project: Path, files, plan, duration: float, replace: bool = True) ->
     root = src_dir(project)
     existing = {r["path"] for r in tree(project)}
     keep = existing if not replace else {p for p in existing if Path(p).suffix in BINARY_KINDS and p not in decoded}
-    index = decoded.get("index.html")
-    if index is None and "index.html" not in keep | existing:
-        raise Rejected("the composition needs index.html")
-    if index is not None:
-        check_index(index.decode())
     validate_plan(plan, duration, set(decoded) | keep)
     staging = project / "motion" / "src.new"
     shutil.rmtree(staging, ignore_errors=True)
@@ -221,10 +223,15 @@ def submit(project: Path, files, plan, duration: float, replace: bool = True) ->
     if not (staging / "index.html").is_file():
         shutil.rmtree(staging)
         raise Rejected("the composition needs index.html")
+    try:
+        warnings = lint(staging)
+    except Rejected:
+        shutil.rmtree(staging)
+        raise
     shutil.rmtree(root, ignore_errors=True)
     staging.rename(root)
     (project / "motion" / "plan.json").write_text(json.dumps(plan, indent=2))
-    return status(project)
+    return {**status(project), "warnings": warnings}
 
 
 def store_asset(project: Path, rel: str, stream, length: int) -> dict:

@@ -753,8 +753,12 @@ class MediaTests(unittest.TestCase):
         status, err = post({**good, "files": {"index.html": index.replace("renderFrame", "render")}})
         self.assertEqual(status, 422)
         self.assertIn("renderFrame", err["error"])
-        status, err = post({**good, "files": {"index.html": index + '<script src="https://cdn.example/gsap.js"></script>'}})
-        self.assertEqual(status, 422)
+        # Any valid style is accepted: renderFrame defined in an external JS file, remote URLs only warned (blocked at capture).
+        status, ok = post({**good, "files": {"index.html": '<img id="live"><script src="defleur/ledger.js"></script><script src="app.js"></script>'
+                                                         '<script src="https://cdn.example/x.js"></script>',
+                                             "app.js": "async function renderFrame(t) {}\nwindow.renderFrame = renderFrame;"}})
+        self.assertEqual(status, 201, ok)
+        self.assertTrue(any("remote" in w for w in ok["warnings"]))
         status, err = post({**good, "plan": {"beats": [{**beat, "causal_action": ""}]}})
         self.assertEqual(status, 422)
         status, err = post({**good, "plan": {"beats": [{**beat, "caption_treatment": "show"}], "caption_suppress": [{"start": 0.6, "end": 1.0, "reason": "r"}]}})
