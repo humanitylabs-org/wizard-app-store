@@ -238,8 +238,12 @@ PAUSE_S = 0.5          # gaps between words longer than this are pause candidate
 HANDLE_S = 0.12        # silence kept on each side of a cut
 SPEECH_DROP_DB = 15.0  # a 10 ms frame louder than (file speech level - 15 dB) is speech-like
 SPEECH_FLOOR_DB = -50.0
-SPEECH_GUARD_S = 0.1   # speech-like audio a cut may contain outside transcribed words (breath/plosive tails)
+SPEECH_GUARD_S = 0.06  # speech-like audio an applied cut may contain outside transcribed words
+REVIEW_MIN_S = 0.1     # speech-like audio inside a gap (after edge tails) that makes it untranscribed_sound
 WORD_PAD_S = 0.05
+EDGE_GUARD_S = 0.15    # minimum distance from a pause cut to the nearest (aligned) word
+TAIL_MARGIN_S = 0.1    # extra silence kept after a word's audible tail / before its audible onset
+TAIL_DROP_DB = 30.0    # word tails/onsets (sibilants, soft onsets): frames above (level - 30 dB) or floor + 6 dB
 
 
 def _norm(word):
@@ -279,6 +283,44 @@ def speech_like(env, a, b, level, words=()):
     return round(n * fs, 2)
 
 
+def _edge_threshold(env, level):
+    db = sorted(env["dbfs"])
+    floor = db[len(db) // 10] if db else -120.0
+    return max(level - TAIL_DROP_DB, floor + 6.0)
+
+
+def quiet_span(env, level, a, b, lead=False, trail=False):
+    """Cut range inside the gap [a, b] between two words that keeps their audible tail/onset.
+
+    Starts at least EDGE_GUARD_S after `a` and TAIL_MARGIN_S after the last audible frame of the run that continues
+    from `a` (a quiet "ts" or breathy release), and ends symmetrically before `b`. lead/trail: the gap is the file's
+    start/end (no word on that side). Returns (lo, hi) or None when nothing safe is left."""
+    fs, db = env["frame_s"], env["dbfs"]
+    thr = _edge_threshold(env, level)
+    lo, hi = (0.0 if lead else a + EDGE_GUARD_S), (b if trail else b - EDGE_GUARD_S)
+    if not lead:
+        last, i = a, int(a / fs)
+        while i < len(db) and (i + 0.5) * fs < b:
+            t = (i + 0.5) * fs
+            if db[i] > thr:
+                last = t + fs / 2
+            elif t - last > 0.12:
+                break
+            i += 1
+        lo = max(lo, last + TAIL_MARGIN_S)
+    if not trail:
+        first, i = b, min(len(db) - 1, int(b / fs))
+        while i >= 0 and (i + 0.5) * fs > a:
+            t = (i + 0.5) * fs
+            if db[i] > thr:
+                first = t - fs / 2
+            elif first - t > 0.12:
+                break
+            i -= 1
+        hi = min(hi, first - TAIL_MARGIN_S)
+    return (round(lo, 3), round(hi, 3)) if hi - lo >= 0.1 else None
+
+
 def candidates_from(words, duration, env=None):
     """Filler / repeat / pause candidates, the default cut proposal, and gaps with untranscribed sound.
 
@@ -295,12 +337,14 @@ def candidates_from(words, duration, env=None):
         prev_end = words[i - 1]["end"] if i else 0.0
         next_start = words[i + 1]["start"] if i + 1 < len(words) else duration
         if n in FILLERS:
-            a = max(prev_end + HANDLE_S, 0.0) if w["start"] - prev_end > HANDLE_S else w["start"] - 0.02
-            b = next_start - HANDLE_S if next_start - w["end"] > HANDLE_S else w["end"] + 0.02
-            cut = [round(max(0.0, min(a, w["start"] - 0.02)), 3), round(min(duration, max(b, w["end"] + 0.02)), 3)]
-            sound = loud(*cut)
-            if sound is None or sound > SPEECH_GUARD_S:  # fall back to the filler itself; never cut sound around it
-                cut = [round(max(0.0, w["start"] - 0.02), 3), round(min(duration, w["end"] + 0.02), 3)]
+            cut = [round(max(0.0, w["start"] - 0.02), 3), round(min(duration, w["end"] + 0.02), 3)]
+            if env:  # extend into the measured-silent part of the gaps around the filler, never into a neighbour's tail
+                left = quiet_span(env, level, prev_end, w["start"], lead=i == 0)
+                right = quiet_span(env, level, w["end"], next_start, trail=i + 1 == len(words))
+                if left and loud(left[0], w["start"]) <= SPEECH_GUARD_S:
+                    cut[0] = left[0]
+                if right and loud(w["end"], right[1]) <= SPEECH_GUARD_S:
+                    cut[1] = right[1]
             cands.append({"kind": "filler", "word": w["word"], "word_index": i, "start_s": w["start"], "end_s": w["end"],
                           "cut": cut, "reason": f"filler '{w['word']}'"})
         if i + 1 < len(words) and n and n == _norm(words[i + 1]["word"]) and n not in FILLERS:
@@ -314,12 +358,12 @@ def candidates_from(words, duration, env=None):
     for a, b, label in edges:
         if b - a < PAUSE_S:
             continue
-        lo = 0.0 if label == "leading silence" else a + HANDLE_S
-        hi = duration if label == "trailing silence" else b - HANDLE_S
-        if hi - lo < 0.1:
+        span = quiet_span(env, level, a, b, lead=label == "leading silence", trail=label == "trailing silence") if env else (a + HANDLE_S, b - HANDLE_S)
+        if not span or span[1] - span[0] < 0.1:
             continue
+        lo, hi = span
         sound = loud(lo, hi)
-        if sound is None or sound > SPEECH_GUARD_S:
+        if sound is None or sound > REVIEW_MIN_S:
             before, after = around(a, b)
             review.append({"start_s": round(a, 3), "end_s": round(b, 3), "speech_like_s": sound, "before": before, "after": after,
                            "note": ("silence not measured (no energy envelope); review before cutting" if sound is None else
@@ -339,9 +383,11 @@ def candidates_from(words, duration, env=None):
         else:
             merged.append({"start_s": c["cut"][0], "end_s": c["cut"][1], "reason": c["reason"]})
     screen = {"speech_level_dbfs": level, "speech_like_threshold_db_below_level": SPEECH_DROP_DB,
-              "guard_s": SPEECH_GUARD_S, "measured": env is not None,
-              "basis": "10 ms RMS envelope of the 48 kHz source vs the median loudness of transcribed words; frames inside "
-                       "transcribed words (+-50 ms) are not counted."}
+              "review_min_s": REVIEW_MIN_S, "edge_guard_s": EDGE_GUARD_S, "tail_margin_s": TAIL_MARGIN_S,
+              "tail_threshold_db_below_level": TAIL_DROP_DB, "measured": env is not None,
+              "basis": "10 ms RMS envelope of the 48 kHz source vs the median loudness of aligned words; frames inside "
+                       "aligned words (+-50 ms) are not counted. Pause cuts stay >= 0.15 s from words and 0.1 s past any "
+                       "audible tail/onset (frames above level - 30 dB or noise floor + 6 dB)."}
     return cands, merged, review, screen
 
 

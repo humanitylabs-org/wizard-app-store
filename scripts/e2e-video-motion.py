@@ -87,6 +87,17 @@ LONG_SCRIPT = HERE / "fixtures/video-long-script.json"
 LONG_SRC = {}
 
 
+def expected_removal(cache, truth):
+    """Kokoro also pauses inside sentences, so expected removal comes from the measured silences of the synthesized
+    speech (-45 dB, >= 0.5 s): each shortened to ~0.5 s (0.15 s guard + 0.1 s tail margin per side), plus the fillers."""
+    det = subprocess.run(["ffmpeg", "-v", "info", "-nostats", "-i", str(cache / "speech.wav"), "-af", "silencedetect=noise=-45dB:d=0.5",
+                          "-f", "null", "-"], capture_output=True, text=True, timeout=300).stderr
+    sil = [float(x.split("silence_duration:")[1]) for x in det.splitlines() if "silence_duration:" in x]
+    truth["measured_silences_ge_0.5s"] = len(sil)
+    truth["measured_silence_total_s"] = round(sum(sil), 2)
+    truth["expected_removed_s_approx"] = round(sum(max(0.0, d - 0.5) for d in sil) + sum(f["end_s"] - f["start_s"] for f in truth["fillers"]), 2)
+
+
 def long_fixture(fixture, speaches_image, hf_cache):
     """Varied, non-repetitive ~3 min speech (scripts/fixtures/video-long-script.json) synthesized once with Kokoro in a
     plain throwaway Speaches container, cached under E2E_CACHE (or E2E_OUT), muxed with the real-face picture."""
@@ -95,7 +106,11 @@ def long_fixture(fixture, speaches_image, hf_cache):
     cache = Path(os.environ.get("E2E_CACHE") or OUT) / f"long-fixture-{key}"
     out, truth_path = cache / "talking-long.mp4", cache / "truth.json"
     if out.is_file() and truth_path.is_file():
-        return out, json.loads(truth_path.read_text())
+        truth = json.loads(truth_path.read_text())
+        if "measured_silences_ge_0.5s" not in truth:
+            expected_removal(cache, truth)
+            truth_path.write_text(json.dumps(truth, indent=2))
+        return out, truth
     cache.mkdir(parents=True, exist_ok=True)
     m.face_fixture(fixture)  # ensures the hash-checked face photo exists
     shutil.copyfile(fixture / "face.jpg", cache / "face.jpg")
@@ -150,7 +165,10 @@ def long_fixture(fixture, speaches_image, hf_cache):
             if g:
                 gaps.pop(round(g["start_s"], 3), None)
     exp += sum(g["end_s"] - g["start_s"] - 0.24 for g in gaps.values() if g["end_s"] - g["start_s"] >= 0.5)
-    truth["expected_removed_s_approx"] = round(exp, 2)
+    truth["expected_removed_s_script_gaps_only"] = round(exp, 2)
+    # Kokoro also pauses inside sentences; a faithful edit shortens every real silence >= 0.5 s. Expected removal =
+    # each measured silence (-45 dB, >= 0.5 s) minus 2 x 0.25 s kept (0.15 s guard + 0.1 s tail margin), plus fillers.
+    expected_removal(cache, truth)
     (cache / "list.txt").write_text("".join(f"file '{c}'\n" for c in clips))
     e2e.ff("ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "speech.wav", cwd=cache)
     graph = ("color=c=0x2b3440:s=1920x1080:r=30[bg];[0:v]scale=-2:880,format=yuv420p[p];"
@@ -170,11 +188,14 @@ def _pcm(fixture, src):
     """Decode the source to 16 kHz mono s16 (host stdlib only) for energy measurements."""
     import array
     import wave
-    name = src.stem + ".energy.wav"
-    e2e.ff("ffmpeg", "-v", "error", "-y", "-i", src.name, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", name, cwd=fixture)
-    with wave.open(str(fixture / name)) as w:
+    src = Path(src).resolve()
+    work = Path(tempfile.mkdtemp(prefix="energy-", dir=os.environ.get("TMPDIR")))
+    os.chmod(work, 0o777)
+    shutil.copyfile(src, work / "in.mp4")
+    e2e.ff("ffmpeg", "-v", "error", "-y", "-i", "in.mp4", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "out.wav", cwd=work)
+    with wave.open(str(work / "out.wav")) as w:
         data = array.array("h", w.readframes(w.getnframes()))
-    (fixture / name).unlink()
+    shutil.rmtree(work, ignore_errors=True)
     return data
 
 
@@ -520,6 +541,8 @@ def main():
             report["long_fixture"] = {"script": str(LONG_SCRIPT.relative_to(e2e.ROOT)), "duration_s": lt["duration_s"],
                                       "fillers": len(lt["fillers"]), "pauses_ge_1s": sum(1 for g in lt["pauses"] if g["end_s"] - g["start_s"] >= 0.99),
                                       "expected_removed_s_approx": lt["expected_removed_s_approx"],
+                                      "measured_silences_ge_0.5s": lt.get("measured_silences_ge_0.5s"),
+                                      "measured_silence_total_s": lt.get("measured_silence_total_s"),
                                       "build_or_cache_s": round(time.monotonic() - t1, 1), "path": str(LONG_SRC["path"])}
         peaks = {"video": e2e.Peak(vcid), "browser": e2e.Peak(bcid)}
         for p in peaks.values():

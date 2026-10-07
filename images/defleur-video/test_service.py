@@ -866,6 +866,8 @@ class MediaTests(unittest.TestCase):
                 if kind == "tone":
                     env = 0.55 + 0.45 * math.sin(2 * math.pi * 4 * t)
                     v = env * sum(math.sin(2 * math.pi * 140 * k * t) / k for k in range(1, 6)) * 0.18
+                elif kind == "hiss":  # quiet sibilant tail, ~20 dB below the voiced parts
+                    v = rnd.uniform(-1, 1) * 0.03
                 else:
                     v = rnd.uniform(-1, 1) * 0.0008
                 out += struct.pack("<h", max(-32767, min(32767, int(v * 32767))))
@@ -904,6 +906,14 @@ class MediaTests(unittest.TestCase):
         _, proposed2, review2, _ = candidates_from(w2, 6.0, env2)
         self.assertEqual(review2, [])
         self.assertTrue(any(p["start_s"] >= 1.95 and p["end_s"] <= 4.05 and p["end_s"] - p["start_s"] > 1.5 for p in proposed2), proposed2)
+        # A quiet word tail (sibilant) after the aligned word end is kept: the cut starts past it.
+        env3 = self._envelope([("tone", 1.5), ("hiss", 0.2), ("quiet", 1.3), ("tone", 1.5)])
+        w3 = [{"word": "pots", "start": 0.2, "end": 1.45}, {"word": "next", "start": 3.05, "end": 4.4}]
+        _, proposed3, review3, _ = candidates_from(w3, 4.5, env3)
+        mid = [p for p in proposed3 if 1.45 < p["start_s"] < 3.0]
+        self.assertEqual(len(mid), 1, proposed3)
+        self.assertGreaterEqual(mid[0]["start_s"], 1.75, mid)  # tail ends at 1.70 s; +0.1 s margin (frame rounding)
+        self.assertLessEqual(mid[0]["end_s"], 3.05 - 0.15 + 1e-6, mid)
         # apply_cuts' check measures hand-written cuts too; the override flag is explicit.
         hand = [{"start_s": 2.5, "end_s": 5.5}]
         r = cut_sound_check(hand, env, a + c)
@@ -953,7 +963,7 @@ print(json.dumps([a, b]))
         a = loop * 4
         b = [w for w in a if w != "um"]  # ASR dropped every filler on the re-transcription
         self.assertEqual(diff_words(a, b), ([], [], ["um"] * 4, []))
-        self.assertEqual(diff_words(a, b[:-3] + b[-2:])[:2], (["video"], []))
+        self.assertEqual(diff_words(a, b[:-2] + b[-1:])[:2], (["video"], []))
 
     def test_capabilities_report_browser_and_resources(self):
         os.environ["BROWSER_URL"] = "http://127.0.0.1:9"
