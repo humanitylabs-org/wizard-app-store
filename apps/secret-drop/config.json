@@ -1,0 +1,44 @@
+{
+  "name": "Secret Drop",
+  "id": "secret-drop",
+  "available": true,
+  "short_desc": "One-time encrypted links for handing an API key or password to an AI agent without chat.",
+  "author": "Humanity Labs",
+  "port": 8792,
+  "categories": [
+    "security",
+    "ai"
+  ],
+  "description": "Write-only, one-time credential handoff from a human to any agent (Hermes or others). The agent asks for a key and sends you a link; you type the value there; your browser encrypts it to that agent's own public key; the agent picks it up once and decrypts it locally. This app only relays ciphertext and keeps nothing long-term. It is not a password manager.",
+  "tipi_version": 1,
+  "version": "0.1.0",
+  "source": "https://github.com/humanitylabs-org/wizard-app-store",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791352412289,
+  "updated_at": 1791352412289,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "url",
+      "label": "Link address shown to people (optional)",
+      "env_variable": "SECRET_DROP_PUBLIC_URL",
+      "required": false,
+      "placeholder": "http://100.72.13.24:8792",
+      "hint": "Leave empty to use whatever address the agent used. Set it if agents reach this app by an internal name, so links still open on your phone or laptop."
+    },
+    {
+      "type": "password",
+      "label": "Agent API token (optional)",
+      "env_variable": "SECRET_DROP_API_TOKEN",
+      "required": false,
+      "hint": "Leave empty on a Tailscale-only server. If set (32+ characters), agents must send it as a bearer token to create and pick up requests. The human link never needs it."
+    }
+  ]
+}

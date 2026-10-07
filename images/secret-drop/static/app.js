@@ -17,10 +17,11 @@
   let finished = false;
   let request = null;
 
-  const say = (message, ok) => {
+  const say = (message, ok, bad) => {
     feedback.textContent = message || '';
     feedback.hidden = !message;
     feedback.classList.toggle('ok', !!ok);
+    feedback.classList.toggle('bad', !!bad);
   };
   const finish = (title, message, ok) => {
     finished = true;
@@ -58,6 +59,7 @@
       if (finished) return;
       const left = Math.max(0, Math.ceil((deadline - performance.now()) / 1000));
       const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
+      countdown.title = 'Link expires in';
       countdown.textContent = (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(s).padStart(2, '0');
       if (left <= 0) { finish('Expired', 'This link is no longer valid. Ask the agent for a new one.'); return; }
       window.setTimeout(tick, 500);
@@ -108,10 +110,10 @@
     event.preventDefault();
     if (finished || !request) return;
     const value = input.value.trim();
-    if (!value) { say('Enter the value to send.'); return; }
-    if (/[\r\n\0]/.test(value)) { say('Enter one value without line breaks.'); return; }
+    if (!value) { say('Enter the value to send.', false, true); return; }
+    if (/[\r\n\0]/.test(value)) { say('Enter one value without line breaks.', false, true); return; }
     let plaintext = te.encode(value);
-    if (plaintext.length > request.max) { plaintext.fill(0); say('That value is too large.'); return; }
+    if (plaintext.length > request.max) { plaintext.fill(0); say('That value is too large.', false, true); return; }
     submit.disabled = true;
     say('Encrypting\u2026', true);
     let envelope;
@@ -120,7 +122,7 @@
       envelope = {version: 1, suite: SUITE, enc: H.b64uEncode(sealed.enc), ct: H.b64uEncode(sealed.ct)};
     } catch (_e) {
       submit.disabled = false;
-      say('The value could not be encrypted. Nothing was sent.');
+      say('The value could not be encrypted. Nothing was sent.', false, true);
       return;
     } finally {
       plaintext.fill(0);
@@ -133,6 +135,6 @@
         if (ok) { finish('Sent', 'Encrypted and handed to ' + (data.requester || 'the agent') + '. You can close this page.', true); return; }
         finish(data.title || 'Not sent', data.message || 'The value was not accepted.');
       })
-      .catch(() => { submit.disabled = false; say('The encrypted value could not be sent. Type it again and retry.'); });
+      .catch(() => { submit.disabled = false; say('The encrypted value could not be sent. Type it again and retry.', false, true); });
   });
 })();

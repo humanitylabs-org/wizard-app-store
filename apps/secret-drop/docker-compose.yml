@@ -1,0 +1,26 @@
+services:
+  secret-drop:
+    image: ghcr.io/humanitylabs-org/secret-drop:0.1.0
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=4m"]
+    environment:
+      SECRET_DROP_DATA_DIR: /data
+      SECRET_DROP_BIND: 0.0.0.0
+      SECRET_DROP_PORT: "8792"
+      SECRET_DROP_PUBLIC_URL: ${SECRET_DROP_PUBLIC_URL:-}
+      SECRET_DROP_API_TOKEN: ${SECRET_DROP_API_TOKEN:-}
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+    x-runtipi:
+      is_main: true
+      internal_port: 8792
+x-runtipi:
+  schema_version: 2
+  overrides: []

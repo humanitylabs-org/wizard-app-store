@@ -380,7 +380,7 @@ class Relay:
             won = db.execute("UPDATE requests SET status='submitted', status_at=?, ciphertext=? "
                              "WHERE id=? AND status='pending'", (now, enc + ct, request_id)).rowcount
             if won != 1:
-                raise DropError(409, "used", "This Secret Drop link has already been used.", "Already used")
+                raise DropError(409, "used", "This Secret Drop link has already been used. If that was not you, tell the agent that asked so it can discard it and send a new link.", "Already used")
         return {"status": "submitted", "requester": row["requester"]}
 
     def _fresh(self, row: sqlite3.Row | None) -> sqlite3.Row | None:
@@ -401,7 +401,7 @@ class Relay:
         if status == "cancelled":
             raise DropError(410, "cancelled", "This request was cancelled by the agent.", "Cancelled")
         if for_human:
-            raise DropError(409, "used", "This Secret Drop link has already been used.", "Already used")
+            raise DropError(409, "used", "This Secret Drop link has already been used. If that was not you, tell the agent that asked so it can discard it and send a new link.", "Already used")
 
     def _authorized(self, request_id: str, pickup: str | None) -> sqlite3.Row:
         if not REQUEST_ID_RE.fullmatch(request_id) or pickup is None:
@@ -754,6 +754,14 @@ class Server(ThreadingHTTPServer):
         self.slots = threading.BoundedSemaphore(MAX_CONCURRENT_CONNECTIONS)
         super().__init__((config.bind, config.port), Handler)
 
+    def server_bind(self) -> None:
+        # Skip HTTPServer's reverse-DNS getfqdn(): it stalls startup ~5 s without resolvers.
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
+
     def process_request(self, request, client_address):  # bounded concurrency
         if not self.slots.acquire(blocking=False):
             try:
@@ -802,7 +810,11 @@ def cleanup_loop(server: Server, stop: threading.Event) -> None:
 
 def main() -> None:
     os.umask(0o077)
-    config = Config.from_env()
+    try:
+        config = Config.from_env()
+    except ValueError as exc:  # messages never contain the configured values
+        print(f"configuration error: {exc}", file=sys.stderr, flush=True)
+        raise SystemExit(2) from None
     wait_for_writable(config.data_dir)
     server = Server(config)
     stop = threading.Event()

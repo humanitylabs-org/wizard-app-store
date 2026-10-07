@@ -24,6 +24,10 @@ Keep it on a trusted private network. Disabling Runtipi domain exposure is not a
 
 **Transcriber** — shared local speech-to-text with word timings, using the unmodified [Speaches](https://github.com/speaches-ai/speaches) CPU server pinned by digest. Other apps and Hermes call its OpenAI-compatible API at `http://transcriber:8000/v1` (inside Runtipi) or `http://<server>:8791/v1`. Verified by `scripts/smoke-transcriber.py`.
 
+## Secret Drop
+
+**Secret Drop**: a one-time, write-only way to give any agent an API key or password without pasting it into chat. The agent sends you a link. Your browser encrypts the value to that agent's own public key (HPKE: X25519 + AES-256-GCM, pure-JS so it works over plain `http://` on Tailscale), and the agent picks it up once and decrypts it locally. The app relays ciphertext only and keeps nothing long-term. Agents fetch instructions and a single-file client from `http://<server>:8792/SKILL.md` and `/client.py`. Verified by `scripts/smoke-secret-drop.py`, which runs a real Chromium in an insecure context. [Design and trust model](images/secret-drop/README.md).
+
 ## Agent-operated video workflow (testing)
 
 **DeFleur Video (Testing)**: a private, no-GUI API that Hermes drives to run James DeFleur's video workflow, with his original helper scripts bundled. 0.3.0 covers the audio/edit half: transcription via the **Transcriber** app (install it first), local word alignment, sample-exact audio cuts, per-edge waveform/spectrogram evidence and the dialogue audio gate. The older 9:16 preview still works. Face/crop audit, captions, final encode, motion graphics and delivery are not built yet. [Hermes operator guide](images/defleur-video/HERMES.md) · [Parity status](images/defleur-video/WORKFLOW-PARITY.md).
