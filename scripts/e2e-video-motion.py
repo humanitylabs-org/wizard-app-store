@@ -150,8 +150,22 @@ async def flow(url, fixture, truth, report):
             t0 = time.monotonic()
             cut = await wait_run(s, (await tool(s, "apply_cuts", {"project_id": pid, "segments": cuts}))["run_id"], log, budget=7200)
             timings["apply_cuts"] = round(time.monotonic() - t0, 1)
-            assert cut["dialogue_gate"]["pass"] and not cut["words_lost_vs_source"], cut["dialogue_gate"]
-            report["apply_cuts"] = {k: cut[k] for k in ("seconds_removed", "edited_duration_s", "kept_segments", "words_lost_vs_source")}
+            # Record before asserting so a failure is diagnosable: lost words with their source positions and nearby cuts.
+            src_words = [{"word": x[1], "start": x[2], "end": x[3]} for x in edit["words"]]
+            lost = [norm(x) for x in cut["words_lost_vs_source"]]
+            near = []
+            for sw in src_words:
+                if norm(sw["word"]) in lost:
+                    cs = [c for c in cut["cuts_applied"] if c["start_s"] - 0.4 <= sw["end"] and sw["start"] <= c["end_s"] + 0.4]
+                    near.append({**sw, "cuts_within_0.4s": cs, "seam_s": round(sw["start"] % (truth["duration_s"]), 3)})
+            report["apply_cuts"] = {**{k: cut[k] for k in ("seconds_removed", "edited_duration_s", "kept_segments", "words_lost_vs_source",
+                                                         "words_added_vs_source", "dialogue_gate", "cut_audit_pass")},
+                                    "cuts_applied": len(cut["cuts_applied"]), "lost_word_occurrences": near[:60]}
+            report["source_word_count"] = len(src_words)
+            assert cut["dialogue_gate"]["pass"], cut["dialogue_gate"]
+            deferred = [] if not cut["words_lost_vs_source"] else [f"words lost vs source: {cut['words_lost_vs_source']}"]
+            if deferred and not LONG:
+                raise AssertionError(deferred)
             edited = json.loads(http_call("GET", cut["downloads"]["edited_transcript_json"])[1])
             words = [{"word": x["word"], "start": float(x["start"]), "end": float(x["end"])} for x in edited["words"]]
             duration = float(cut["edited_duration_s"])
@@ -244,6 +258,9 @@ async def flow(url, fixture, truth, report):
                 assert not (expected - got), sorted(expected - got)
             mp4.unlink()
             report["timings_s"] = timings
+            if deferred:  # long run: finish the render to measure resources, then still fail
+                report["runs"] = log
+                raise AssertionError(deferred)
             report["final_frames"] = final["final"]["frames"]
             report["runs"] = log
             await tool(s, "delete_project", {"project_id": pid})
