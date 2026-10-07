@@ -180,3 +180,47 @@ def cut_regions(words, blocks, duration):
         regions.append({"mode": "drop", "start_s": a, "end_s": b, "reason": "approved cut (exact assembled gap)"})
     regions.sort(key=lambda r: (r["start_s"], r["end_s"]))
     return regions, removed, kept
+
+
+def align_words(a, b):
+    """Minimal-edit word alignment (banded Levenshtein on normalized tokens). Returns (lost, added): tokens of `a`
+    missing from `b` and tokens of `b` not in `a`. Unlike difflib's longest-block matching, repeated phrases can't
+    shift the alignment by a whole repetition, so one dropped word in a long repetitive transcript is reported as
+    exactly that word."""
+    n, m = len(a), len(b)
+    band = abs(n - m) + 256
+    INF = n + m + 1
+    rows = []  # per i: (lo, list of costs for j in lo..hi)
+    prev_lo, prev = 0, list(range(0, min(m, band) + 1))
+    rows.append((prev_lo, prev))
+    for i in range(1, n + 1):
+        lo, hi = max(0, i - band), min(m, i + band)
+        cur = []
+        for j in range(lo, hi + 1):
+            best = INF
+            if j == 0:
+                best = i
+            else:
+                if prev_lo <= j - 1 < prev_lo + len(prev):
+                    best = prev[j - 1 - prev_lo] + (a[i - 1] != b[j - 1])
+                if cur:
+                    best = min(best, cur[-1] + 1)
+            if prev_lo <= j < prev_lo + len(prev):
+                best = min(best, prev[j - prev_lo] + 1)
+            cur.append(best)
+        rows.append((lo, cur))
+        prev_lo, prev = lo, cur
+    cost = lambda i, j: rows[i][1][j - rows[i][0]] if rows[i][0] <= j < rows[i][0] + len(rows[i][1]) else INF
+    lost, added = [], []
+    i, j = n, m
+    while i > 0 or j > 0:
+        c = cost(i, j)
+        if i > 0 and j > 0 and c == cost(i - 1, j - 1) + (a[i - 1] != b[j - 1]):
+            if a[i - 1] != b[j - 1]:
+                lost.append(a[i - 1]); added.append(b[j - 1])
+            i, j = i - 1, j - 1
+        elif i > 0 and c == cost(i - 1, j) + 1:
+            lost.append(a[i - 1]); i -= 1
+        else:
+            added.append(b[j - 1]); j -= 1
+    return lost[::-1], added[::-1]

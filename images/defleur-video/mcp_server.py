@@ -23,7 +23,7 @@ from typing import Any
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # run with -I: make the app's pure helpers importable
-from editing import cut_regions  # noqa: E402
+from editing import align_words, cut_regions  # noqa: E402
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -410,12 +410,7 @@ def do_apply_cuts(run: dict) -> dict:
     edited_words = [w for w in artifact(easr["id"], "asr.json")["words"]]
     got = [norm(w["word"]) for w in edited_words if norm(w["word"])]
     expected = [e for e in expected if e]
-    lost, added = [], []
-    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=expected, b=got, autojunk=False).get_opcodes():
-        if op in ("delete", "replace"):
-            lost += expected[i1:i2]
-        if op in ("insert", "replace"):
-            added += got[j1:j2]
+    lost, added = align_words(expected, got)
     fillers_left = [w for w in got if w in FILLERS]
 
     cand_rows = []
@@ -493,7 +488,11 @@ def do_apply_cuts(run: dict) -> dict:
         "fillers_still_heard": fillers_left,
         "cut_audit_pass": bool(audit["result"]["summary"].get("pass")),
         "cut_audit_failures": failed_regions[:20],
-        "dialogue_gate": {"pass": bool(gsum["dialogue_gate_pass"]), "reason": gsum.get("error") or "all required evidence present and fresh",
+        # The app's reported pass also requires no lost words; James' audio_gate.py itself checks evidence only.
+        "dialogue_gate": {"pass": bool(gsum["dialogue_gate_pass"]) and not lost,
+                          "reason": (f"{len(lost)} kept word(s) missing from the re-transcribed edit: {' '.join(lost[:20])}" if lost else "")
+                                    + ("; " if lost and gsum.get("error") else "") + (gsum.get("error") or ("" if lost else "all required evidence present and fresh")),
+                          "audio_gate_script_pass": bool(gsum["dialogue_gate_pass"]),
                           "scope": "Evidence completeness and custody (James' audio_gate.py --stage dialogue); edge/window findings were written by the app automatically, not by a human listener."},
         "downloads": downloads, "preview": preview_note,
         "auth_note": "Downloads need 'Authorization: Bearer <VIDEO_API_TOKEN>' when the app has a token set." if TOKEN else None,
@@ -612,8 +611,10 @@ def do_render_final(run: dict) -> dict:
         "captions": {"cues": rs["captions"]["cues"], "words": rs["captions"]["words"], "frames_with_caption": rs["captions"]["frames_with_cue"],
                      "font": rs["captions"]["font"], "caption_band_changes_with_cues": rs["checks"]["caption_bounds_and_band"],
                      "word_source": "Transcriber ASR of the edited audio (apply_cuts)"},
-        "delivery_gate": {"pass": bool(gs.get("delivery_gate_pass")),
-                          "reason": (gate_error or gs.get("error") or "all delivery evidence present and fresh")
+        "delivery_gate": {"pass": bool(gs.get("delivery_gate_pass")) and not lost and not failed_checks,
+                          "audio_gate_script_pass": bool(gs.get("delivery_gate_pass")),
+                          "reason": (f"{len(lost)} word(s) of the edited audio missing from the final video: {' '.join(lost[:20])}; " if lost else "")
+                                    + (gate_error or gs.get("error") or "all delivery evidence present and fresh")
                                     + (f" (failing picture checks: {', '.join(failed_checks)}; see pixel_check_json)" if failed_checks else ""),
                           "failed_checks": failed_checks,
                           "words_lost_vs_edited_audio": lost, "words_added_vs_edited_audio": gs.get("words_added_vs_edited"),

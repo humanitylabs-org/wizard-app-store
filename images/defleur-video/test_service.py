@@ -845,6 +845,16 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(kept, ["a", "edge", "b", "c", "d", "e"])
         self.assertEqual(sum(1 for r in regions if r["mode"] == "drop" and "word" not in r), 2)
 
+    def test_word_alignment_on_long_repetitive_transcript(self):
+        from editing import align_words
+        loop = "hello this is a short test of the video editor the filler word should be removed cleanly and the pause shortened".split()
+        a = loop * 20
+        b = a[:137] + a[138:]  # one word dropped deep inside a repetition
+        self.assertEqual(align_words(a, b), ([a[137]], []))
+        self.assertEqual(align_words(a, a), ([], []))
+        c = a[:50] + ["extra"] + a[50:]
+        self.assertEqual(align_words(a, c), ([], ["extra"]))
+
     def test_capabilities_report_browser_and_resources(self):
         os.environ["BROWSER_URL"] = "http://127.0.0.1:9"
         try:

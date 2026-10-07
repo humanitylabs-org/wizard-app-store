@@ -774,15 +774,8 @@ def _norm(word):
 
 
 def _words_diff(expected, got):
-    import difflib
-    a, b = [w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w]
-    lost, added = [], []
-    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
-        if op in ("delete", "replace"):
-            lost += a[i1:i2]
-        if op in ("insert", "replace"):
-            added += b[j1:j2]
-    return lost, added
+    from editing import align_words
+    return align_words([w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w])
 
 
 def _face_model():
