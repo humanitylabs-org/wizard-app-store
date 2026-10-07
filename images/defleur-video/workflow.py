@@ -776,8 +776,8 @@ def _norm(word):
 
 def _words_diff(expected, got, with_fillers=False):
     from editing import diff_words
-    lost, added, f_lost, f_added = diff_words([w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w])
-    return (lost, added, f_lost, f_added) if with_fillers else (lost, added)
+    lost, added, f_lost, f_added, variants = diff_words([w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w], True)
+    return (lost, added, f_lost, f_added, variants) if with_fillers else (lost, added)
 
 
 def _face_model():
@@ -842,6 +842,12 @@ def _locked_words(asr_words, duration):
 
 
 def _final_render(ctx, value, source, metadata):
+    phases, _t = {}, [time.monotonic()]
+
+    def lap(name):
+        now = time.monotonic()
+        phases[name] = round(phases.get(name, 0) + now - _t[0], 1)
+        _t[0] = now
     root = ctx.root
     asm, _ = ctx.lookup(value["assemble_job"], {"pcm-assemble"})
     frames = int(asm["result"]["summary"]["frames"])
@@ -870,7 +876,9 @@ def _final_render(ctx, value, source, metadata):
         proof, _ = ctx.lookup(value["proof_job"], {"motion-capture"})
         ctx.source = source
         work, st, plan, _m, timeline, _s, _ = _motion_root(ctx, {**value, "composition_sha256": proof["result"]["summary"]["composition_sha256"]}, "full")
+        lap("setup")
         cap = _capture(ctx, work, "full")
+        lap("full_motion_capture_browser")
         cap_checks = _capture_checks(cap, plan, float(__import__("fractions").Fraction(str(mapped["fps"]))))
         if cap["errors"] or not cap_checks["caption_suppression_matches_plan"] or not cap_checks["insert_mode_declared"]:
             raise Rejected(f"full capture disagrees with the plan: {cap_checks}; page errors: {cap['errors'][:3]}")
@@ -888,14 +896,18 @@ def _final_render(ctx, value, source, metadata):
         # No motion composition submitted: an explicit empty plan, so encode.py's suppression check has nothing to allow.
         ctx.write("visual-plan.json", {"beats": [], "caption_suppress": [],
                                        "note": "No HTML/SVG/GSAP motion composition submitted: live footage only, captions never suppressed."})
+        lap("setup")
         ctx.app("final_render.py", ["render", source, edit_map, ledger, root], timeout=3600, cpu=7200, as_limit=4 * 1024**3,
                 nofile=128, file_limit=64 * 1024**2, threads="2")
+        lap("live_frames_crop")
         motion_info = None
     big = dict(timeout=7200, cpu=28800, as_limit=6 * 1024**3, nofile=256, file_limit=8 * 1024**3, max_log=1024 * 1024, threads="2")
     helper("caption_layer")
     ctx.used["caption_layer"] = HELPERS["caption_layer"][1]
     try:
+        lap("setup")
         ctx.run("encode", [root], flags=("-s", "-E"), **big)
+        lap("encode_py_captions_and_x264")
         if use_motion:
             ctx.app("motion_frames.py", ["check", root / "final.mp4", root / "base-map.json", root, work / "base_frames",
                                          root / "picture-frames", root / "motion-check.json", "--caption-dir", helper("encode").parent],
@@ -904,13 +916,16 @@ def _final_render(ctx, value, source, metadata):
         shutil.rmtree(root / "picture-frames", ignore_errors=True)
         if work is not None:
             shutil.rmtree(work, ignore_errors=True)
+    lap("motion_pixel_check")
     code, out, err = ctx.run("encode", [root, "--verify-only"], flags=("-s", "-E"), check=False, **big)
+    lap("encode_py_verify_only")
     if code:
         raise Rejected("encode.py --verify-only failed: " + _tail(err))
     verified = json.loads(out)
     if not use_motion:
         ctx.app("final_render.py", ["check", source, edit_map, ledger, root, "--caption-dir", helper("encode").parent],
                 timeout=1200, cpu=2400, as_limit=4 * 1024**3, nofile=128, file_limit=64 * 1024**2, threads="2")
+    lap("live_pixel_check")
     with wave.open(str(root / "edited.wav")) as w:
         channels = w.getnchannels()
     ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", "-threads", "1", "-i", root / "final.mp4", "-map", "0:a:0",
@@ -921,6 +936,7 @@ def _final_render(ctx, value, source, metadata):
     frame_hashes = [line.rsplit(",", 1)[1].strip() for line in md5.decode().splitlines() if line and not line.startswith("#")]
     regions = json.loads(ctx.app("final_render.py", ["regions", root / "source.wav", root / "final-audio.wav", edit_map],
                                  timeout=300, cpu=600, as_limit=4 * 1024**3, nofile=64))
+    lap("full_decode_framemd5_audio_regions")
     live = json.loads((root / ("motion-check.json" if use_motion else "live-check.json")).read_text())
     composite = json.loads((root / "caption-composite.json").read_text())
     capture = json.loads((root / "capture-full.json").read_text())
@@ -942,7 +958,8 @@ def _final_render(ctx, value, source, metadata):
                           "correlation; machine evidence, not a viewing or listening review."}
     ctx.write("final-integrity.json", integrity)
     face = json.loads((root / "face-audit.json").read_text())
-    return {"assemble_job": value["assemble_job"], "crop_job": value["crop_job"], "width": verified["width"], "height": verified["height"],
+    lap("summary")
+    return {"phase_seconds": phases,"assemble_job": value["assemble_job"], "crop_job": value["crop_job"], "width": verified["width"], "height": verified["height"],
             "frames": verified["frames"], "fps": verified["fps"], "duration_s": round(verified["audio_duration"], 3),
             "final_sha256": verified["sha256"], "final_bytes": (root / "final.mp4").stat().st_size,
             "captions": {"cues": live.get("caption_cues"), "words": len(words), "frames_with_cue": live["cue_on_frames"],
@@ -1149,10 +1166,11 @@ def _delivery_gate(ctx, value, source, metadata):
                                                             f"final ASR: '{heard}'. Not human listening."),
                      "waveform_sha256": sha(wave_path), "spectrogram_sha256": sha(spec_path)})
     ctx.write("final-acoustic-scan.json", rows)
-    lost, added, f_lost, f_added = _words_diff([w["word"] for w in edited_words], [w["word"] for w in final_words], True)
+    lost, added, f_lost, f_added, variants = _words_diff([w["word"] for w in edited_words], [w["word"] for w in final_words], True)
     ctx.write("final-asr-compare.json", {"edited_words": len(edited_words), "final_words": len(final_words),
                                          "words_lost": lost, "words_added": added,
                                          "fillers_in_edited_only": f_lost, "fillers_heard_in_final_only": f_added,
+                                         "asr_spelling_variants": variants,
                                          "basis": "Transcriber ASR of the edited WAV vs the decoded final MP4 audio, normalized word sequence diff"})
     receipt = dict(base)
     for key, name in [("final", "final.mp4"), ("decoded_final", "decoded-final.json"), ("final_asr", "final-asr.json"),
@@ -1167,7 +1185,8 @@ def _delivery_gate(ctx, value, source, metadata):
     ctx.write("delivery-gate-result.json", result)
     del dialogue
     return {"delivery_gate_pass": result["pass"], "error": result["error"], "words_lost_vs_edited": lost,
-            "words_added_vs_edited": added, "final_scan_windows": len(rows), "render_job": rj}
+            "words_added_vs_edited": added, "asr_spelling_variants": variants, "fillers_heard_in_final_only": f_added,
+            "final_scan_windows": len(rows), "render_job": rj}
 
 
 STAGE_RUNNERS = {

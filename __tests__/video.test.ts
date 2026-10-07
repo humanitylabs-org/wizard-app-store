@@ -111,7 +111,7 @@ test("video has independent state, no agent volumes, bounded unprivileged servic
   expect(service.cap_drop).toEqual(["ALL"]);
   expect(service.security_opt).toEqual(["no-new-privileges:true"]);
   // Generous ceilings, never sized near a measured peak; no CPU cap.
-  expect(service.mem_limit).toBe("8g");
+  expect(service.mem_limit).toBe("10g");
   expect(service.memswap_limit).toBe(service.mem_limit);
   expect(service.cpus).toBeUndefined();
   expect(service.pids_limit).toBeGreaterThanOrEqual(1024);

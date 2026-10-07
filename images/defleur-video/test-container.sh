@@ -7,7 +7,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 IMAGE=${VIDEO_IMAGE:-wizard-defleur-video:0.6.0-testing}
 [ -n "${VIDEO_SKIP_BUILD:-}" ] || docker build -t "$IMAGE" "$ROOT"
 docker run --rm --network none --read-only --cap-drop ALL \
-  --security-opt no-new-privileges --memory 8g --memory-swap 8g \
+  --security-opt no-new-privileges --memory 10g --memory-swap 10g \
   --pids-limit 2048 --tmpfs /scratch:rw,noexec,nosuid,size=1024m,mode=1777 \
   -e TMPDIR=/scratch -e VIDEO_DISK_RESERVE_MB=64 \
   --mount "type=bind,source=$ROOT/test_service.py,target=/app/test_service.py,readonly" \

@@ -342,6 +342,15 @@ async def flow(url, fixture, truth, report):
             report["start_edit"]["untranscribed_sound_count"] = len(edit.get("untranscribed_sound") or [])
             if LONG:
                 report["apply_cuts"]["expected_removed_s_approx"] = LONG_SRC["truth"]["expected_removed_s_approx"]
+                # Is each "added" word really in the script (source ASR missed it, edit ASR heard it = Transcriber variance)?
+                script_tokens = [norm(w) for t in LONG_SRC["truth"]["text"] for w in t.replace("-", " ").split() if norm(w)]
+                src_tokens = [norm(x["word"]) for x in src_words if norm(x["word"])]
+                from collections import Counter
+                sc, ac = Counter(script_tokens), Counter(src_tokens)
+                report["apply_cuts"]["added_words_check"] = [
+                    {"word": w, "in_script": sc[norm(w)], "in_source_asr": ac[norm(w)],
+                     "verdict": "source ASR under-counted a scripted word (Transcriber variance)" if sc[norm(w)] > ac[norm(w)]
+                     else "not explained by the script"} for w in cut["words_added_vs_source"]]
             if "--stop-after-cuts" in sys.argv:
                 report["timings_s"] = timings
                 return
@@ -414,6 +423,7 @@ async def flow(url, fixture, truth, report):
                                    IMAGE, "-I", "-c", FACE_AT, "/w/" + mp4.name,
                                    str(round((ins["start"] + ins["end"]) / 2 * fps)), str(round(0.15 * fps)), str(round(live_t * fps))))
             report["render_final"] = {
+                "stage_seconds": final.get("stage_seconds"), "final_render_phase_seconds": final.get("final_render_phase_seconds"),
                 "final": final["final"], "crop": final["crop"], "captions": final["captions"], "delivery_gate": final["delivery_gate"],
                 "motion_graphics": {k: v for k, v in mg.items() if k != "caption_suppress"} if isinstance(mg, dict) else mg,
                 "independent_probe": [vid["codec_name"], vid["width"], vid["height"], vid["nb_read_frames"], aud["codec_name"]],

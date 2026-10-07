@@ -957,6 +957,22 @@ print(json.dumps([a, b]))
         self.assertEqual(sorted(f_lost), ["uh", "um"])
         self.assertEqual(f_added, ["oh"])
 
+    def test_asr_spelling_variants_are_not_lost_words(self):
+        from editing import diff_words, spelling_variant
+        a = "peas climb happily up a simple string trellis today".split()
+        b = "peas climb happily up a simple string trellies today".split()
+        self.assertEqual(diff_words(a, b, variants=True), ([], [], [], [], [["trellis", "trellies"]]))
+        self.assertTrue(spelling_variant("colour", "color"))
+        # A real different word is still lost/added and is not a variant.
+        c = "peas climb happily up a simple string ladder today".split()
+        self.assertEqual(diff_words(a, c, variants=True), (["trellis"], ["ladder"], [], [], []))
+        # Short words never count as variants (the/a, on/in).
+        self.assertFalse(spelling_variant("on", "in"))
+        self.assertEqual(diff_words("we sat on it".split(), "we sat in it".split())[:2], (["on"], ["in"]))
+        # A dropped word next to a variant is still lost.
+        d = "peas climb up a simple string trellies today".split()
+        self.assertEqual(diff_words(a, d, variants=True)[0], ["happily"])
+
     def test_short_repetitive_transcript_loses_no_words_when_identical(self):
         from editing import diff_words
         loop = "hello this is a short test um of the video editor".split()

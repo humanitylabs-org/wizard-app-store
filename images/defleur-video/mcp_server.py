@@ -383,7 +383,7 @@ def do_apply_cuts(run: dict) -> dict:
     edited_words = [w for w in artifact(easr["id"], "asr.json")["words"]]
     got = [norm(w["word"]) for w in edited_words if norm(w["word"])]
     expected = [e for e in expected if e]
-    lost, added, fillers_source_only, fillers_edit_only = diff_words(expected, got)
+    lost, added, fillers_source_only, fillers_edit_only, variants = diff_words(expected, got, variants=True)
     fillers_left = [w for w in got if w in FILLERS]
     sound = cut_sound_check(cuts, artifact(edit["jobs"]["source_audio"], "energy.json"), words)
 
@@ -461,6 +461,7 @@ def do_apply_cuts(run: dict) -> dict:
         "words_lost_vs_source": lost, "words_added_vs_source": added,
         "fillers_still_heard": fillers_left,
         "fillers_heard_in_edit_only": fillers_edit_only, "fillers_in_source_only": fillers_source_only,
+        "asr_spelling_variants": variants,
         "filler_note": "ASR can omit fillers (James' asr.py), so a filler heard in only one transcript is listed here, not as lost/added content.",
         "cut_sound_check": sound,
         "cut_audit_pass": bool(audit["result"]["summary"].get("pass")),
@@ -598,12 +599,16 @@ def do_render_final(run: dict) -> dict:
                                     + (f" (failing picture checks: {', '.join(failed_checks)}; see pixel_check_json)" if failed_checks else ""),
                           "failed_checks": failed_checks,
                           "words_lost_vs_edited_audio": lost, "words_added_vs_edited_audio": gs.get("words_added_vs_edited"),
+                          "asr_spelling_variants": gs.get("asr_spelling_variants") or [],
+                          "fillers_heard_in_final_only": gs.get("fillers_heard_in_final_only") or [],
                           "min_source_region_correlation": rs["checks"]["min_source_region_correlation"],
                           "scope": "James' audio_gate.py --stage delivery: evidence completeness, custody and thresholds. Final acoustic-window findings are app-written; it is not human viewing or listening approval."},
         "motion_graphics": rs["motion_layer"],
         "downloads": downloads,
         "auth_note": "Downloads need 'Authorization: Bearer ***' when the app has a token set." if TOKEN else None,
         "render_seconds": round(time.monotonic() - t0, 1),
+        "stage_seconds": {st["stage"]: st.get("elapsed_s") for st in run.get("steps", [])},
+        "final_render_phase_seconds": rs.get("phase_seconds"),
         "jobs": {"face_crop": crop["id"], "final_render": render["id"], "final_asr": fasr["id"], "final_scan": fscan["id"],
                  "delivery_gate": gate_job["id"] if gate_job else None},
         "next": ("Tell the owner in plain words: resolution, duration, how the speaker is framed (and any crop flag), caption count, "

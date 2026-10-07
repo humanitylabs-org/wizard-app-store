@@ -7,8 +7,8 @@ services:
     security_opt: ["no-new-privileges:true"]
     # Generous ceilings (see RELEASE.md for the measured 3-minute 1080p peak); no CPU cap.
     pids_limit: 2048
-    mem_limit: 8g
-    memswap_limit: 8g
+    mem_limit: 10g
+    memswap_limit: 10g
     shm_size: 1g
     tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
     environment:

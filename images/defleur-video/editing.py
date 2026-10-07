@@ -409,13 +409,59 @@ def cut_sound_check(cuts, env, words):
             "override": "set owner_approved_sound: true on a cut only after the owner listened and approved removing that sound"}
 
 
-def diff_words(expected, got):
+def _edit_distance(a, b):
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _phonetic(word):
+    """Small Soundex-style key: first letter + consonant classes, vowels/h/w/y dropped, repeats collapsed."""
+    codes = {**dict.fromkeys("bfpv", "1"), **dict.fromkeys("cgjkqsxz", "2"), **dict.fromkeys("dt", "3"), "l": "4",
+             **dict.fromkeys("mn", "5"), "r": "6"}
+    w = "".join(c for c in word.lower() if c.isalpha())
+    if not w:
+        return ""
+    out, last = [w[0]], codes.get(w[0])
+    for c in w[1:]:
+        k = codes.get(c)
+        if k and k != last:
+            out.append(k)
+        last = k if c not in "hw" else last
+    return "".join(out)
+
+
+def spelling_variant(a, b):
+    """True when two ASR tokens are the same spoken word spelled differently between two transcriptions
+    (e.g. trellis/trellies): both >= 4 letters and normalized edit distance <= 0.34 or the same phonetic key."""
+    if a == b or len(a) < 4 or len(b) < 4 or not a.isalpha() or not b.isalpha():
+        return False
+    return _edit_distance(a, b) / max(len(a), len(b)) <= 0.34 or _phonetic(a) == _phonetic(b)
+
+
+def diff_words(expected, got, variants=False):
     """Content words lost/added between two normalized token lists, with fillers diffed separately.
 
     Fillers are removed before the alignment (ASR can omit them, James' asr.py), so a filler present in only one
-    transcript can never pair with, or hide, a real content word. Returns (lost, added, fillers_only_in_expected,
-    fillers_only_in_got)."""
+    transcript can never pair with, or hide, a real content word. An aligned substitution between near-identical
+    spellings (spelling_variant) is an ASR spelling variant, not a lost word. Returns (lost, added,
+    fillers_only_in_expected, fillers_only_in_got) and, with variants=True, a fifth list of [expected, got] pairs."""
     from collections import Counter
-    lost, added = align_words([w for w in expected if w not in REPORT_FILLERS], [w for w in got if w not in REPORT_FILLERS])
+    ce, cg = [w for w in expected if w not in REPORT_FILLERS], [w for w in got if w not in REPORT_FILLERS]
+    li, ai = align_words(ce, cg, indices=True)
+    pairs, lost_set, added_set = [], set(li), set(ai)
+    # align_words emits a substitution as a lost/added pair with equal running position; pair them in order.
+    for i in li:
+        # the substituted counterpart is the added index whose matched-prefix position equals i's
+        for j in ai:
+            if j in added_set and (i - sum(1 for x in li if x < i)) == (j - sum(1 for y in ai if y < j)) and spelling_variant(ce[i], cg[j]):
+                pairs.append([ce[i], cg[j]]); lost_set.discard(i); added_set.discard(j)
+                break
+    lost, added = [ce[i] for i in li if i in lost_set], [cg[j] for j in ai if j in added_set]
     fe, fg = Counter(w for w in expected if w in REPORT_FILLERS), Counter(w for w in got if w in REPORT_FILLERS)
-    return lost, added, sorted((fe - fg).elements()), sorted((fg - fe).elements())
+    out = (lost, added, sorted((fe - fg).elements()), sorted((fg - fe).elements()))
+    return (*out, pairs) if variants else out

@@ -91,7 +91,7 @@ def main():
             inspect = json.loads(run("docker", "inspect", cid))[0]
             assert inspect["Config"]["User"] == "1000:1000"
             assert inspect["HostConfig"]["ReadonlyRootfs"]
-            assert inspect["HostConfig"]["Memory"] == 8 * 1024**3 and inspect["HostConfig"]["ShmSize"] == 1024**3
+            assert inspect["HostConfig"]["Memory"] == 10 * 1024**3 and inspect["HostConfig"]["ShmSize"] == 1024**3
             report["startup_restart_count"] = inspect["RestartCount"]
             report["uid"] = int(run("docker", "exec", cid, "id", "-u"))
             assert report["uid"] == 1000
