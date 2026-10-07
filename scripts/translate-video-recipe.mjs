@@ -38,10 +38,11 @@ try {
     }
   }
   const { DockerComposeBuilder } = await import(pathToFileURL(join(scratch, 'compose.builder.mjs')));
-  const recipe = parse(await readFile('apps/defleur-video/docker-compose.yml', 'utf8'));
+  const appId = process.argv[2] ?? 'defleur-video';
+  const recipe = parse(await readFile(`apps/${appId}/docker-compose.yml`, 'utf8'));
   const output = new DockerComposeBuilder().getDockerCompose(recipe,
     {openPort: true, exposed: false, exposedLocal: false, enableAuth: false},
-    'defleur-video:release-smoke', '172.29.240.0/24', 'amd64');
+    `${appId}:release-smoke`, '172.29.240.0/24', 'amd64');
   process.stdout.write(JSON.stringify({revision, source_sha256: Object.fromEntries(sources), compose: parse(output),
     permissions: {command: ['chmod', '-Rf', 'a+rwx'], timing: 'after compose up', uid_metadata_does_not_chown: true}}));
 } finally {

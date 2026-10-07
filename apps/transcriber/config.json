@@ -1,0 +1,38 @@
+{
+  "name": "Transcriber",
+  "id": "transcriber",
+  "available": true,
+  "short_desc": "Shared local speech-to-text with word timings, OpenAI-compatible API.",
+  "author": "Speaches (speaches-ai); packaged by Humanity Labs",
+  "port": 8791,
+  "categories": [
+    "ai",
+    "media"
+  ],
+  "description": "Unmodified Speaches CPU server. One shared transcription service that Hermes and other apps call at /v1/audio/transcriptions. Runs locally; no paid API.",
+  "tipi_version": 1,
+  "version": "0.9.0-rc.3-cpu",
+  "source": "https://github.com/speaches-ai/speaches",
+  "website": "https://speaches.ai",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791344613847,
+  "updated_at": 1791344613847,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Model to download on startup",
+      "env_variable": "TRANSCRIBER_MODEL",
+      "required": true,
+      "default": "Systran/faster-whisper-small",
+      "hint": "Hugging Face faster-whisper model id. small is a good CPU default; Systran/faster-whisper-large-v3 or deepdml/faster-whisper-large-v3-turbo-ct2 are more accurate but slower and need more RAM."
+    }
+  ]
+}

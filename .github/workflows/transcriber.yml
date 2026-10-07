@@ -1,0 +1,30 @@
+name: Validate Transcriber
+on:
+  push:
+    branches: [main]
+    paths: ['apps/transcriber/**', 'scripts/smoke-transcriber.py', 'scripts/fixtures/transcriber-*', 'scripts/translate-video-recipe.mjs', '.github/workflows/transcriber.yml']
+  pull_request:
+    branches: [main]
+    paths: ['apps/transcriber/**', 'scripts/smoke-transcriber.py', '.github/workflows/transcriber.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  transcriber:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci && npm test && npx tsc --noEmit
+      - name: Real Runtipi translation, permission step, word-timestamp transcription and recreate
+        shell: bash
+        run: TMPDIR="$RUNNER_TEMP" python3 scripts/smoke-transcriber.py | tee "$RUNNER_TEMP/transcriber-lifecycle.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: transcriber-verification
+          path: ${{ runner.temp }}/transcriber-lifecycle.json

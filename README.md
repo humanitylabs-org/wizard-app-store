@@ -20,6 +20,10 @@ Keep it on a trusted private network. Disabling Runtipi domain exposure is not a
 
 **Hermes Frontend 3** — Desktop-style browser UI from the community project [przbadu/hermes-ui](https://github.com/przbadu/hermes-ui), packaged separately with no upstream UI changes. It connects to the existing Hermes backend through its API and native authentication; it does not install another agent. See [connection instructions and limitations](apps/hermes-frontend-3/metadata/description.md). This is a proof of concept, not an official Nous browser release.
 
+## Shared services
+
+**Transcriber** — shared local speech-to-text with word timings, using the unmodified [Speaches](https://github.com/speaches-ai/speaches) CPU server pinned by digest. Other apps and Hermes call its OpenAI-compatible API at `http://transcriber:8000/v1` (inside Runtipi) or `http://<server>:8791/v1`. Verified by `scripts/smoke-transcriber.py`.
+
 ## Agent-operated video workflow (testing)
 
 **DeFleur Video (Testing)** — a private, no-GUI API that Hermes drives to edit short videos: upload an MP4, save edit decisions, render a 9:16 preview with cuts, burned captions and a fixed portrait crop, and download review artifacts. Transcription/alignment, audio lock, semantic motion and final delivery are not built yet. Published for hands-on testing and iteration. [Hermes connection instructions](images/defleur-video/HERMES.md) · [Parity status](images/defleur-video/WORKFLOW-PARITY.md).

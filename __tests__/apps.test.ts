@@ -50,6 +50,22 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       expect(pwd.default).toBeUndefined();
     });
     }
+    if (id === "transcriber") {
+      test("unmodified pinned Speaches image, private, unprivileged", () => {
+        const s = compose.services[id];
+        expect(Object.keys(compose.services)).toEqual([id]);
+        expect(s.image).toMatch(new RegExp(`^ghcr\\.io/speaches-ai/speaches:${config.version.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`));
+        expect(s.read_only).toBe(true);
+        expect(s.cap_drop).toEqual(["ALL"]);
+        expect(s.security_opt).toEqual(["no-new-privileges:true"]);
+        expect(s.volumes).toEqual(["${APP_DATA_DIR}/data/huggingface:/home/ubuntu/.cache/huggingface"]);
+        expect(s.environment.PRELOAD_MODELS).toBe('["${TRANSCRIBER_MODEL}"]');
+        expect(s["x-runtipi"]).toEqual({is_main: true, internal_port: 8000});
+        for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "command", "entrypoint", "user"]) expect(s[key]).toBeUndefined();
+        expect(config.exposable).toBe(false);
+        expect(config.uid).toBe(1000);
+      });
+    }
     if (id === "hermes-frontend-3") {
       test("separate unprivileged frontend with no agent state or secrets", () => {
         const s = compose.services[id];
