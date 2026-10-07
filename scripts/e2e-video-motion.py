@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("e2e_mcp", HERE / "e2e-video-mcp.py")
@@ -543,6 +544,17 @@ def main():
         ready(cmds["t"], tenv, "transcriber", 8000, "/health", 900)
         ready(cmds["b"], benv, "browser", 9222, "/json/version", 60)
         vbase = ready(cmds["v"], venv, "defleur-video", 8787, "/healthz", 60)
+        # /healthz answers before the internal MCP server is up; /mcp returns 503 until then.
+        for _ in range(60):
+            try:
+                code = http_call("GET", vbase + "/mcp", timeout=5)[0]
+            except urllib.error.HTTPError as e:
+                code = e.code
+            except Exception:
+                code = 0
+            if code not in (0, 502, 503):
+                break
+            time.sleep(1)
         fixture, truth = e2e.build_fixture(ts["image"], tdata)
         if LONG:
             t1 = time.monotonic()
