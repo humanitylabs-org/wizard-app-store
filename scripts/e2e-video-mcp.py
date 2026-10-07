@@ -79,6 +79,52 @@ async def wait_run(session, rid, log, budget=2400):
     raise RuntimeError(f"run {rid} still running after {budget}s")
 
 
+# Public-domain NASA portrait (Wikimedia Commons, "Ilan Ramon, NASA photo portrait in orange suit.jpg"), pinned by hash.
+FACE_URL = "https://upload.wikimedia.org/wikipedia/commons/4/48/Ilan_Ramon%2C_NASA_photo_portrait_in_orange_suit.jpg"
+FACE_SHA256 = "b30593be9af9ee744beaf48e6a00f5a3639d0e937a3ddc8ae92d4631da33f1c0"
+
+
+def face_fixture(fixture):
+    """1920x1080 talking-head: a real face photo, slowly panned and scaled, muxed with the real speech fixture."""
+    out = fixture / "talking-1080p.mp4"
+    if out.is_file():
+        return out
+    photo = fixture / "face.jpg"
+    if not photo.is_file() or hashlib.sha256(photo.read_bytes()).hexdigest() != FACE_SHA256:
+        data = http_call("GET", FACE_URL, headers={"User-Agent": "wizard-app-store-e2e/1.0 (CI fixture)"}, timeout=120)[1]
+        assert hashlib.sha256(data).hexdigest() == FACE_SHA256, "face photo hash changed upstream"
+        photo.write_bytes(data)
+        os.chmod(photo, 0o666)
+    graph = ("color=c=0x2b3440:s=1920x1080:r=30[bg];[0:v]scale=-2:880,format=yuv420p[p];"
+             "[p]scale=w='trunc(iw*(1+0.03*sin(t*0.7))/2)*2':h=-2:eval=frame[s];"
+             "[bg][s]overlay=x='560+60*sin(t*0.5)':y='120+15*sin(t*0.9)':shortest=1,format=yuv420p[v]")
+    e2e.ff("ffmpeg", "-v", "error", "-y", "-loop", "1", "-framerate", "30", "-i", "face.jpg", "-i", "speech.wav",
+           "-filter_complex", graph, "-map", "[v]", "-map", "1:a", "-shortest", "-c:v", "libx264", "-preset", "veryfast",
+           "-crf", "22", "-r", "30", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart",
+           "talking-1080p.mp4", cwd=fixture)
+    return out
+
+
+FACE_CHECK = r"""
+import cv2, json, subprocess, sys, numpy as np
+path, top = sys.argv[1], int(sys.argv[2])
+n = int(subprocess.check_output(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
+                                 "stream=nb_read_frames", "-of", "csv=p=0", path], text=True))
+picks = [round(i * (n - 1) / 7) for i in range(8)]
+raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vf", "select='" + "+".join(f"eq(n\,{i})" for i in picks) + "',scale=540:960",
+                      "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], check=True, capture_output=True).stdout
+d = cv2.FaceDetectorYN.create("/opt/models/yunet.onnx", "", (540, 960), 0.6)
+rows = []
+for k, f in enumerate(picks):
+    img = np.frombuffer(raw[k * 540 * 960 * 3:(k + 1) * 540 * 960 * 3], np.uint8).reshape(960, 540, 3)
+    _, faces = d.detect(img)
+    box = None if faces is None else [float(v) * 2 for v in max(faces, key=lambda r: r[2] * r[3])[:4]]
+    rows.append({"frame": f, "box": box, "inside_canvas": bool(box and box[0] >= 0 and box[1] >= 0 and box[0] + box[2] <= 1080 and box[1] + box[3] <= 1920),
+                 "above_captions": bool(box and box[1] + box[3] <= top)})
+print(json.dumps({"frames": n, "samples": rows}))
+"""
+
+
 def curl_upload(cmd_text, path):
     """Run the exact curl command create_upload returned, with the file path substituted."""
     assert cmd_text.count("/path/to/video.mp4") == 1, cmd_text
@@ -94,11 +140,14 @@ async def flow(url, fixture, truth, report):
             init = await s.initialize()
             tools = {t.name: t.description or "" for t in (await s.list_tools()).tools}
             report["server"] = {"name": init.server_info.name, "version": init.server_info.version, "tools": sorted(tools)}
-            assert set(tools) == {"workflow_guide", "capabilities", "create_upload", "start_edit", "apply_cuts",
+            assert set(tools) == {"workflow_guide", "capabilities", "create_upload", "start_edit", "apply_cuts", "render_final",
                                   "get_status", "list_projects", "delete_project"}, tools
+            assert "motion" in tools["render_final"].lower() and "1080x1920" in tools["render_final"]
             assert "approval" in tools["start_edit"] and "get_status" in tools["start_edit"]
             guide = await tool(s, "workflow_guide")
-            assert any("captions" in x for x in guide["not_built_yet"])
+            assert any("motion" in x.lower() for x in guide["not_built_yet"])
+            assert not any("burned captions" in x.lower() or "1080x1920 encode" in x.lower() for x in guide["not_built_yet"]), guide["not_built_yet"]
+            assert any("render_final" in x for x in guide["steps"])
             caps = await tool(s, "capabilities")
             report["capabilities"] = {k: caps[k] for k in ("version", "ready", "fix", "transcriber")}
             assert caps["ready"], caps
@@ -106,7 +155,10 @@ async def flow(url, fixture, truth, report):
             # Upload: one-time URL + the exact curl command; bytes never go through MCP.
             up = await tool(s, "create_upload")
             t0 = time.monotonic()
-            project = curl_upload(up["curl"], fixture / "source.mp4")
+            talking = face_fixture(fixture)
+            report["face_fixture"] = {"sha256": hashlib.sha256(talking.read_bytes()).hexdigest(), "photo_sha256": FACE_SHA256,
+                                      "photo": "NASA portrait of Ilan Ramon (public domain, Wikimedia Commons)", "size": "1920x1080"}
+            project = curl_upload(up["curl"], talking)
             report["upload"] = {"seconds": round(time.monotonic() - t0, 2), "id": project["id"], "normalized": "normalization" in project}
             reuse = subprocess.run(["sh", "-c", up["curl"].replace("/path/to/video.mp4", str(fixture / "source.mp4"))], capture_output=True, text=True)
             assert reuse.returncode != 0 and "403" in reuse.stderr, "upload URL must be one-time"
@@ -147,6 +199,44 @@ async def flow(url, fixture, truth, report):
             assert not result["words_lost_vs_source"], result["words_lost_vs_source"]
             assert not (expected - set(got)), report["edited_asr"]
             assert result["seconds_removed"] > 0.5
+            assert "render_final" in result["next"]
+
+            # Piece 2: the finished vertical short through MCP only.
+            t0 = time.monotonic()
+            rendered = await tool(s, "render_final", {"project_id": pid})
+            assert time.monotonic() - t0 < 100
+            final = await wait_run(s, rendered["run_id"], log, budget=3600)
+            render_s = round(time.monotonic() - t0, 1)
+            mp4 = fixture / "final-from-mcp.mp4"
+            mp4.write_bytes(http_call("GET", final["downloads"]["final_mp4"], timeout=300)[1])
+            os.chmod(mp4, 0o666)
+            assert hashlib.sha256(mp4.read_bytes()).hexdigest() == final["final"]["sha256"]
+            probe = json.loads(e2e.ff("ffprobe", "-v", "error", "-count_frames", "-show_streams", "-of", "json", mp4.name, cwd=fixture))
+            vid = next(x for x in probe["streams"] if x["codec_type"] == "video")
+            aud = next(x for x in probe["streams"] if x["codec_type"] == "audio")
+            e2e.ff("ffmpeg", "-v", "error", "-xerror", "-i", mp4.name, "-f", "null", "-", cwd=fixture)  # full decode or raise
+            ledger = json.loads(http_call("GET", final["downloads"]["crop_ledger_json"])[1])
+            gate = json.loads(http_call("GET", final["downloads"]["delivery_gate_result_json"])[1])
+            top = 1240  # James' neutral preset caption safe_rect top
+            faces = json.loads(run("docker", "run", "--rm", "--network", "none", "--read-only", "--mount",
+                                   f"type=bind,source={fixture},target=/w,readonly", "--entrypoint", "/opt/venv/bin/python",
+                                   IMAGE, "-I", "-c", FACE_CHECK, "/w/" + mp4.name, str(top)))
+            report["render_final"] = {
+                "seconds": render_s, "final": final["final"], "crop": final["crop"], "captions": final["captions"],
+                "delivery_gate": final["delivery_gate"], "motion_graphics": final["motion_graphics"],
+                "independent_probe": {"video": [vid["codec_name"], vid["width"], vid["height"], vid["nb_read_frames"], vid["r_frame_rate"]],
+                                      "audio": [aud["codec_name"], aud["sample_rate"], aud.get("duration")], "full_decode": True},
+                "independent_face_check": faces, "ledger_ranges": len(ledger["ranges"]), "gate_file_pass": gate["pass"]}
+            assert (vid["codec_name"], vid["width"], vid["height"], aud["codec_name"]) == ("h264", 1080, 1920, "aac"), report["render_final"]
+            assert int(vid["nb_read_frames"]) == final["final"]["frames"]
+            assert abs(final["final"]["duration_s"] - result["edited_duration_s"]) < 0.05
+            assert final["crop"]["face_inside_crop_all_samples"] and not final["crop"]["flags"], final["crop"]
+            assert final["crop"]["crop_matches_ledger_in_decoded_pixels"]
+            assert all(r["box"] and r["inside_canvas"] and r["above_captions"] for r in faces["samples"]), faces
+            assert final["captions"]["cues"] >= 2 and final["captions"]["caption_band_changes_with_cues"], final["captions"]
+            assert final["delivery_gate"]["pass"] and gate["pass"], final["delivery_gate"]
+            assert final["delivery_gate"]["words_lost_vs_edited_audio"] == [], final["delivery_gate"]
+            mp4.unlink()
 
             # HEVC phone-style variant: normalized on upload, then editable.
             hevc = fixture / "source-hevc.mp4"
@@ -254,7 +344,8 @@ def main():
         chmod(tdata, ts["image"])
         shutil.rmtree(work, ignore_errors=True)
         (OUT / "mcp-report.json").write_text(json.dumps(report, indent=2, default=str))
-    summary = {k: report.get(k) for k in ("server", "capabilities", "upload", "chosen_cuts", "apply_cuts", "edited_asr", "hevc",
+    summary = {k: report.get(k) for k in ("server", "capabilities", "upload", "face_fixture", "chosen_cuts", "apply_cuts", "edited_asr",
+                                          "render_final", "hevc",
                                           "runs", "mcp_flow_wall_s", "wall_time_s", "video_memory")}
     print(json.dumps(summary, indent=2, default=str)[:20000])
 

@@ -29,7 +29,7 @@ jobs:
         run: |
           set -o pipefail
           E2E_OUT="$RUNNER_TEMP/e2e" E2E_CACHE="$RUNNER_TEMP/e2e-cache" TMPDIR="$RUNNER_TEMP" python3 scripts/e2e-video-audio.py | tee "$RUNNER_TEMP/video-e2e.json"
-      - name: Agent flow through MCP only (create_upload, curl, start_edit, apply_cuts, get_status) plus HEVC normalization
+      - name: Agent flow through MCP only (create_upload, curl, start_edit, apply_cuts, render_final, get_status) on a real-face 1080p fixture plus HEVC normalization
         shell: bash
         run: |
           set -o pipefail

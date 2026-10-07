@@ -2,7 +2,7 @@
 
 James' plugin is bundled unchanged at `/opt/defleur`: upstream commit `30768288eb1308b18216a5df5eb4648fbce3e55b`, licensed MIT per its plugin.json, and redistributed with the author's authorization (see NOTICE). Each script's SHA-256 is pinned in `workflow.py`, checked before every run and recorded in every job. Hermes is the operator. The app runs helpers only on paths it owns; clients never supply paths.
 
-The port is split into three pieces. **Piece 1 (audio/edit) is done (0.3.0-testing). 0.4.0-testing adds an MCP endpoint whose `start_edit`/`apply_cuts` tools chain these stages for an agent, plus H.264/CFR normalization of HEVC/VFR uploads.**
+The port is split into three pieces. **Piece 1 (audio/edit) is done (0.3.0-testing). 0.4.0-testing adds an MCP endpoint whose `start_edit`/`apply_cuts` tools chain these stages for an agent, plus H.264/CFR normalization of HEVC/VFR uploads. Piece 2 (0.5.0-testing) adds the face audit and fixed crop, captions, the 1080×1920 encode and the delivery gate, chained by the `render_final` MCP tool. Piece 3, motion graphics, is not built.**
 
 | James' step | Helper | Stage | Status |
 |---|---|---|---|
@@ -19,11 +19,13 @@ The port is split into three pieces. **Piece 1 (audio/edit) is done (0.3.0-testi
 | Dialogue audio gate | `audio_gate.py --stage dialogue` | `dialogue-gate` | Done. The app builds `audio-gate.json` v3 from hash-bound jobs. |
 | Gate self-test | `test_audio_gate.py` | — | Runs at image build and in `test-container.sh` |
 | Project validation | `validate_project.py` | `validate-project` | Done (planning records) |
-| Portrait face audit / crop ledger | — | — | **Piece 2, not built** |
-| Captions | `caption_layer.py` | — | **Pieces 2–3, not built** |
-| 1080×1920 encode | `encode.py` | — | **Piece 3, not built** |
+| Portrait face audit / crop ledger ("fixed crop per setup") | none in James' bundle (his contract: `crop-ledger.json`) | `face-crop` | **Done (0.5.0).** `face_audit.py`, written for this app, runs OpenCV YuNet (opencv_zoo 2023mar, MIT, hash-pinned) on about 2 sampled frames per second of every kept segment. It picks one fixed crop per setup, with the face inside plus a 15% margin and above the caption band (`safe_rect` top), and writes `crop-ledger.json` plus a per-setup audit and evidence PNG. With no face it uses a centered crop and flags it. Kept segments share a setup while one crop still fits all their faces. |
+| Live picture frames for the encode | `capture.cjs` (Chromium) | `final-render` | **No motion layer, so Chromium isn't run.** `final_render.py`, written for this app, writes `picture-frames/NNNNNN.jpg` and `capture-full.json` in capture.cjs's output shape, directly from `edit-map.json`'s `source_frame_indices` and the crop ledger. The visual plan is explicitly empty (`beats: []`, no caption suppressions). |
+| Captions | `caption_layer.py` | `final-render` | **Done, unchanged.** encode.py calls it on every frame. Cue words come from the Transcriber's ASR of the edited audio (apply_cuts' job), in James' neutral preset style with DejaVu Sans Bold (fc-match). |
+| 1080×1920 encode + verification | `encode.py` and `encode.py --verify-only` | `final-render` | **Done, unchanged.** libx264 crf 18, AAC, with edited.wav as the audio. The app then runs a full FFmpeg decode (framemd5 + PCM) and decoded-pixel checks: the ledger crop beats crops shifted by ±4 px and ±w/8 outside the caption band, and the band changes only while caption_layer draws a cue. |
+| Final ASR + full final acoustic scan | `asr.py` schema (Transcriber) + `scan_windows.py` | `asr` / `acoustic-scan` on the final-render job | **Done.** The final audio is decoded from final.mp4 and diffed word by word against the edited-audio transcript. |
+| Delivery audio gate | `audio_gate.py --stage delivery` | `delivery-gate` | **Done, unchanged.** The receipt binds `final`, `decoded_final`, `final_asr`, `final_acoustic_scan` and `final_integrity`. `source_regions` gives each kept segment's correlation between source.wav and the decoded final audio (James' floor is 0.90). |
 | Motion capture (Chromium/GSAP) | `capture.cjs` | — | **Piece 3, not built** |
-| Delivery audio gate | `audio_gate.py --stage delivery` | — | **Piece 3, not built** |
 
 ## Measured in the local e2e (2026-10-07)
 Setup: two translated Runtipi recipes on one shared network, with 7.7 s of real Kokoro-synthesized speech containing a filler "Um," and a 0.9 s pause.
