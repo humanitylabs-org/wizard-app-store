@@ -554,6 +554,7 @@ def _source_audio(ctx, value, source, metadata):
     if info["sample_width"] != 2 or not info["samples"]:
         raise Rejected("PCM decode produced no s16 samples")
     ctx.write("pcm-source.json", {**info, "sha256": sha(ctx.root / "source.wav"), "codec": "pcm_s16le", "lossy_intermediate": False})
+    ctx.app("energy.py", [ctx.root / "source.wav", ctx.root / "energy.json"], timeout=280, cpu=600, as_limit=2 * 1024**3, nofile=64)
     frames = probe["video"].get("nb_read_frames")
     return {"duration_s": info["samples"] / info["rate"], "sample_rate": info["rate"], "channels": info["channels"],
             "fps": probe["fps"]["r_frame_rate"], "frames": int(frames) if frames else None,
@@ -773,9 +774,10 @@ def _norm(word):
     return re.sub(r"[^\w']+", "", str(word).lower()).strip("'")
 
 
-def _words_diff(expected, got):
-    from editing import align_words
-    return align_words([w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w])
+def _words_diff(expected, got, with_fillers=False):
+    from editing import align_words, split_fillers
+    lost, added, f_lost, f_added = split_fillers(*align_words([w for w in map(_norm, expected) if w], [w for w in map(_norm, got) if w]))
+    return (lost, added, f_lost, f_added) if with_fillers else (lost, added)
 
 
 def _face_model():
@@ -1147,9 +1149,10 @@ def _delivery_gate(ctx, value, source, metadata):
                                                             f"final ASR: '{heard}'. Not human listening."),
                      "waveform_sha256": sha(wave_path), "spectrogram_sha256": sha(spec_path)})
     ctx.write("final-acoustic-scan.json", rows)
-    lost, added = _words_diff([w["word"] for w in edited_words], [w["word"] for w in final_words])
+    lost, added, f_lost, f_added = _words_diff([w["word"] for w in edited_words], [w["word"] for w in final_words], True)
     ctx.write("final-asr-compare.json", {"edited_words": len(edited_words), "final_words": len(final_words),
                                          "words_lost": lost, "words_added": added,
+                                         "fillers_in_edited_only": f_lost, "fillers_heard_in_final_only": f_added,
                                          "basis": "Transcriber ASR of the edited WAV vs the decoded final MP4 audio, normalized word sequence diff"})
     receipt = dict(base)
     for key, name in [("final", "final.mp4"), ("decoded_final", "decoded-final.json"), ("final_asr", "final-asr.json"),

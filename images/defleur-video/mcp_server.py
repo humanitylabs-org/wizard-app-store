@@ -23,7 +23,8 @@ from typing import Any
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # run with -I: make the app's pure helpers importable
-from editing import align_words, cut_regions  # noqa: E402
+from editing import (FILLERS, HANDLE_S, PAUSE_S, REPORT_FILLERS, align_words, candidates_from,  # noqa: E402,F401
+                     cut_regions, cut_sound_check, split_fillers)
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -34,9 +35,6 @@ RUNS = Path(os.environ.get("VIDEO_DATA_DIR", "/data")) / "mcp-runs"
 VERSION = os.environ.get("VIDEO_VERSION", "")
 ID = re.compile(r"^[a-f0-9]{32}$")
 RUN_ID = re.compile(r"^run-[a-f0-9]{32}$")
-FILLERS = {"um", "umm", "uhm", "uh", "uhh", "erm", "er", "ah", "hmm", "mm", "mhm"}
-PAUSE_S = 0.5     # gaps between words longer than this are pause candidates
-HANDLE_S = 0.12   # silence kept on each side of a cut
 LOCK = threading.Lock()
 LANG_NAMES = {"english": "en", "spanish": "es", "french": "fr", "german": "de", "italian": "it", "portuguese": "pt",
               "dutch": "nl", "japanese": "ja", "chinese": "zh", "korean": "ko", "russian": "ru", "arabic": "ar", "hindi": "hi"}
@@ -90,7 +88,9 @@ RULES = [
     "Every deletion needs a truthful reason (filler, long pause, false start/restart, repeat, off-topic aside the owner approved).",
     "Remove fillers (um/uh/erm) and shorten long pauses, but cut in the silence around them: keep ~0.1 s of handle so no consonant, vowel tail or breath release is clipped.",
     "If a tiny cut threatens a word, restore the whole clause instead of shaving it.",
-    "ASR can omit fillers: an unexplained gap with sound in it is a likely untranscribed filler; treat pause candidates as review items, not facts.",
+    "ASR can omit fillers and even whole sentences: start_edit proposes a pause only after measuring it near-silent; gaps with sound go to untranscribed_sound for the owner to review, never into proposed_cuts.",
+    "apply_cuts measures every cut you send (including hand-written ones); a cut with speech-like sound the transcript does not explain fails the reported gate unless the owner listened and you mark it owner_approved_sound: true.",
+    "Fillers (um/uh/er/oh/ah) heard in only one transcript are reported separately (ASR can omit them); they are not lost content.",
     "Infer the language from ASR; ask the owner when it is uncertain.",
     "After assembly, re-transcribe the edited audio and check that no kept word was lost (apply_cuts does this and reports it).",
     "The dialogue gate checks evidence completeness and custody. It is not human listening approval: tell the owner to listen before using the edit.",
@@ -108,7 +108,7 @@ GUIDE = {
         "1. capabilities - check the Transcriber is reachable and its model installed; if not, relay the exact fix.",
         "2. create_upload - get a one-time upload URL and curl command (or point the owner to the /upload page). Files never travel through MCP.",
         "3. start_edit(project_id) - transcribes and aligns; call get_status(run_id) until state is 'done' to get the transcript, word timings, filler/pause candidates, proposed cuts and editorial rules.",
-        "4. Show the owner the proposed cut list (time, words, reason) and get approval or changes. Do not skip this.",
+        "4. Show the owner the proposed cut list (time, words, reason) and any untranscribed_sound gaps (sound with no transcript: maybe a skipped sentence; not proposed), and get approval or changes. Do not skip this.",
         "5. apply_cuts(project_id, segments) with the approved ranges TO REMOVE; call get_status(run_id) until 'done' for the report: seconds removed, words lost/added, gate pass/fail and download URLs.",
         "6. Tell the owner the apply_cuts result. If words were lost or the dialogue gate failed, adjust the cuts with them and run apply_cuts again.",
         "7. Optional framing: preview_framing(project_id, framing) shows the fixed crop per setup with face evidence images. For a two-person shot pass framing={'targets': {'<kept segment index>': 'left'|'right'|'center'|'largest'}} (a change of target starts a new setup); 'new_setup_at': [index] forces a new setup.",
@@ -267,46 +267,6 @@ def interrupted_runs():
 
 # ---------- start_edit ----------
 
-def candidates_from(words: list[dict], duration: float) -> tuple[list[dict], list[dict]]:
-    cands = []
-    for i, w in enumerate(words):
-        n = norm(w["word"])
-        prev_end = words[i - 1]["end"] if i else 0.0
-        next_start = words[i + 1]["start"] if i + 1 < len(words) else duration
-        if n in FILLERS:
-            a = max(prev_end + HANDLE_S, 0.0) if w["start"] - prev_end > HANDLE_S else w["start"] - 0.02
-            b = next_start - HANDLE_S if next_start - w["end"] > HANDLE_S else w["end"] + 0.02
-            cands.append({"kind": "filler", "word": w["word"], "word_index": i, "start_s": w["start"], "end_s": w["end"],
-                          "cut": [round(max(0.0, min(a, w["start"] - 0.02)), 3), round(min(duration, max(b, w["end"] + 0.02)), 3)],
-                          "reason": f"filler '{w['word']}'"})
-        if i + 1 < len(words) and n and n == norm(words[i + 1]["word"]) and n not in FILLERS:
-            cands.append({"kind": "repeat", "word": w["word"], "word_index": i, "start_s": w["start"], "end_s": w["end"],
-                          "cut": [round(max(0.0, w["start"] - 0.02), 3), round(max(w["start"], words[i + 1]["start"] - 0.02), 3)],
-                          "reason": f"repeated word '{w['word']}' (possible restart; check meaning)"})
-    edges = [(0.0, words[0]["start"] if words else duration, "leading silence")]
-    edges += [(words[i]["end"], words[i + 1]["start"], "long pause") for i in range(len(words) - 1)]
-    if words:
-        edges.append((words[-1]["end"], duration, "trailing silence"))
-    for a, b, label in edges:
-        if b - a >= PAUSE_S:
-            lo = 0.0 if label == "leading silence" else a + HANDLE_S
-            hi = duration if label == "trailing silence" else b - HANDLE_S
-            if hi - lo >= 0.1:
-                cands.append({"kind": "pause", "start_s": round(a, 3), "end_s": round(b, 3), "cut": [round(lo, 3), round(hi, 3)],
-                              "reason": f"{label} {b - a:.2f} s (if you hear sound in it, it may be an untranscribed filler)"})
-    cands.sort(key=lambda c: c["cut"][0])
-    merged: list[dict] = []
-    for c in cands:
-        if c["kind"] == "repeat":
-            continue  # repeats are review items, not default cuts
-        if merged and c["cut"][0] <= merged[-1]["end_s"] + 0.05:
-            merged[-1]["end_s"] = max(merged[-1]["end_s"], c["cut"][1])
-            merged[-1]["reason"] += "; " + c["reason"]
-        else:
-            merged.append({"start_s": c["cut"][0], "end_s": c["cut"][1], "reason": c["reason"]})
-    return cands, merged
-
-
 def do_start_edit(run: dict) -> dict:
     lang = run["params"].get("language") or "auto"
     src = stage(run, "source-audio", {})
@@ -322,7 +282,8 @@ def do_start_edit(run: dict) -> dict:
     words = [{"word": w["word"].strip(), "start": round(float(w["start"]), 3), "end": round(float(w["end"]), 3)}
              for s in aligned.get("segments", []) for w in s.get("words", []) if w.get("word", "").strip()]
     duration = float(summary["duration_s"])
-    cands, proposed = candidates_from(words, duration)
+    env = artifact(src["id"], "energy.json")
+    cands, proposed, untranscribed, screen = candidates_from(words, duration, env)
     asr_receipt = artifact(asr["id"], "asr.json")
     return {
         "project_id": run["project"], "duration_s": round(duration, 3), "language": detected,
@@ -333,12 +294,19 @@ def do_start_edit(run: dict) -> dict:
         "words_format": "[index, word, start_s, end_s] from local stable-ts alignment of the Transcriber ASR",
         "candidates": cands,
         "proposed_cuts": proposed,
+        "untranscribed_sound": untranscribed,
+        "untranscribed_sound_note": ("Gaps between transcribed words that contain speech-like sound: the ASR may have skipped a "
+                                     "sentence or a filler there. They are NOT in proposed_cuts. Tell the owner about each one "
+                                     "(time, words around it) and ask them to listen before cutting any of it."),
+        "pause_screen": screen,
         "editorial_rules": RULES,
         "preflight": {k: pre["result"]["summary"].get(k) for k in ("helper_passed", "missing")},
         "jobs": {"source_audio": src["id"], "asr": asr["id"], "align": al["id"]},
         "asr_limitation": asr_receipt.get("limitation") or "ASR can omit fillers or miss words.",
-        "next": ("Show the owner proposed_cuts as a readable list (time range, the words around it, reason). Ask them to approve, "
-                 "drop or add cuts. Only then call apply_cuts(project_id, segments=<approved ranges to REMOVE>). "
+        "next": ("Show the owner proposed_cuts as a readable list (time range, the words around it, reason). "
+                 + (f"Also tell them about the {len(untranscribed)} untranscribed_sound gap(s): there is sound the transcript does not "
+                    "show (maybe a skipped sentence); they stay in unless the owner listens and asks to cut them. " if untranscribed else "")
+                 + "Ask them to approve, drop or add cuts. Only then call apply_cuts(project_id, segments=<approved ranges to REMOVE>). "
                  "Do not call apply_cuts without the owner's approval."),
     }
 
@@ -362,13 +330,18 @@ def clean_cuts(segments: Any, duration: float) -> list[dict]:
         a, b = max(0.0, a), min(duration, b)
         if b - a < 0.01:
             raise ToolError(f"cut {s} is shorter than 10 ms or outside the {duration:.3f} s source")
-        rows.append({"start_s": round(a, 6), "end_s": round(b, 6), "reason": reason[:500]})
+        row = {"start_s": round(a, 6), "end_s": round(b, 6), "reason": reason[:500]}
+        if s.get("owner_approved_sound") is True:
+            row["owner_approved_sound"] = True
+        rows.append(row)
     rows.sort(key=lambda r: r["start_s"])
     merged: list[dict] = []
     for r in rows:
         if merged and r["start_s"] <= merged[-1]["end_s"]:
             merged[-1]["end_s"] = max(merged[-1]["end_s"], r["end_s"])
             merged[-1]["reason"] += "; " + r["reason"]
+            if not r.get("owner_approved_sound"):
+                merged[-1].pop("owner_approved_sound", None)  # an override covers only the range the owner approved
         else:
             merged.append(dict(r))
     return merged
@@ -411,7 +384,9 @@ def do_apply_cuts(run: dict) -> dict:
     got = [norm(w["word"]) for w in edited_words if norm(w["word"])]
     expected = [e for e in expected if e]
     lost, added = align_words(expected, got)
+    lost, added, fillers_source_only, fillers_edit_only = split_fillers(lost, added)
     fillers_left = [w for w in got if w in FILLERS]
+    sound = cut_sound_check(cuts, artifact(edit["jobs"]["source_audio"], "energy.json"), words)
 
     cand_rows = []
     for c in edit["candidates"]:
@@ -486,12 +461,18 @@ def do_apply_cuts(run: dict) -> dict:
         "words_removed_by_cuts": removed,
         "words_lost_vs_source": lost, "words_added_vs_source": added,
         "fillers_still_heard": fillers_left,
+        "fillers_heard_in_edit_only": fillers_edit_only, "fillers_in_source_only": fillers_source_only,
+        "filler_note": "ASR can omit fillers (James' asr.py), so a filler heard in only one transcript is listed here, not as lost/added content.",
+        "cut_sound_check": sound,
         "cut_audit_pass": bool(audit["result"]["summary"].get("pass")),
         "cut_audit_failures": failed_regions[:20],
         # The app's reported pass also requires no lost words; James' audio_gate.py itself checks evidence only.
-        "dialogue_gate": {"pass": bool(gsum["dialogue_gate_pass"]) and not lost,
-                          "reason": (f"{len(lost)} kept word(s) missing from the re-transcribed edit: {' '.join(lost[:20])}" if lost else "")
-                                    + ("; " if lost and gsum.get("error") else "") + (gsum.get("error") or ("" if lost else "all required evidence present and fresh")),
+        "dialogue_gate": {"pass": bool(gsum["dialogue_gate_pass"]) and not lost and sound["pass"],
+                          "reason": "; ".join(x for x in (
+                              f"{len(lost)} kept word(s) missing from the re-transcribed edit: {' '.join(lost[:20])}" if lost else "",
+                              "; ".join(sound["failures"][:10]) + (" (listen; if the owner approves removing it, resend that cut with "
+                                                                   "owner_approved_sound: true)" if sound["failures"] else ""),
+                              gsum.get("error") or "") if x) or "all required evidence present and fresh",
                           "audio_gate_script_pass": bool(gsum["dialogue_gate_pass"]),
                           "scope": "Evidence completeness and custody (James' audio_gate.py --stage dialogue); edge/window findings were written by the app automatically, not by a human listener."},
         "downloads": downloads, "preview": preview_note,

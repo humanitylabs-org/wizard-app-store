@@ -855,6 +855,105 @@ class MediaTests(unittest.TestCase):
         c = a[:50] + ["extra"] + a[50:]
         self.assertEqual(align_words(a, c), ([], ["extra"]))
 
+    def _speechy_wav(self, path, plan, rate=48000):
+        """Synthesize PCM: 'tone' parts are voiced, harmonically rich, amplitude-modulated (speech-like); 'quiet' is low noise."""
+        import math, random, struct
+        rnd = random.Random(7)
+        out = bytearray()
+        for kind, secs in plan:
+            for i in range(int(secs * rate)):
+                t = i / rate
+                if kind == "tone":
+                    env = 0.55 + 0.45 * math.sin(2 * math.pi * 4 * t)
+                    v = env * sum(math.sin(2 * math.pi * 140 * k * t) / k for k in range(1, 6)) * 0.18
+                else:
+                    v = rnd.uniform(-1, 1) * 0.0008
+                out += struct.pack("<h", max(-32767, min(32767, int(v * 32767))))
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(bytes(out))
+
+    def _envelope(self, plan):
+        with tempfile.TemporaryDirectory() as d:
+            wav, out = Path(d) / "a.wav", Path(d) / "e.json"
+            self._speechy_wav(wav, plan)
+            py = "/opt/venv/bin/python" if Path("/opt/venv/bin/python").exists() else sys.executable
+            subprocess.run([py, "-I", str(Path(service.__file__).with_name("energy.py")), str(wav), str(out)], check=True,
+                           capture_output=True)
+            return json.loads(out.read_text())
+
+    def test_pause_screen_never_proposes_a_gap_with_untranscribed_speech(self):
+        from editing import candidates_from, cut_sound_check
+        # 0-2 s sentence A, 2-3 s silence, 3-5 s sentence B (ASR omits it), 5-6 s silence, 6-8 s sentence C.
+        env = self._envelope([("tone", 2), ("quiet", 1), ("tone", 2), ("quiet", 1), ("tone", 2)])
+        a = [{"word": w, "start": 0.1 + 0.45 * i, "end": 0.45 + 0.45 * i} for i, w in enumerate("this is sentence one".split())]
+        c = [{"word": w, "start": 6.1 + 0.45 * i, "end": 6.45 + 0.45 * i} for i, w in enumerate("and sentence three".split())]
+        a[-1]["end"] = 1.95; c[-1]["end"] = 7.95
+        cands, proposed, review, screen = candidates_from(a + c, 8.0, env)
+        self.assertTrue(screen["measured"])
+        self.assertGreater(screen["speech_level_dbfs"], -30)
+        for p in proposed:  # nothing proposed may overlap the skipped sentence B
+            self.assertFalse(p["start_s"] < 5.0 and p["end_s"] > 3.0, proposed)
+        self.assertEqual(len(review), 1, review)
+        self.assertLessEqual(review[0]["start_s"], 3.0)
+        self.assertGreaterEqual(review[0]["end_s"], 5.0)
+        self.assertGreater(review[0]["speech_like_s"], 1.5)
+        self.assertIn("not proposed", review[0]["note"])
+        # A genuinely silent gap is still proposed.
+        env2 = self._envelope([("tone", 2), ("quiet", 2), ("tone", 2)])
+        w2 = [{"word": "hello", "start": 0.2, "end": 1.95}, {"word": "again", "start": 4.05, "end": 5.9}]
+        _, proposed2, review2, _ = candidates_from(w2, 6.0, env2)
+        self.assertEqual(review2, [])
+        self.assertTrue(any(p["start_s"] >= 1.95 and p["end_s"] <= 4.05 and p["end_s"] - p["start_s"] > 1.5 for p in proposed2), proposed2)
+        # apply_cuts' check measures hand-written cuts too; the override flag is explicit.
+        hand = [{"start_s": 2.5, "end_s": 5.5}]
+        r = cut_sound_check(hand, env, a + c)
+        self.assertFalse(r["pass"])
+        self.assertRegex(r["failures"][0], r"cut 2\.50-5\.50 s contains about [12]\.\d s of speech-like audio")
+        self.assertTrue(cut_sound_check([{**hand[0], "owner_approved_sound": True}], env, a + c)["pass"])
+        self.assertTrue(cut_sound_check([{"start_s": 2.1, "end_s": 2.9}], env, a + c)["pass"])
+        # A cut over a transcribed word is speech the transcript explains; the word-loss check owns it, not this one.
+        self.assertTrue(cut_sound_check([{"start_s": 0.5, "end_s": 1.0}], env, a + c)["pass"])
+
+    def test_clean_cuts_keeps_override_only_on_the_approved_range(self):
+        # mcp_server needs the venv's MCP SDK; run it there (the unit suite itself runs on the system Python).
+        py = "/opt/venv/bin/python" if Path("/opt/venv/bin/python").exists() else os.environ.get("E2E_MCP_PYTHON", sys.executable)
+        code = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import mcp_server
+a = mcp_server.clean_cuts([{"start_s": 1, "end_s": 2, "reason": "x", "owner_approved_sound": True},
+                           {"start_s": 3, "end_s": 4, "reason": "y", "owner_approved_sound": "yes"}], 10)
+b = mcp_server.clean_cuts([{"start_s": 1, "end_s": 2, "reason": "x", "owner_approved_sound": True},
+                           {"start_s": 1.5, "end_s": 3, "reason": "y"}], 10)
+print(json.dumps([a, b]))
+"""
+        env = {**os.environ, "VIDEO_DATA_DIR": tempfile.mkdtemp()}
+        out = subprocess.run([py, "-I", "-c", code, str(Path(service.__file__).parent)], capture_output=True, text=True, env=env)
+        if out.returncode and "No module named 'mcp'" in out.stderr:
+            self.skipTest("MCP SDK not installed in this Python")
+        self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+        rows, merged = json.loads(out.stdout.strip().splitlines()[-1])
+        self.assertTrue(rows[0]["owner_approved_sound"])
+        self.assertNotIn("owner_approved_sound", rows[1])
+        self.assertNotIn("owner_approved_sound", merged[0])
+
+    def test_fillers_reported_separately_from_lost_content(self):
+        from editing import align_words, split_fillers
+        src = "so um this is the plan and uh we ship it".split()
+        edit = "so this is the plan oh and we ship".split()
+        lost, added, f_lost, f_added = split_fillers(*align_words(src, edit))
+        self.assertEqual(lost, ["it"])
+        self.assertEqual(added, [])
+        self.assertEqual(sorted(f_lost), ["uh", "um"])
+        self.assertEqual(f_added, ["oh"])
+
+    def test_short_repetitive_transcript_loses_no_words_when_identical(self):
+        from editing import align_words, split_fillers
+        loop = "hello this is a short test um of the video editor".split()
+        a = loop * 4
+        b = [w for w in a if w != "um"]  # ASR dropped every filler on the re-transcription
+        self.assertEqual(split_fillers(*align_words(a, b))[:2], ([], []))
+
     def test_capabilities_report_browser_and_resources(self):
         os.environ["BROWSER_URL"] = "http://127.0.0.1:9"
         try:

@@ -6,6 +6,7 @@
 !workflow.py
 !transcriber.py
 !scan_windows.py
+!energy.py
 !mcp_server.py
 !face_audit.py
 !final_render.py

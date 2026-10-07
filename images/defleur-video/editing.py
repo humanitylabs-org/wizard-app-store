@@ -227,3 +227,144 @@ def align_words(a, b, indices=False):
     if indices:
         return lost, added
     return [a[k] for k in lost], [b[k] for k in added]
+
+
+# ---------- silence checks and edit candidates (pure; used by mcp_server.py) ----------
+
+FILLERS = {"um", "umm", "uhm", "uh", "uhh", "erm", "er", "ah", "hmm", "mm", "mhm"}
+# Tokens reported separately when one transcript has them and the other doesn't (James' asr.py: ASR can omit fillers).
+REPORT_FILLERS = FILLERS | {"oh", "ahh", "eh"}
+PAUSE_S = 0.5          # gaps between words longer than this are pause candidates
+HANDLE_S = 0.12        # silence kept on each side of a cut
+SPEECH_DROP_DB = 15.0  # a 10 ms frame louder than (file speech level - 15 dB) is speech-like
+SPEECH_FLOOR_DB = -50.0
+SPEECH_GUARD_S = 0.1   # speech-like audio a cut may contain outside transcribed words (breath/plosive tails)
+WORD_PAD_S = 0.05
+
+
+def _norm(word):
+    return "".join(c for c in str(word).lower() if c.isalnum())
+
+
+def speech_level(env, words):
+    """Median loudness (dBFS) of transcribed words of at least 80 ms: the file's speech level."""
+    fs, db = env["frame_s"], env["dbfs"]
+    vals = []
+    for w in words:
+        if w["end"] - w["start"] < 0.08:
+            continue
+        frames = db[int(w["start"] / fs):int(w["end"] / fs)]
+        if frames:
+            power = sum(10 ** (d / 10) for d in frames) / len(frames)
+            vals.append(10 * math.log10(power) if power > 0 else -120.0)
+    if not vals:
+        loud = sorted(db)
+        return loud[int(len(loud) * 0.9)] if loud else None
+    vals.sort()
+    return round(vals[len(vals) // 2], 1)
+
+
+def speech_like(env, a, b, level, words=()):
+    """Seconds of speech-like 10 ms frames in [a, b) outside transcribed word spans (+-50 ms)."""
+    if level is None:
+        return 0.0
+    fs, db = env["frame_s"], env["dbfs"]
+    threshold = max(level - SPEECH_DROP_DB, SPEECH_FLOOR_DB)
+    spans = [(w["start"] - WORD_PAD_S, w["end"] + WORD_PAD_S) for w in words if w["end"] > a - 1 and w["start"] < b + 1]
+    n = 0
+    for i in range(max(0, int(a / fs)), min(len(db), int(math.ceil(b / fs)))):
+        t = (i + 0.5) * fs
+        if a <= t < b and db[i] > threshold and not any(lo <= t <= hi for lo, hi in spans):
+            n += 1
+    return round(n * fs, 2)
+
+
+def candidates_from(words, duration, env=None):
+    """Filler / repeat / pause candidates, the default cut proposal, and gaps with untranscribed sound.
+
+    A pause (or the span around a filler) is proposed only when the audio there is actually near-silent: ASR can skip
+    whole sentences, so a transcript gap is not proof of silence. Gaps with speech-like audio go to
+    `untranscribed_sound` for owner review and are never proposed. Without an energy envelope nothing but tight
+    filler spans is proposed."""
+    level = speech_level(env, words) if env else None
+    loud = (lambda a, b: speech_like(env, a, b, level, words)) if env else (lambda a, b: None)
+    cands, review = [], []
+    around = lambda a, b: (" ".join(w["word"] for w in words if w["end"] <= a)[-60:], " ".join(w["word"] for w in words if w["start"] >= b)[:60])
+    for i, w in enumerate(words):
+        n = _norm(w["word"])
+        prev_end = words[i - 1]["end"] if i else 0.0
+        next_start = words[i + 1]["start"] if i + 1 < len(words) else duration
+        if n in FILLERS:
+            a = max(prev_end + HANDLE_S, 0.0) if w["start"] - prev_end > HANDLE_S else w["start"] - 0.02
+            b = next_start - HANDLE_S if next_start - w["end"] > HANDLE_S else w["end"] + 0.02
+            cut = [round(max(0.0, min(a, w["start"] - 0.02)), 3), round(min(duration, max(b, w["end"] + 0.02)), 3)]
+            sound = loud(*cut)
+            if sound is None or sound > SPEECH_GUARD_S:  # fall back to the filler itself; never cut sound around it
+                cut = [round(max(0.0, w["start"] - 0.02), 3), round(min(duration, w["end"] + 0.02), 3)]
+            cands.append({"kind": "filler", "word": w["word"], "word_index": i, "start_s": w["start"], "end_s": w["end"],
+                          "cut": cut, "reason": f"filler '{w['word']}'"})
+        if i + 1 < len(words) and n and n == _norm(words[i + 1]["word"]) and n not in FILLERS:
+            cands.append({"kind": "repeat", "word": w["word"], "word_index": i, "start_s": w["start"], "end_s": w["end"],
+                          "cut": [round(max(0.0, w["start"] - 0.02), 3), round(max(w["start"], words[i + 1]["start"] - 0.02), 3)],
+                          "reason": f"repeated word '{w['word']}' (possible restart; check meaning)"})
+    edges = [(0.0, words[0]["start"] if words else duration, "leading silence")]
+    edges += [(words[i]["end"], words[i + 1]["start"], "long pause") for i in range(len(words) - 1)]
+    if words:
+        edges.append((words[-1]["end"], duration, "trailing silence"))
+    for a, b, label in edges:
+        if b - a < PAUSE_S:
+            continue
+        lo = 0.0 if label == "leading silence" else a + HANDLE_S
+        hi = duration if label == "trailing silence" else b - HANDLE_S
+        if hi - lo < 0.1:
+            continue
+        sound = loud(lo, hi)
+        if sound is None or sound > SPEECH_GUARD_S:
+            before, after = around(a, b)
+            review.append({"start_s": round(a, 3), "end_s": round(b, 3), "speech_like_s": sound, "before": before, "after": after,
+                           "note": ("silence not measured (no energy envelope); review before cutting" if sound is None else
+                                    f"about {sound:.1f} s of speech-like sound with no transcript in this {label}: possibly a "
+                                    "sentence or filler the ASR skipped. Review before cutting; not proposed.")})
+            continue
+        cands.append({"kind": "pause", "start_s": round(a, 3), "end_s": round(b, 3), "cut": [round(lo, 3), round(hi, 3)],
+                      "speech_like_s": sound, "reason": f"{label} {b - a:.2f} s (measured near-silent)"})
+    cands.sort(key=lambda c: c["cut"][0])
+    merged = []
+    for c in cands:
+        if c["kind"] == "repeat":
+            continue  # repeats are review items, not default cuts
+        if merged and c["cut"][0] <= merged[-1]["end_s"] + 0.05:
+            merged[-1]["end_s"] = max(merged[-1]["end_s"], c["cut"][1])
+            merged[-1]["reason"] += "; " + c["reason"]
+        else:
+            merged.append({"start_s": c["cut"][0], "end_s": c["cut"][1], "reason": c["reason"]})
+    screen = {"speech_level_dbfs": level, "speech_like_threshold_db_below_level": SPEECH_DROP_DB,
+              "guard_s": SPEECH_GUARD_S, "measured": env is not None,
+              "basis": "10 ms RMS envelope of the 48 kHz source vs the median loudness of transcribed words; frames inside "
+                       "transcribed words (+-50 ms) are not counted."}
+    return cands, merged, review, screen
+
+
+def cut_sound_check(cuts, env, words):
+    """Measure every applied cut (proposed or hand-written). A cut with more than SPEECH_GUARD_S of speech-like audio
+    outside transcribed words fails unless it carries owner_approved_sound: true."""
+    level = speech_level(env, words)
+    rows, failures = [], []
+    for c in cuts:
+        s = speech_like(env, c["start_s"], c["end_s"], level, words)
+        row = {"start_s": c["start_s"], "end_s": c["end_s"], "speech_like_s": s,
+               "owner_approved_sound": bool(c.get("owner_approved_sound"))}
+        rows.append(row)
+        if s > SPEECH_GUARD_S and not row["owner_approved_sound"]:
+            failures.append(f"cut {c['start_s']:.2f}-{c['end_s']:.2f} s contains about {s:.1f} s of speech-like audio "
+                            "that the transcript does not account for")
+    return {"speech_level_dbfs": level, "guard_s": SPEECH_GUARD_S, "cuts": rows, "failures": failures,
+            "pass": not failures,
+            "override": "set owner_approved_sound: true on a cut only after the owner listened and approved removing that sound"}
+
+
+def split_fillers(lost, added):
+    """Move filler tokens out of lost/added word lists: ASR can omit fillers, so a filler in one transcript and not
+    the other is reported separately, never as lost or added content."""
+    return ([w for w in lost if w not in REPORT_FILLERS], [w for w in added if w not in REPORT_FILLERS],
+            [w for w in lost if w in REPORT_FILLERS], [w for w in added if w in REPORT_FILLERS])

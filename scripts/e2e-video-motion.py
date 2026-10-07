@@ -12,8 +12,9 @@ windows; captions suppressed exactly where declared; capture determinism (revers
 no non-local requests; two fixed-crop setups with passing face audits; delivery gate passes;
 no words lost. An independent face check confirms the insert replaced the speaker.
 
---long SECONDS builds a talking-head source of that length (default fixture looped) and runs
-the same flow to measure the app's cgroup memory peak and wall time.
+--long N runs the same flow on a varied, non-repetitive ~3 minute script (scripts/fixtures/
+video-long-script.json; five ums, several 1 s pauses), synthesized once with Kokoro and cached, to
+measure removed seconds vs expected, words lost, memory peaks and per-stage wall time. Local only.
 Reuses e2e-video-mcp.py / e2e-video-audio.py helpers. Needs Docker/Compose, node, internet.
 """
 import asyncio
@@ -82,16 +83,87 @@ def broll(path):
     os.chmod(path, 0o666)
 
 
-def long_fixture(fixture, seconds):
-    """Loop the real-face talking fixture to `seconds` (re-encoded, CFR, 1080p)."""
-    out = fixture / f"talking-{int(seconds)}s.mp4"
-    if not out.is_file():
-        base = m.face_fixture(fixture)
-        e2e.ff("ffmpeg", "-v", "error", "-y", "-stream_loop", "-1", "-i", base.name, "-t", str(seconds), "-c:v", "libx264",
-               "-preset", "veryfast", "-crf", "22", "-r", "30", "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
-               "-movflags", "+faststart", out.name, cwd=fixture)
-        os.chmod(out, 0o666)
-    return out
+LONG_SCRIPT = HERE / "fixtures/video-long-script.json"
+LONG_SRC = {}
+
+
+def long_fixture(fixture, speaches_image, hf_cache):
+    """Varied, non-repetitive ~3 min speech (scripts/fixtures/video-long-script.json) synthesized once with Kokoro in a
+    plain throwaway Speaches container, cached under E2E_CACHE (or E2E_OUT), muxed with the real-face picture."""
+    script = json.loads(LONG_SCRIPT.read_text())["parts"]
+    key = hashlib.sha256(LONG_SCRIPT.read_bytes()).hexdigest()[:12]
+    cache = Path(os.environ.get("E2E_CACHE") or OUT) / f"long-fixture-{key}"
+    out, truth_path = cache / "talking-long.mp4", cache / "truth.json"
+    if out.is_file() and truth_path.is_file():
+        return out, json.loads(truth_path.read_text())
+    cache.mkdir(parents=True, exist_ok=True)
+    m.face_fixture(fixture)  # ensures the hash-checked face photo exists
+    shutil.copyfile(fixture / "face.jpg", cache / "face.jpg")
+    name = "defleur-e2e-longtts-" + secrets.token_hex(4)
+    run("docker", "run", "-d", "--name", name, "-p", "127.0.0.1::8000", "--mount",
+        f"type=bind,source={hf_cache},target=/home/ubuntu/.cache/huggingface", speaches_image)
+    clips, truth, cursor = [], {"fillers": [], "pauses": [], "text": []}, 0.0
+    try:
+        base, deadline = None, time.monotonic() + 600
+        while time.monotonic() < deadline:
+            try:
+                base = "http://127.0.0.1:" + run("docker", "port", name, "8000").splitlines()[0].rsplit(":", 1)[1]
+                if http_call("GET", base + "/health", timeout=5)[0] == 200:
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+        http_call("POST", base + "/v1/models/" + e2e.TTS_MODEL, timeout=900)
+        for i, (kind, value) in enumerate(script):
+            path = f"part-{i:02d}.wav"
+            if kind == "speech":
+                body = json.dumps({"model": e2e.TTS_MODEL, "voice": "af_heart", "input": value, "response_format": "wav"}).encode()
+                raw = f"part-{i:02d}.tts.wav"
+                (cache / raw).write_bytes(http_call("POST", base + "/v1/audio/speech", body, {"Content-Type": "application/json"}, timeout=600)[1])
+                e2e.ff("ffmpeg", "-v", "error", "-y", "-i", raw, "-af",
+                       "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse",
+                       "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", path, cwd=cache)
+                (cache / raw).unlink()
+                truth["text"].append(value)
+            else:
+                e2e.ff("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", str(value), "-c:a", "pcm_s16le", path, cwd=cache)
+            dur = float(e2e.ff("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path, cwd=cache))
+            if kind == "speech" and value.strip().lower().rstrip(",") in ("um", "uh"):
+                truth["fillers"].append({"start_s": round(cursor, 3), "end_s": round(cursor + dur, 3)})
+            if kind == "gap":
+                truth["pauses"].append({"start_s": round(cursor, 3), "end_s": round(cursor + dur, 3)})
+            clips.append(path)
+            cursor += dur
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    truth["duration_s"] = round(cursor, 3)
+    # What a faithful edit should remove: each filler with its surrounding silence, and every pause >= 0.5 s, minus
+    # the app's 0.12 s handles on each side.
+    gaps = {round(g["start_s"], 3): g for g in truth["pauses"]}
+    exp = 0.0
+    for f in truth["fillers"]:
+        before = next((g for g in truth["pauses"] if abs(g["end_s"] - f["start_s"]) < 0.002), None)
+        after = next((g for g in truth["pauses"] if abs(g["start_s"] - f["end_s"]) < 0.002), None)
+        span = (f["end_s"] - f["start_s"]) + (before["end_s"] - before["start_s"] if before else 0) + (after["end_s"] - after["start_s"] if after else 0)
+        exp += span - 0.24
+        for g in (before, after):
+            if g:
+                gaps.pop(round(g["start_s"], 3), None)
+    exp += sum(g["end_s"] - g["start_s"] - 0.24 for g in gaps.values() if g["end_s"] - g["start_s"] >= 0.5)
+    truth["expected_removed_s_approx"] = round(exp, 2)
+    (cache / "list.txt").write_text("".join(f"file '{c}'\n" for c in clips))
+    e2e.ff("ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "speech.wav", cwd=cache)
+    graph = ("color=c=0x2b3440:s=1920x1080:r=30[bg];[0:v]scale=-2:880,format=yuv420p[p];"
+             "[p]scale=w='trunc(iw*(1+0.03*sin(t*0.7))/2)*2':h=-2:eval=frame[s];"
+             "[bg][s]overlay=x='560+60*sin(t*0.5)':y='120+15*sin(t*0.9)':shortest=1,format=yuv420p[v]")
+    e2e.ff("ffmpeg", "-v", "error", "-y", "-loop", "1", "-framerate", "30", "-i", "face.jpg", "-i", "speech.wav",
+           "-filter_complex", graph, "-map", "[v]", "-map", "1:a", "-shortest", "-c:v", "libx264", "-preset", "veryfast",
+           "-crf", "22", "-r", "30", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", out.name, cwd=cache)
+    for c in clips:
+        (cache / c).unlink()
+    os.chmod(out, 0o666)
+    truth_path.write_text(json.dumps(truth, indent=2))
+    return out, truth
 
 
 def _pcm(fixture, src):
@@ -205,7 +277,7 @@ async def flow(url, fixture, truth, report):
             assert caps["ready"] and caps["motion_ready"] and caps["browser"]["reachable"], caps
 
             up = await tool(s, "create_upload")
-            src = long_fixture(fixture, LONG) if LONG else m.face_fixture(fixture)
+            src = LONG_SRC["path"] if LONG else m.face_fixture(fixture)
             t0 = time.monotonic()
             project = m.curl_upload(up["curl"], src)
             pid = project["id"]
@@ -227,7 +299,7 @@ async def flow(url, fixture, truth, report):
             for sw in src_words:
                 if norm(sw["word"]) in lost:
                     cs = [c for c in cut["cuts_applied"] if c["start_s"] - 0.4 <= sw["end"] and sw["start"] <= c["end_s"] + 0.4]
-                    near.append({**sw, "cuts_within_0.4s": cs, "seam_s": round(sw["start"] % (truth["duration_s"]), 3)})
+                    near.append({**sw, "cuts_within_0.4s": cs})
             report["apply_cuts"] = {**{k: cut[k] for k in ("seconds_removed", "edited_duration_s", "kept_segments", "words_lost_vs_source",
                                                          "words_added_vs_source", "dialogue_gate", "cut_audit_pass")},
                                     "cuts_applied": len(cut["cuts_applied"]), "lost_word_occurrences": near[:60]}
@@ -241,6 +313,14 @@ async def flow(url, fixture, truth, report):
             for k in ("fillers_heard_in_edit_only", "fillers_in_source_only"):
                 if k in cut:
                     report["apply_cuts"][k] = cut[k]
+            if "cut_sound_check" in cut:
+                cs_ = cut["cut_sound_check"]
+                report["apply_cuts"]["cut_sound_check"] = {"pass": cs_["pass"], "failures": cs_["failures"][:10],
+                                                           "speech_level_dbfs": cs_["speech_level_dbfs"],
+                                                           "max_speech_like_s": max((r["speech_like_s"] for r in cs_["cuts"]), default=0)}
+            report["start_edit"]["untranscribed_sound_count"] = len(edit.get("untranscribed_sound") or [])
+            if LONG:
+                report["apply_cuts"]["expected_removed_s_approx"] = LONG_SRC["truth"]["expected_removed_s_approx"]
             if "--stop-after-cuts" in sys.argv:
                 report["timings_s"] = timings
                 return
@@ -270,8 +350,6 @@ async def flow(url, fixture, truth, report):
             out = subprocess.run(["sh", "-c", au["curl"].replace("/path/to/file", str(clip))], capture_output=True, text=True, timeout=300)
             assert out.returncode == 0, out.stderr
             plan = plan_for(words, duration)
-            if LONG:  # also exercise a second beat window? keep one beat; long runs measure resources
-                pass
             files = {"index.html": INDEX, "style.css": STYLE, "main.js": MAIN}
             sub = await tool(s, "submit_motion", {"project_id": pid, "files": files, "plan": plan})
             report["motion_plan"] = plan
@@ -338,6 +416,14 @@ async def flow(url, fixture, truth, report):
             if not LONG:
                 got = {norm(x["word"]) for x in words}
                 assert not (expected - got), sorted(expected - got)
+            else:
+                script_words = {norm(w) for t in LONG_SRC["truth"]["text"] for w in t.replace("-", " ").split()} - {"um"}
+                heard_src = {norm(x["word"].replace("-", " ")) for x in src_words} | {norm(p) for x in src_words for p in x["word"].split("-")}
+                heard_edit = {norm(x["word"]) for x in words} | {norm(p) for x in words for p in x["word"].split("-")}
+                report["script_coverage"] = {"script_content_words_unique": len(script_words),
+                                             "not_heard_in_source_asr": sorted(script_words - heard_src),
+                                             "heard_in_source_but_not_in_edit": sorted((script_words & heard_src) - heard_edit),
+                                             "basis": "unique normalized script words vs Transcriber ASR (independent of the app's alignment)"}
             mp4.unlink()
             report["timings_s"] = timings
             if deferred:  # long run: finish the render to measure resources, then still fail
@@ -427,6 +513,14 @@ def main():
         ready(cmds["b"], benv, "browser", 9222, "/json/version", 60)
         vbase = ready(cmds["v"], venv, "defleur-video", 8787, "/healthz", 60)
         fixture, truth = e2e.build_fixture(ts["image"], tdata)
+        if LONG:
+            t1 = time.monotonic()
+            LONG_SRC["path"], LONG_SRC["truth"] = long_fixture(fixture, ts["image"], tdata)
+            lt = LONG_SRC["truth"]
+            report["long_fixture"] = {"script": str(LONG_SCRIPT.relative_to(e2e.ROOT)), "duration_s": lt["duration_s"],
+                                      "fillers": len(lt["fillers"]), "pauses_ge_1s": sum(1 for g in lt["pauses"] if g["end_s"] - g["start_s"] >= 0.99),
+                                      "expected_removed_s_approx": lt["expected_removed_s_approx"],
+                                      "build_or_cache_s": round(time.monotonic() - t1, 1), "path": str(LONG_SRC["path"])}
         peaks = {"video": e2e.Peak(vcid), "browser": e2e.Peak(bcid)}
         for p in peaks.values():
             p.start()
