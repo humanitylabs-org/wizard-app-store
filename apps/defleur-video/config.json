@@ -3,15 +3,15 @@
   "id": "defleur-video",
   "wizard_type": "service",
   "available": true,
-  "short_desc": "Service: Hermes-operated video edit API with James DeFleur's audio/edit workflow (ASR via Transcriber, alignment, cut evidence, dialogue gate).",
+  "short_desc": "Service: Hermes-operated vertical-video editor running James DeFleur's full workflow (cuts, crops, motion graphics, captions).",
   "author": "Humanity Labs; workflow contract informed by Wizard Modules",
   "port": 8787,
   "categories": [
     "utilities"
   ],
   "description": "Testing release. HTTP API that Hermes (or any client) drives; no browser UI and no LLM calls. Bundles James DeFleur's original DeFleur Video workflow helpers and runs the audio/edit half: source probe and 48 kHz PCM, preset, preflight, speech-to-text via the separate Transcriber app (install it first), local stable-ts word alignment, sample-exact PCM assembly, per-edge waveform/spectrogram cut evidence and the dialogue audio gate. The older 9:16 preview endpoint still works. Face/crop audit, captions, final 1080x1920 encode, motion graphics and the delivery gate are not built yet. No token needed: keep it on your private network (e.g. Tailscale).",
-  "tipi_version": 6,
-  "version": "0.5.0-testing",
+  "tipi_version": 7,
+  "version": "0.6.0-testing",
   "source": "https://github.com/humanitylabs-org/wizard-app-store",
   "exposable": false,
   "no_gui": true,
@@ -32,6 +32,14 @@
       "hint": "Where the Transcriber app answers inside Runtipi. Leave the default if the Transcriber app is installed on this same server."
     },
     {
+      "type": "url",
+      "label": "Browser address (for motion graphics)",
+      "env_variable": "BROWSER_URL",
+      "required": false,
+      "default": "http://browser:9222",
+      "hint": "Where the shared Browser app answers inside Runtipi (DevTools port 9222 on the Runtipi network; the Browser app's own Runtipi port is 8793, loopback only). Only motion graphics need it; plain captioned renders work without it."
+    },
+    {
       "type": "text",
       "label": "Transcriber model",
       "env_variable": "TRANSCRIBER_MODEL",
@@ -39,5 +47,6 @@
       "default": "Systran/faster-whisper-small",
       "hint": "Must already be downloaded in the Transcriber app (its startup model)."
     }
-  ]
+  ],
+  "updated_at": 1791389660963
 }

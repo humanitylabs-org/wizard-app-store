@@ -4,11 +4,11 @@
 # faked on loopback here; the real Transcriber runs in scripts/e2e-video-audio.py.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-IMAGE=${VIDEO_IMAGE:-wizard-defleur-video:0.5.0-testing}
+IMAGE=${VIDEO_IMAGE:-wizard-defleur-video:0.6.0-testing}
 [ -n "${VIDEO_SKIP_BUILD:-}" ] || docker build -t "$IMAGE" "$ROOT"
 docker run --rm --network none --read-only --cap-drop ALL \
-  --security-opt no-new-privileges --cpus 2 --memory 1536m --memory-swap 1536m \
-  --pids-limit 64 --tmpfs /scratch:rw,noexec,nosuid,size=1024m,mode=1777 \
+  --security-opt no-new-privileges --memory 8g --memory-swap 8g \
+  --pids-limit 2048 --tmpfs /scratch:rw,noexec,nosuid,size=1024m,mode=1777 \
   -e TMPDIR=/scratch \
   --mount "type=bind,source=$ROOT/test_service.py,target=/app/test_service.py,readonly" \
   --entrypoint /usr/bin/python3 "$IMAGE" -c '

@@ -14,3 +14,30 @@ Everything else in images/defleur-video (service.py, workflow.py,
 transcriber.py, scan_windows.py, editing.py, client.py, tests and docs) is
 original to this app. The app does not modify James' scripts; it runs them with
 server-owned paths and records each script's SHA-256 in every job result.
+
+Adaptation of capture.cjs (0.6.0)
+The app ships James' skills/defleur-motion/scripts/capture.cjs unchanged
+(sha256 e09fc4625000dbde832900ef0b94c45a2fbbe56a22a97436f93f6a05e4a86b89) and
+runs a minimally adapted copy, capture/capture-remote.cjs (sha256
+d8d8e62b0bc490d59c1112673fdcd1e0e87d1d1d311b41ff104e16819ab9d2ce), installed at /opt/capture. The full unified diff is
+capture/capture-remote.diff (sha256 852d142506f6238a97d84f2605de768de6f9af0b768303797ec2971e4307b3b3). The
+author authorized small documented adaptations. Changes, and nothing else:
+- puppeteer.connect to the shared Browser app at BROWSER_URL (default
+  http://browser:9222; the name is resolved to an IP because Chrome rejects
+  non-IP Host headers) instead of puppeteer.launch of a local Chromium; the page
+  runs in its own browser context, which is closed (not the browser) at the end;
+- the project is served on the local address that reaches the browser, under a
+  per-capture random 192-bit path token; requests without the token get 403 and
+  the root containment check is kept;
+- request interception aborts every request outside that origin (data: and
+  blob: allowed) and records blocked URLs in capture-<mode>.json.
+Frame selection, the source-frame ledger, renderFrame/visualMode/
+captionSuppressed handling, screenshots, and the reverse-seek determinism check
+are James' code, unchanged.
+
+Third-party runtime for capture (installed from capture/package-lock.json):
+puppeteer-core 25.12.0 (Apache-2.0) and its dependencies (MIT/ISC/BSD/Apache).
+GSAP 3.15.0 (Webflow "Standard no-charge" license, https://gsap.com/standard-license:
+free including commercial use; not for building no-code visual animation tools
+competing with Webflow), copied unmodified as defleur/gsap.min.js into each
+capture project. Node.js 22 binary from the pinned node:22-bookworm-slim image (MIT).

@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import hashlib
 import workflow
+import motion
 import fcntl
 import hmac
 import json
@@ -27,25 +28,28 @@ import secrets
 from typing import cast
 from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.5.0-testing"
+VERSION = "0.6.0-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
-MAX_UPLOAD = 512 * 1024 * 1024
+MAX_UPLOAD = 8 * 1024 * 1024 * 1024
 MAX_PROJECTS = 8
 MAX_JOBS = 256
-MAX_DURATION = 300
+MAX_DURATION = 1200
+EDIT_PIXELS = 1920 * 1080   # editing resolution: larger sources (4K) are normalized down to 1080p, with provenance
 MAX_NATIVE_LOG = 256 * 1024
 MAX_STAGE_JSON = 1024 * 1024
-MAX_MCP_BODY = 4 * 1024 * 1024
+MAX_MCP_BODY = 8 * 1024 * 1024
+MAX_MOTION_JSON = 6 * 1024 * 1024
 MCP_PORT = int(os.environ.get("MCP_INTERNAL_PORT", "8788"))
 UPLOAD_TTL = 1800
-UPLOAD_SECONDS = 900
+NORMALIZE_THREADS = max(2, min(8, os.cpu_count() or 2))
+UPLOAD_SECONDS = 3600
 UPLOAD_TYPES = ("video/mp4", "video/quicktime", "application/octet-stream")
 COMMON_FPS = ["24000/1001", "24/1", "25/1", "30000/1001", "30/1", "50/1", "60000/1001", "60/1"]
 ID = re.compile(r"^[a-f0-9]{32}$")
 # Delivery is never approved by this app. Piece 1 supplies the audio/edit
 # stages (ASR, alignment, per-edge evidence, dialogue gate) as operator tools.
 GATES = ["coherent-thought/editorial-review (operator)", "audio-dialogue-lock (dialogue-gate stage, operator evidence)",
-         "fixed-per-setup-face-audit (face-crop stage, sampled frames)", "semantic-HTML-SVG-GSAP-motion (not built)",
+         "fixed-per-setup-face-audit (face-crop stage, sampled frames)", "semantic-HTML-SVG-GSAP-motion (motion-capture stage via the Browser app, operator-authored)",
          "burned-aligned-captions via caption_layer (final-render stage)", "1080x1920 encode via encode.py (final-render stage)",
          "phone-size-and-motion-review (operator)", "delivery-audio-receipt (delivery-gate stage)"]
 
@@ -72,7 +76,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
 UPLOAD_PAGE = ("""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DeFleur Video upload</title><style>body{font:16px system-ui,sans-serif;max-width:36rem;margin:2rem auto;padding:0 1rem}
 input,button{font:inherit;margin:.4rem 0}pre{white-space:pre-wrap;background:#f3f3f3;padding:.6rem}</style></head><body>
-<h1>Upload a video</h1><p>MP4 or MOV, up to 300 s and 512 MiB. HEVC or variable-frame-rate phone video is converted to H.264.</p>
+<h1>Upload a video</h1><p>MP4 or MOV, up to 20 minutes and 8 GiB, up to 4K. HEVC, variable-frame-rate or larger-than-1080p video is converted to 1080p H.264.</p>
 <form id="f"><input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov"><br>
 <input type="password" id="token" placeholder="API token (only if this app has one)" autocomplete="off" size="40"><br>
 <button type="submit">Upload</button></form><pre id="out" aria-live="polite"></pre>
@@ -241,8 +245,8 @@ def probe(source):
         raise Rejected("invalid source metadata") from exc
     if not math.isfinite(duration) or not 0 < duration <= MAX_DURATION:
         raise Rejected(f"source duration must be at most {MAX_DURATION} seconds")
-    if not 1 <= width <= 1920 or not 1 <= height <= 1920 or width * height > 2073600:
-        raise Rejected("source dimensions exceed preview budget")
+    if not 1 <= width <= 1920 or not 1 <= height <= 1920 or width * height > EDIT_PIXELS:
+        raise Rejected("source dimensions exceed the 1080p editing size (larger sources are normalized on upload)")
     if v.get("codec_name") != "h264" or a.get("codec_name") != "aac" or a.get("channels", 999) > 2:
         raise Rejected("preview supports H.264/AAC mono/stereo only")
     # Decode a real first frame, rather than trusting metadata/zero-exit alone.
@@ -378,14 +382,17 @@ def normalize_if_needed(path):
         reasons.append("HEVC video")
     if mode != "constant":
         reasons.append(f"{mode} frame rate")
+    big = int(v.get("width", 0)) * int(v.get("height", 0)) > EDIT_PIXELS or max(int(v.get("width", 0)), int(v.get("height", 0))) > 1920
+    if big:
+        reasons.append(f"{v.get('width')}x{v.get('height')} is larger than 1080p (normalized down for editing)")
     if not reasons:
-        return None  # H.264 CFR: keep the original bytes untouched
+        return None  # H.264 CFR up to 1080p: keep the original bytes untouched
     if a.get("codec_name") != "aac" or a.get("channels", 9) > 2:
         reasons.append(f"audio {a.get('codec_name')} x{a.get('channels')}")
     if len(streams) != 2:
         reasons.append(f"{len(streams)} streams (keeping one video and one audio)")
-    if int(v.get("width", 0)) * int(v.get("height", 0)) > 2073600 or max(int(v.get("width", 0)), int(v.get("height", 0))) > 1920:
-        reasons.append("larger than 1920 px / 1080p (scaled down)")
+    if __import__("shutil").disk_usage(path.parent).free < path.stat().st_size * 2 + 1024**3:
+        raise Rejected("not enough free disk to convert this upload (needs about 2x its size plus 1 GiB)")
     if not NORMALIZE_LOCK.acquire(blocking=False):
         raise Rejected("another upload is being converted; retry in a few minutes")
     try:
@@ -403,8 +410,9 @@ def normalize_if_needed(path):
         native(["/usr/bin/ffmpeg", "-v", "error", "-nostdin", *loose_input_args(), "-map", "0:v:0", "-map", "0:a:0",
                 "-vf", scale, "-fps_mode", "cfr", "-r", fps, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", str(min(2, int(a.get("channels") or 2))),
-                "-map_metadata", "-1", "-movflags", "+faststart", "-threads", "2", "-filter_threads", "1", "-y", out],
-               path, timeout=1200, cpu=2400, file_limit=MAX_UPLOAD * 2, as_limit=3 * 1024**3, explain=True, threads="2")
+                "-map_metadata", "-1", "-movflags", "+faststart", "-threads", str(NORMALIZE_THREADS), "-filter_threads", "2", "-y", out],
+               path, timeout=7200, cpu=7200 * NORMALIZE_THREADS, file_limit=MAX_UPLOAD * 2, as_limit=8 * 1024**3, explain=True,
+               threads=str(NORMALIZE_THREADS))
         original = {"sha256": digest(path), "bytes": path.stat().st_size, "video_codec": v["codec_name"],
                     "width": int(v.get("width", 0)), "height": int(v.get("height", 0)),
                     "frame_rate_mode": mode, "r_frame_rate": rate, "avg_frame_rate": v.get("avg_frame_rate"),
@@ -413,7 +421,8 @@ def normalize_if_needed(path):
         return {"original": original, "normalization": {
             "reasons": reasons, "tool": "ffmpeg libx264 veryfast crf 18 + AAC 192k 48 kHz", "fps": fps, "frame_rate_mode": "constant",
             "seconds": round(time.monotonic() - started, 2),
-            "note": "The normalized H.264 CFR file is the edit source; the original bytes are not kept, only their SHA-256."}}
+            "scaled_to": scale.split(",")[0].removeprefix("scale="),
+            "note": "The normalized H.264 CFR file (at most 1080p) is the edit source; the original bytes are not kept, only their SHA-256."}}
     finally:
         path.with_name(path.name + ".norm.mp4").unlink(missing_ok=True)
         NORMALIZE_LOCK.release()
@@ -679,6 +688,7 @@ class VideoServer(ThreadingHTTPServer):
     token: str
     store: Store
     uploads: dict
+    asset_uploads: dict
     uploads_lock: threading.Lock
 
 
@@ -790,6 +800,21 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("Content-Type", "").split(";")[0].strip() not in UPLOAD_TYPES:
                 raise Rejected("Content-Type must be video/mp4 (curl: -H 'Content-Type: video/mp4')")
             return self.send(201, server.store.create(self.rfile, self.length(MAX_UPLOAD)))
+        if method == "POST" and len(parts) == 4 and parts[1:3] == ["v1", "asset-uploads"]:
+            # One-time capability URL from create_asset_upload: names one project and one composition path.
+            with server.uploads_lock:
+                now = time.time()
+                for k in [k for k, v in server.asset_uploads.items() if v[2] < now]:
+                    del server.asset_uploads[k]
+                key = next((k for k in server.asset_uploads if hmac.compare_digest(parts[3], k)), None)
+                grant = server.asset_uploads.pop(key) if key else None
+            if grant is None:
+                return self.send(403, {"error": "asset upload URL unknown, used or expired; ask for a new one (create_asset_upload)"})
+            project, rel, _ = grant
+            server.store.project(project)
+            n = self.length(motion.MAX_ASSET.get(Path(rel).suffix, 0))
+            return self.send(201, {"project_id": project, **motion.store_asset(server.store.path(project), rel, self.rfile, n),
+                                   "motion": {k: v for k, v in motion.status(server.store.path(project)).items() if k != "plan"}})
         if not self.authorize():
             return
         if self.path == "/mcp" or self.path.startswith("/mcp?"):
@@ -813,7 +838,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and self.path == "/v1/capabilities":
             return self.send(200, {"version": VERSION, "upstream_commit": UPSTREAM,
                 "operations": ["upload_mp4", "workflow_stages", "read_workflow_docs", "submit_edit_plan_preview", "persist_transcript_decisions", "burn_timed_captions", "fixed_protected_crop", "cut_edge_review_artifacts", "poll_job", "download_preview", "delete_project"],
-                "limits": {"upload_bytes": MAX_UPLOAD, "duration_s": MAX_DURATION, "projects": MAX_PROJECTS, "jobs": MAX_JOBS, "workers": 1, "decisions_per_project": 16, "json_bytes": MAX_STAGE_JSON, "preview_job_wall_seconds": 180},
+                "limits": {"upload_bytes": MAX_UPLOAD, "duration_s": MAX_DURATION, "output_duration_s": workflow.MAX_OUTPUT_S, "editing_resolution": "up to 1920x1080 (4K and other larger sources are normalized down on upload)", "motion_inline_json_bytes": MAX_MOTION_JSON, "motion_asset_bytes": {k: v for k, v in motion.MAX_ASSET.items()}, "projects": MAX_PROJECTS, "jobs": MAX_JOBS, "workers": 1, "decisions_per_project": 16, "json_bytes": MAX_STAGE_JSON, "preview_job_wall_seconds": 180},
                 "workflow": workflow.capabilities(),
                 "ai_calls": False, "delivery_approval": False, "missing_delivery_gates": GATES})
         if method == "POST" and len(parts) == 6 and parts[1:3] == ["v1", "projects"] and parts[4] == "stages":
@@ -825,6 +850,42 @@ class Handler(BaseHTTPRequestHandler):
                 raise Rejected("truncated JSON")
             value = parse_json(data)
             return self.send(202, store.submit_stage(parts[3], parts[5], value))
+        if len(parts) == 5 and parts[1:3] == ["v1", "projects"] and parts[4] in ("motion", "asset-uploads"):
+            store.project(parts[3])
+            folder = store.path(parts[3])
+            if method == "GET" and parts[4] == "motion":
+                return self.send(200, motion.status(folder))
+            if method == "DELETE" and parts[4] == "motion":
+                motion.clear(folder)
+                return self.send(200, motion.status(folder))
+            if method == "POST":
+                if self.headers.get("Content-Type") != "application/json":
+                    raise Rejected("Content-Type must be application/json")
+                n = self.length(MAX_MOTION_JSON)
+                data = self.rfile.read(n)
+                if len(data) != n:
+                    raise Rejected("truncated JSON")
+                value = parse_json(data)
+                if parts[4] == "asset-uploads":
+                    if not isinstance(value, dict) or set(value) != {"path"}:
+                        raise Rejected("body must be {\"path\": \"assets/name.mp4\"}")
+                    rel = motion.check_path(value["path"])
+                    if Path(rel).suffix not in motion.BINARY_KINDS:
+                        raise Rejected("asset uploads are for .png/.jpg/.jpeg/.webp/.woff2/.mp4 files")
+                    token = secrets.token_urlsafe(32)
+                    with server.uploads_lock:
+                        if len(server.asset_uploads) >= 64:
+                            server.asset_uploads.pop(min(server.asset_uploads, key=lambda k: server.asset_uploads[k][2]))
+                        server.asset_uploads[token] = (parts[3], rel, time.time() + UPLOAD_TTL)
+                    return self.send(201, {"path": "/v1/asset-uploads/" + token, "asset_path": rel, "expires_in_s": UPLOAD_TTL,
+                                           "max_bytes": motion.MAX_ASSET[Path(rel).suffix], "one_time": True})
+                if not isinstance(value, dict) or set(value) - {"files", "plan", "replace"} or "plan" not in value:
+                    raise Rejected("body must be {files: {path: text|{base64}}, plan: {...}, replace?: bool}")
+                with store.connect() as c:
+                    if c.execute("SELECT 1 FROM jobs WHERE project=? AND state IN ('queued','running')", (parts[3],)).fetchone():
+                        raise Rejected("a job is running for this project; wait before changing the motion composition")
+                # The edited duration is checked again at capture time against the locked timeline.
+                return self.send(201, motion.submit(folder, value.get("files", {}), value["plan"], None, bool(value.get("replace", True))))
         if method == "GET" and self.path == "/v1/workflow/docs":
             return self.send(200, {"docs": sorted(workflow.DOCS)})
         if method == "GET" and len(parts) == 5 and parts[1:4] == ["v1", "workflow", "docs"]:
@@ -906,6 +967,7 @@ def make_server(root, token, host="127.0.0.1", port=8787):
     server = VideoServer((host, port), Handler)
     server.token = token
     server.uploads, server.uploads_lock = {}, threading.Lock()
+    server.asset_uploads = {}
     server.store = Store(root)
     return server
 

@@ -735,5 +735,87 @@ class MediaTests(unittest.TestCase):
                                                      {"r_frame_rate": project["normalization"]["fps"]})[0], "constant")
             self.request("DELETE", f"/v1/projects/{project['id']}")
 
+    def test_motion_submission_paths_plan_and_asset_upload(self):
+        import motion
+        import workflow
+        status, project = self.request("POST", "/v1/projects", self.source.read_bytes(), "video/mp4")
+        self.assertEqual(status, 201, project)
+        pid = project["id"]
+        beat = {"start": 0.5, "end": 1.5, "spoken_anchor": "a", "viewer_inference": "b", "visual_family": "diagram",
+                "state_before": "c", "state_after": "d", "causal_action": "e", "caption_treatment": "suppress", "speaker_return": "f"}
+        index = ('<img id="live"><script src="defleur/ledger.js"></script><script src="defleur/gsap.min.js"></script>'
+                 '<script>window.renderFrame = (t) => {};</script>')
+        post = lambda body: self.request("POST", f"/v1/projects/{pid}/motion", json.dumps(body).encode(), "application/json")
+        good = {"files": {"index.html": index, "main.css": "body{margin:0}"}, "plan": {"beats": [beat]}}
+        for bad_path in ("../x.html", "/etc/passwd", "defleur/ledger.js", "a/b/c/d/e.js", "x.exe", "Index.html", "locked-timeline.json"):
+            status, err = post({**good, "files": {**good["files"], bad_path: "x"}})
+            self.assertEqual(status, 422, (bad_path, err))
+        status, err = post({**good, "files": {"index.html": index.replace("renderFrame", "render")}})
+        self.assertEqual(status, 422)
+        self.assertIn("renderFrame", err["error"])
+        status, err = post({**good, "files": {"index.html": index + '<script src="https://cdn.example/gsap.js"></script>'}})
+        self.assertEqual(status, 422)
+        status, err = post({**good, "plan": {"beats": [{**beat, "causal_action": ""}]}})
+        self.assertEqual(status, 422)
+        status, err = post({**good, "plan": {"beats": [{**beat, "caption_treatment": "show"}], "caption_suppress": [{"start": 0.6, "end": 1.0, "reason": "r"}]}})
+        self.assertEqual(status, 422)  # James' encode.py rule: suppression only inside a 'suppress' beat
+        status, err = post({**good, "files": {**good["files"], "assets/x.png": {"base64": "aGVsbG8="}}})
+        self.assertEqual(status, 422)  # not a real PNG
+        status, err = post({**good, "plan": {"beats": [beat], "inserts": [{"start": 2, "end": 3, "asset": "assets/missing.mp4", "reason": "r"}]}})
+        self.assertEqual(status, 422)
+        status, st = post({**good, "plan": {"beats": [beat], "caption_suppress": [{"start": 0.6, "end": 1.0, "reason": "chart says it"}]}})
+        self.assertEqual(status, 201, st)
+        self.assertTrue(st["submitted"])
+        first = st["composition_sha256"]
+        # Asset upload: one-time URL bound to one project path; bytes checked by magic.
+        status, ticket = self.request("POST", f"/v1/projects/{pid}/asset-uploads", json.dumps({"path": "assets/clip.mp4"}).encode(), "application/json")
+        self.assertEqual(status, 201, ticket)
+        status, err = self.request("POST", ticket["path"], b"\x00" * 64, "application/octet-stream", auth=False)
+        self.assertEqual(status, 422)  # not an MP4; ticket consumed
+        status, ticket = self.request("POST", f"/v1/projects/{pid}/asset-uploads", json.dumps({"path": "assets/clip.mp4"}).encode(), "application/json")
+        status, up = self.request("POST", ticket["path"], self.source.read_bytes(), "application/octet-stream", auth=False)
+        self.assertEqual(status, 201, up)
+        status, again = self.request("POST", ticket["path"], self.source.read_bytes(), "application/octet-stream", auth=False)
+        self.assertEqual(status, 403)
+        status, err = self.request("POST", f"/v1/projects/{pid}/asset-uploads", json.dumps({"path": "main.js"}).encode(), "application/json")
+        self.assertEqual(status, 422)
+        plan = {"beats": [beat], "inserts": [{"start": 2.0, "end": 3.0, "asset": "assets/clip.mp4", "fit": "cover", "reason": "B-roll"}]}
+        status, st = post({**good, "plan": plan})
+        self.assertEqual(status, 201, st)
+        self.assertIn("assets/clip.mp4", [f["path"] for f in st["files"]])  # uploaded media survives a resubmission
+        self.assertNotEqual(st["composition_sha256"], first)
+        # Base-frame map: inserts replace source frames with insert ids inside their window only.
+        edit = {"fps": "24/1", "frames": 96, "duration": 4.0, "source_frame_indices": list(range(96))}
+        ids, windows = motion.base_map(edit, plan)
+        self.assertEqual(ids[47], 47)
+        self.assertTrue(all(ids[f] >= motion.INSERT_BASE for f in range(48, 72)))
+        self.assertEqual(ids[72], 72)
+        self.assertEqual(windows[0]["frames"], 24)
+        js = motion.ledger_js(edit, plan, ids, (1080, 1920))
+        self.assertIn("window.sourceFrameForOutputFrame", js)
+        self.assertEqual(workflow._proof_indices(96, 24.0, 4.0, plan)[:3], [0, 6, 12])
+        status, st = self.request("DELETE", f"/v1/projects/{pid}/motion")
+        self.assertFalse(st["submitted"])
+        self.request("DELETE", f"/v1/projects/{pid}")
+
+    def test_capabilities_report_browser_and_resources(self):
+        os.environ["BROWSER_URL"] = "http://127.0.0.1:9"
+        try:
+            status, caps = self.request("GET", "/v1/capabilities")
+        finally:
+            del os.environ["BROWSER_URL"]
+        self.assertEqual(status, 200)
+        self.assertEqual(caps["version"], "0.6.0-testing")
+        b = caps["workflow"]["motion"]["browser"]
+        self.assertFalse(b["reachable"])
+        self.assertIn("Browser app", b["fix"])
+        self.assertTrue(caps["workflow"]["motion"]["gsap_present"])
+        res = caps["workflow"]["resources"]
+        self.assertGreater(res["host_ram_bytes"], 0)
+        self.assertGreater(res["data_disk_free_bytes"], 0)
+        self.assertIn("per_job_estimates", res)
+        self.assertGreaterEqual(caps["limits"]["duration_s"], 900)
+        self.assertGreaterEqual(caps["limits"]["output_duration_s"], 300)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

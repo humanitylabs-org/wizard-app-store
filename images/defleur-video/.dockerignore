@@ -9,6 +9,12 @@
 !mcp_server.py
 !face_audit.py
 !final_render.py
+!motion.py
+!motion_frames.py
+!capture/package.json
+!capture/package-lock.json
+!capture/capture-remote.cjs
+!capture/capture-remote.diff
 !NOTICE
 !requirements.lock
 !defleur

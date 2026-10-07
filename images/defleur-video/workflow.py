@@ -19,6 +19,7 @@ import time
 import wave
 
 from editing import Rejected
+import motion
 import transcriber
 
 UPSTREAM_ROOT = Path(os.environ.get("DEFLEUR_ROOT") or ("/opt/defleur" if Path("/opt/defleur").is_dir() else Path(__file__).with_name("defleur")))
@@ -29,6 +30,16 @@ FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 FACE_MODEL = Path(os.environ.get("VIDEO_FACE_MODEL", "/opt/models/yunet.onnx"))
 FACE_MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"  # opencv_zoo YuNet 2023mar (MIT)
 CANVAS = (1080, 1920)
+CAPTURE_DIR = Path(os.environ.get("VIDEO_CAPTURE_DIR") or ("/opt/capture" if Path("/opt/capture").is_dir() else APP_ROOT / "capture"))
+CAPTURE_SCRIPT = CAPTURE_DIR / "capture-remote.cjs"
+GSAP = CAPTURE_DIR / "node_modules" / "gsap" / "dist" / "gsap.min.js"
+CAPTURE_ADAPTED_SHA256 = "d8d8e62b0bc490d59c1112673fdcd1e0e87d1d1d311b41ff104e16819ab9d2ce"  # NOTICE: diff of James' capture.cjs
+NODE = os.environ.get("VIDEO_NODE", "/usr/bin/node")
+DEFAULT_BROWSER_URL = "http://browser:9222"
+MAX_OUTPUT_S = float(os.environ.get("VIDEO_MAX_OUTPUT_S", "360"))
+FRAME_BYTES = 520_000          # measured ~0.3-0.45 MB per 1080x1920 q95 JPEG; generous
+BROWSER_HINT = ("Install the Browser app from the Wizard App Store on the same Runtipi host (reachable as "
+                "http://browser:9222), or set BROWSER_URL in this app's settings.")
 
 # Exact upstream bytes (commit 30768288eb1308b18216a5df5eb4648fbce3e55b). Verified before every run.
 HELPERS = {
@@ -43,6 +54,7 @@ HELPERS = {
     "assemble_pcm": ("skills/defleur-audio/scripts/assemble_pcm.py", "96731e90aac18c4209e4408e0469751e5e8029fe7cb62a4f6795d1e51bde7c1e"),
     "audio_gate": ("skills/defleur-audio/scripts/audio_gate.py", "aa2d5965b0cc8f19103f42899cfe3be09c6b9760c3e16a2717bf4441a81431ce"),
     "encode": ("skills/defleur-motion/scripts/encode.py", "1b431ca6012804d4add45841437a0737038dc36d7318e06d4975bcbddddcb76d"),
+    "capture": ("skills/defleur-motion/scripts/capture.cjs", "e09fc4625000dbde832900ef0b94c45a2fbbe56a22a97436f93f6a05e4a86b89"),
     "caption_layer": ("skills/defleur-motion/scripts/caption_layer.py", "b096a9d36f04ef71ba3779e5bc9acffaa88412d7fbcf8d209c4188190ac413fe"),
     "test_audio_gate": ("skills/defleur-audio/scripts/test_audio_gate.py", "09bba3c7ed527149aba5d9d034e8d8fe210ce230eacf9c961302c01b2707b177"),
 }
@@ -63,20 +75,21 @@ ID = re.compile(r"^[a-f0-9]{32}$")
 
 # stage -> (wall seconds, description)
 STAGES = {
-    "source-audio": (300, "probe_source.py + 48 kHz PCM s16 source.wav decode"),
+    "source-audio": (1800, "probe_source.py + 48 kHz PCM s16 source.wav decode"),
     "resolve-preset": (60, "preset.py over neutral defaults + client owner/project JSON"),
     "preflight": (60, "preflight.py dependency/language check"),
-    "asr": (1800, "Transcriber app -> asr.py receipt schema"),
-    "align": (1800, "align.py (stable-ts, local CPU)"),
+    "asr": (5400, "Transcriber app -> asr.py receipt schema"),
+    "align": (5400, "align.py (stable-ts, local CPU)"),
     "acoustic-ctc": (300, "acoustic_ctc_window.py (needs VIDEO_CTC_MODEL_DIR)"),
-    "pcm-assemble": (300, "assemble_pcm.py -> edited.wav + edit-map.json"),
-    "speech-cut-audit": (600, "speech_cut_audit.py per-edge waveform + spectrogram + keep/drop coverage"),
-    "acoustic-scan": (600, "scan_windows.py full-coverage edited windows (app-original)"),
-    "dialogue-gate": (300, "audio-gate.json receipt + audio_gate.py --stage dialogue"),
+    "pcm-assemble": (900, "assemble_pcm.py -> edited.wav + edit-map.json"),
+    "speech-cut-audit": (2400, "speech_cut_audit.py per-edge waveform + spectrogram + keep/drop coverage"),
+    "acoustic-scan": (2400, "scan_windows.py full-coverage edited windows (app-original)"),
+    "dialogue-gate": (900, "audio-gate.json receipt + audio_gate.py --stage dialogue"),
     "validate-project": (60, "validate_project.py on client planning records"),
-    "face-crop": (600, "face_audit.py (app-original, OpenCV YuNet) -> fixed per-setup crop-ledger.json + face audit receipts"),
-    "final-render": (3600, "final_render.py live frames (no motion layer) + James' caption_layer.py/encode.py + encode.py --verify-only + decoded-pixel checks"),
-    "delivery-gate": (300, "delivery audio-gate.json receipt + audio_gate.py --stage delivery"),
+    "face-crop": (1800, "face_audit.py (app-original, OpenCV YuNet) -> fixed per-setup crop-ledger.json + face audit receipts; optional per-segment speaker targets"),
+    "motion-capture": (3600, "James' capture.cjs (adapted: shared Browser app) smoke/proof capture of the submitted HTML/SVG/GSAP composition + contact sheet"),
+    "final-render": (14400, "live frames (final_render.py) or full motion capture (capture.cjs via the Browser app) + James' caption_layer.py/encode.py + encode.py --verify-only + decoded-pixel checks"),
+    "delivery-gate": (900, "delivery audio-gate.json receipt + audio_gate.py --stage delivery"),
 }
 
 
@@ -155,9 +168,82 @@ def capabilities(probe_transcriber=True):
         "piece_1_complete": True,
         "piece_2_complete": True,
         "face_model": {"path": str(FACE_MODEL), "sha256": FACE_MODEL_SHA256, "present": FACE_MODEL.is_file()},
-        "not_built_yet": ["Chromium/GSAP motion capture (capture.cjs)", "fullscreen inserts / B-roll"],
+        "piece_3_complete": True,
+        "motion": {"capture": "James' capture.cjs adapted to the shared Browser app (see NOTICE)", "capture_sha256": sha(CAPTURE_SCRIPT) if CAPTURE_SCRIPT.is_file() else None,
+                   "gsap": "defleur/gsap.min.js (GSAP 3.15.0, vendored; Webflow standard no-charge license)", "gsap_present": GSAP.is_file(),
+                   "browser": browser_status() if probe_transcriber else {"probe": "skipped"}},
+        "resources": resources(),
+        "not_built_yet": [],
         "provider_calls": False,
     }
+
+
+def browser_url():
+    from urllib.parse import urlsplit
+    url = os.environ.get("BROWSER_URL", "").strip() or DEFAULT_BROWSER_URL
+    p = urlsplit(url)
+    if p.scheme not in ("http", "ws") or not p.hostname or p.username or p.password or p.query or p.fragment or p.path not in ("", "/"):
+        raise Rejected("BROWSER_URL must look like http://browser:9222 (no path, credentials or query)")
+    return f"http://{p.hostname}:{p.port or 80}"
+
+
+def browser_status(timeout=4):
+    """Is the shared Browser app reachable? (Chrome needs an IP Host header, so resolve first.)"""
+    import socket
+    import urllib.request
+    try:
+        url = browser_url()
+    except Rejected as e:
+        return {"reachable": False, "url": os.environ.get("BROWSER_URL", ""), "error": str(e), "fix": "Set BROWSER_URL to http://browser:9222 in this app's settings."}
+    from urllib.parse import urlsplit
+    p = urlsplit(url)
+    try:
+        ip = socket.getaddrinfo(p.hostname, p.port, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+        with urllib.request.urlopen(f"http://{ip}:{p.port}/json/version", timeout=timeout) as r:
+            v = json.loads(r.read())
+        return {"reachable": True, "url": url, "browser": v.get("Browser"), "protocol": v.get("Protocol-Version")}
+    except Exception as e:  # noqa: BLE001 - report any failure plainly
+        return {"reachable": False, "url": url, "error": f"{type(e).__name__}: {str(e)[:160]}",
+                "fix": BROWSER_HINT, "needed_for": "motion graphics only; render_final without a motion composition works without it"}
+
+
+def _cgroup(name):
+    try:
+        v = Path("/sys/fs/cgroup/" + name).read_text().strip()
+        return None if v == "max" else int(v)
+    except (OSError, ValueError):
+        return None
+
+
+def resources():
+    mem = {}
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            k, v = line.split(":", 1)
+            if k in ("MemTotal", "MemAvailable"):
+                mem[k] = int(v.split()[0]) * 1024
+    except OSError:
+        pass
+    data = Path(os.environ.get("VIDEO_DATA_DIR", "/data"))
+    disk = shutil.disk_usage(data if data.is_dir() else "/")
+    return {"host_ram_bytes": mem.get("MemTotal"), "host_ram_available_bytes": mem.get("MemAvailable"),
+            "app_memory_limit_bytes": _cgroup("memory.max"), "app_memory_in_use_bytes": _cgroup("memory.current"),
+            "cpus": os.cpu_count(), "data_disk_free_bytes": disk.free, "data_disk_total_bytes": disk.total,
+            "per_job_estimates": {
+                "final_render_disk_bytes_per_output_second_at_30fps": 30 * FRAME_BYTES * 2,
+                "final_render_disk_bytes_5min_output_30fps": int(300 * 30 * FRAME_BYTES * 2 + 1024**3),
+                "memory_peak_note": "Measured app peak on a 3-minute 1080p source is reported in RELEASE.md; jobs check free memory and disk before starting.",
+                "upload_normalize_disk": "about 2x the upload size while converting HEVC/VFR/4K"}}
+
+
+def ensure_resources(frames, label, memory_bytes=1536 * 1024**2):
+    need = frames * FRAME_BYTES * 2 + 1024**3
+    free = shutil.disk_usage(Path(os.environ.get("VIDEO_DATA_DIR", "/data")) if Path(os.environ.get("VIDEO_DATA_DIR", "/data")).is_dir() else "/").free
+    if free < need:
+        raise Rejected(f"{label} needs about {need // 1024**2} MiB free disk for {frames} frames; {free // 1024**2} MiB free. Delete old projects (delete_project) or free disk.")
+    limit, used = _cgroup("memory.max"), _cgroup("memory.current")
+    if limit and used is not None and limit - used < memory_bytes:
+        raise Rejected(f"{label} needs about {memory_bytes // 1024**2} MiB of free app memory; {(limit - used) // 1024**2} MiB free under the app limit. Wait for other jobs or raise the app memory limit.")
 
 
 # ---------- validation ----------
@@ -200,6 +286,29 @@ def _segments(rows, duration):
         _text(row["reason"], "segment reason", 1000)
         end = stop
     return rows
+
+
+def _framing(value, segments):
+    _obj(value, set(), {"targets", "new_setup_at"})
+    targets = value.get("targets", {})
+    if not isinstance(targets, dict) or len(targets) > 400:
+        raise Rejected("framing.targets must map kept-segment index -> largest|left|right|center")
+    for k, v in targets.items():
+        if not str(k).isdigit() or not 0 <= int(k) < segments or v not in ("largest", "left", "right", "center"):
+            raise Rejected(f"framing.targets: segment index 0..{segments - 1} -> largest|left|right|center")
+    breaks = value.get("new_setup_at", [])
+    if not isinstance(breaks, list) or any(type(b) is not int or not 0 < b < segments for b in breaks):
+        raise Rejected(f"framing.new_setup_at must list kept-segment indexes 1..{segments - 1}")
+
+
+def _render_refs(value, lookup):
+    lookup(value["assemble_job"], {"pcm-assemble"})
+    crop, _ = lookup(value["crop_job"], {"face-crop"})
+    asr, _ = lookup(value["edited_asr_job"], {"asr"})
+    if crop["result"]["summary"]["assemble_job"] != value["assemble_job"] or asr["result"]["summary"]["audio_job"] != value["assemble_job"]:
+        raise Rejected("crop_job and edited_asr_job must both come from this assemble_job")
+    if "preset_job" in value:
+        lookup(value["preset_job"], {"resolve-preset"})
 
 
 def validate(stage, value, metadata, lookup):
@@ -304,17 +413,23 @@ def validate(stage, value, metadata, lookup):
                 raise Rejected("reviewed edge needs integer segment, edge start|end, decision")
             _text(edge["findings"], "edge findings", 2000, required=False)
     elif stage == "face-crop":
-        _obj(value, {"assemble_job"})
-        lookup(value["assemble_job"], {"pcm-assemble"})
+        _obj(value, {"assemble_job"}, {"framing"})
+        asm, _ = lookup(value["assemble_job"], {"pcm-assemble"})
+        if "framing" in value:
+            _framing(value["framing"], asm["result"]["summary"]["segments"])
+    elif stage == "motion-capture":
+        _obj(value, {"assemble_job", "crop_job", "edited_asr_job", "mode", "composition_sha256"})
+        _render_refs(value, lookup)
+        if value["mode"] not in ("smoke", "proof"):
+            raise Rejected("motion-capture mode must be smoke or proof (full capture runs inside final-render)")
     elif stage == "final-render":
-        _obj(value, {"assemble_job", "crop_job", "edited_asr_job"}, {"preset_job"})
-        assemble, _ = lookup(value["assemble_job"], {"pcm-assemble"})
-        crop, _ = lookup(value["crop_job"], {"face-crop"})
-        asr, _ = lookup(value["edited_asr_job"], {"asr"})
-        if crop["result"]["summary"]["assemble_job"] != value["assemble_job"] or asr["result"]["summary"]["audio_job"] != value["assemble_job"]:
-            raise Rejected("crop_job and edited_asr_job must both come from this assemble_job")
-        if "preset_job" in value:
-            lookup(value["preset_job"], {"resolve-preset"})
+        _obj(value, {"assemble_job", "crop_job", "edited_asr_job"}, {"preset_job", "proof_job"})
+        _render_refs(value, lookup)
+        if "proof_job" in value:
+            proof, _ = lookup(value["proof_job"], {"motion-capture"})
+            ps = proof["result"]["summary"]
+            if ps["mode"] != "proof" or not ps["pass"] or ps["crop_job"] != value["crop_job"] or ps["assemble_job"] != value["assemble_job"]:
+                raise Rejected("proof_job must be a passing proof capture of this assemble_job and crop_job")
     elif stage == "delivery-gate":
         _obj(value, {"render_job", "final_asr_job", "final_scan_job", "dialogue_gate_job"}, {"acoustic_review"})
         render, _ = lookup(value["render_job"], {"final-render"})
@@ -451,7 +566,7 @@ def _resolve_preset(ctx, value, source, metadata):
 
 EXPLAIN_MISSING = {
     "faster_whisper": "Replaced by the shared Transcriber app (asr stage); not bundled by design.",
-    "node": "Needed only for motion capture (capture.cjs, piece 3, not built yet).",
+    "node": "Bundled for motion capture (capture.cjs via the shared Browser app); preflight's check looks for it on PATH only.",
 }
 
 
@@ -687,8 +802,12 @@ def _face_crop(ctx, value, source, metadata):
     defaults = json.loads((UPSTREAM_ROOT / DEFAULTS[0]).read_text())
     top = int(defaults["caption"]["safe_rect"][1])
     ctx.used["yunet.onnx (opencv_zoo f12e127, MIT)"] = FACE_MODEL_SHA256
+    extra = []
+    if value.get("framing"):
+        ctx.write("framing.json", value["framing"])
+        extra = ["--framing", ctx.root / "framing.json"]
     ctx.app("face_audit.py", [source, edit_map, ctx.root, "--model", model, "--canvas", f"{CANVAS[0]}x{CANVAS[1]}",
-                              "--caption-top", str(top)], timeout=580, cpu=1200, as_limit=4 * 1024**3, nofile=128,
+                              "--caption-top", str(top), *extra], timeout=1780, cpu=3600, as_limit=4 * 1024**3, nofile=128,
             file_limit=64 * 1024**2, threads="2")
     audit = json.loads((ctx.root / "face-audit.json").read_text())
     return {"assemble_job": value["assemble_job"], "pass": audit["pass"], "setups": audit["setups"], "flags": audit["flags"],
@@ -717,11 +836,12 @@ def _locked_words(asr_words, duration):
 
 def _final_render(ctx, value, source, metadata):
     root = ctx.root
-    free = shutil.disk_usage(root.parent).free
     asm, _ = ctx.lookup(value["assemble_job"], {"pcm-assemble"})
     frames = int(asm["result"]["summary"]["frames"])
-    if free < frames * 450_000 + 512 * 1024**2:
-        raise Rejected(f"final-render needs about {(frames * 450_000) // 1024**2 + 512} MiB free disk for {frames} frames")
+    if float(asm["result"]["summary"]["duration_s"]) > MAX_OUTPUT_S:
+        raise Rejected(f"edited video is {asm['result']['summary']['duration_s']:.0f} s; the output limit is {MAX_OUTPUT_S:.0f} s")
+    use_motion = "proof_job" in value
+    ensure_resources(frames * (2 if use_motion else 1), "final-render", memory_bytes=(2560 if use_motion else 1536) * 1024**2)
     edit_map, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edit-map.json", "edit-map.json")
     ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edited.wav", "edited.wav")
     ctx.ref(value["assemble_job"], {"pcm-assemble"}, "source.wav", "source.wav")
@@ -738,22 +858,52 @@ def _final_render(ctx, value, source, metadata):
                                        "canvas": list(CANVAS), "words": words, "transcript": " ".join(w["word"] for w in words),
                                        "word_source": "Transcriber ASR of the edited audio (apply_cuts' edited-asr job)",
                                        "timing_adjustments": adjusted})
-    # No motion layer (piece 3): an explicit empty plan, so encode.py's suppression check has nothing to allow.
-    ctx.write("visual-plan.json", {"beats": [], "caption_suppress": [],
-                                   "note": "No HTML/SVG/GSAP motion layer yet: live footage only, captions never suppressed."})
-    ctx.app("final_render.py", ["render", source, edit_map, ledger, root], timeout=1200, cpu=2400, as_limit=4 * 1024**3,
-            nofile=128, file_limit=64 * 1024**2, threads="2")
-    big = dict(timeout=2400, cpu=7200, as_limit=6 * 1024**3, nofile=256, file_limit=4 * 1024**3, max_log=1024 * 1024, threads="2")
+    work = cap_checks = proof = None
+    if use_motion:
+        proof, _ = ctx.lookup(value["proof_job"], {"motion-capture"})
+        ctx.source = source
+        work, st, plan, _m, timeline, _s, _ = _motion_root(ctx, {**value, "composition_sha256": proof["result"]["summary"]["composition_sha256"]}, "full")
+        cap = _capture(ctx, work, "full")
+        cap_checks = _capture_checks(cap, plan, float(__import__("fractions").Fraction(str(mapped["fps"]))))
+        if cap["errors"] or not cap_checks["caption_suppression_matches_plan"] or not cap_checks["insert_mode_declared"]:
+            raise Rejected(f"full capture disagrees with the plan: {cap_checks}; page errors: {cap['errors'][:3]}")
+        (work / "picture-frames").rename(root / "picture-frames")
+        for name in ("capture-full.json", "visual-plan.json", "locked-timeline.json", "base-map.json"):
+            shutil.copyfile(work / name, root / name)
+        ledger = root / "crop-ledger.json"
+        ledger.unlink()
+        shutil.copyfile(work / "crop-ledger.json", ledger)
+        motion_info = {"composition_sha256": st["composition_sha256"], "proof_job": value["proof_job"], "beats": len(plan["beats"]),
+                       "inserts": len(plan.get("inserts", [])), "caption_suppress": plan.get("caption_suppress", []),
+                       "capture_seconds": cap["seconds"], "reverse_seek_checked": len(cap["reverse_seek_checked"]),
+                       "blocked_requests": cap.get("blocked_requests", []), "browser": browser_status().get("browser")}
+    else:
+        # No motion composition submitted: an explicit empty plan, so encode.py's suppression check has nothing to allow.
+        ctx.write("visual-plan.json", {"beats": [], "caption_suppress": [],
+                                       "note": "No HTML/SVG/GSAP motion composition submitted: live footage only, captions never suppressed."})
+        ctx.app("final_render.py", ["render", source, edit_map, ledger, root], timeout=3600, cpu=7200, as_limit=4 * 1024**3,
+                nofile=128, file_limit=64 * 1024**2, threads="2")
+        motion_info = None
+    big = dict(timeout=7200, cpu=28800, as_limit=6 * 1024**3, nofile=256, file_limit=8 * 1024**3, max_log=1024 * 1024, threads="2")
     helper("caption_layer")
     ctx.used["caption_layer"] = HELPERS["caption_layer"][1]
-    ctx.run("encode", [root], flags=("-s", "-E"), **big)
-    shutil.rmtree(root / "picture-frames")
+    try:
+        ctx.run("encode", [root], flags=("-s", "-E"), **big)
+        if use_motion:
+            ctx.app("motion_frames.py", ["check", root / "final.mp4", root / "base-map.json", root, work / "base_frames",
+                                         root / "picture-frames", root / "motion-check.json", "--caption-dir", helper("encode").parent],
+                    timeout=1200, cpu=2400, as_limit=6 * 1024**3, nofile=128, file_limit=64 * 1024**2, threads="2")
+    finally:
+        shutil.rmtree(root / "picture-frames", ignore_errors=True)
+        if work is not None:
+            shutil.rmtree(work, ignore_errors=True)
     code, out, err = ctx.run("encode", [root, "--verify-only"], flags=("-s", "-E"), check=False, **big)
     if code:
         raise Rejected("encode.py --verify-only failed: " + _tail(err))
     verified = json.loads(out)
-    ctx.app("final_render.py", ["check", source, edit_map, ledger, root, "--caption-dir", helper("encode").parent],
-            timeout=600, cpu=1200, as_limit=4 * 1024**3, nofile=128, file_limit=64 * 1024**2, threads="2")
+    if not use_motion:
+        ctx.app("final_render.py", ["check", source, edit_map, ledger, root, "--caption-dir", helper("encode").parent],
+                timeout=1200, cpu=2400, as_limit=4 * 1024**3, nofile=128, file_limit=64 * 1024**2, threads="2")
     with wave.open(str(root / "edited.wav")) as w:
         channels = w.getnchannels()
     ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", "-threads", "1", "-i", root / "final.mp4", "-map", "0:a:0",
@@ -764,7 +914,7 @@ def _final_render(ctx, value, source, metadata):
     frame_hashes = [line.rsplit(",", 1)[1].strip() for line in md5.decode().splitlines() if line and not line.startswith("#")]
     regions = json.loads(ctx.app("final_render.py", ["regions", root / "source.wav", root / "final-audio.wav", edit_map],
                                  timeout=300, cpu=600, as_limit=4 * 1024**3, nofile=64))
-    live = json.loads((root / "live-check.json").read_text())
+    live = json.loads((root / ("motion-check.json" if use_motion else "live-check.json")).read_text())
     composite = json.loads((root / "caption-composite.json").read_text())
     capture = json.loads((root / "capture-full.json").read_text())
     with wave.open(str(root / "final-audio.wav")) as w:
@@ -773,12 +923,14 @@ def _final_render(ctx, value, source, metadata):
                                      "video_framemd5_sha256": __import__("hashlib").sha256("\n".join(frame_hashes).encode()).hexdigest(),
                                      "audio_pcm": "final-audio.wav", "audio_pcm_sha256": sha(root / "final-audio.wav"),
                                      "audio_samples": final_samples, "decoder": "ffmpeg -xerror (framemd5 + PCM s16 48 kHz)"})
-    picture_ok = (live["crop_matches_ledger"] and capture["indices"] == list(range(mapped["frames"]))
+    picture_ok = (live["crop_matches_ledger"] and (not use_motion or live["pass"]) and capture["indices"] == list(range(mapped["frames"]))
                   and len(frame_hashes) == mapped["frames"] == verified["frames"])
     integrity = {"full_decode_pass": verified["full_decode_pass"] is True and len(frame_hashes) == mapped["frames"],
                  "caption_bounds_pass": composite.get("caption_bounds_pass") is True and live["caption_band_changes_with_cues"],
                  "picture_map_verified": bool(picture_ok), "source_regions": regions,
-                 "media_verification_sha256": sha(root / "media-verification.json"), "live_check_sha256": sha(root / "live-check.json"),
+                 "media_verification_sha256": sha(root / "media-verification.json"),
+                 "picture_check": "motion-check.json" if use_motion else "live-check.json",
+                 "picture_check_sha256": sha(root / ("motion-check.json" if use_motion else "live-check.json")),
                  "scope": "encode.py --verify-only, full FFmpeg decode, decoded-pixel crop/caption checks and source-region audio "
                           "correlation; machine evidence, not a viewing or listening review."}
     ctx.write("final-integrity.json", integrity)
@@ -792,7 +944,168 @@ def _final_render(ctx, value, source, metadata):
             "checks": {"full_decode": integrity["full_decode_pass"], "caption_bounds_and_band": integrity["caption_bounds_pass"],
                        "crop_matches_ledger": live["crop_matches_ledger"], "picture_map_verified": integrity["picture_map_verified"],
                        "min_source_region_correlation": min(r["correlation"] for r in regions)},
-            "motion_layer": "none (piece 3): live footage only"}
+            "motion_layer": "none: no motion composition submitted; live footage only" if not use_motion else {
+                **motion_info, "capture_checks": cap_checks,
+                "no_motion_outside_planned_windows": live["no_motion_outside_planned_windows"],
+                "beats_show_motion": live["beats_show_motion"], "inserts_show_media": live["inserts_show_media"],
+                "captions_suppressed_where_declared": live["captions_suppressed_where_declared"], "motion_check_pass": live["pass"]}}
+
+
+# ---------- motion graphics (James' piece 3) ----------
+
+def _proof_indices(frames, fps, duration, plan):
+    """capture.cjs proof frame choice (start, .25 s, end, each beat start/mid/end), with both roundings to be safe."""
+    pts = [0, .25, duration - 1 / fps]
+    for b in plan["beats"]:
+        pts += [b["start"], (b["start"] + b["end"]) / 2, b["end"] - 1 / fps]
+    out = set()
+    for t in pts:
+        for v in (math.floor(t * fps), math.ceil(t * fps)):
+            out.add(max(0, min(frames - 1, v)))
+    return sorted(out)
+
+
+def _motion_root(ctx, value, mode):
+    """Assemble James' capture project: composition + generated ledger/GSAP + timeline + plan + crop ledger + base frames."""
+    from fractions import Fraction
+    project = ctx.root.parent
+    st = motion.status(project)
+    if not st["submitted"]:
+        raise Rejected("no motion composition submitted (submit_motion)")
+    if "composition_sha256" in value and st["composition_sha256"] != value["composition_sha256"]:
+        raise Rejected("the motion composition changed since this capture was requested; capture again")
+    if not CAPTURE_SCRIPT.is_file() or not GSAP.is_file():
+        raise Rejected("capture runtime missing from the image")
+    edit_map, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edit-map.json", "edit-map.json")
+    ledger_path, _ = ctx.ref(value["crop_job"], {"face-crop"}, "crop-ledger.json", "crop-ledger.json")
+    ctx.ref(value["crop_job"], {"face-crop"}, "face-audit.json", "face-audit.json")
+    asr, _ = ctx.ref(value["edited_asr_job"], {"asr"}, "asr.json", "edited-asr.json")
+    mapped = json.loads(edit_map.read_text())
+    if float(mapped["duration"]) > MAX_OUTPUT_S:
+        raise Rejected(f"edited video is {mapped['duration']:.0f} s; the limit is {MAX_OUTPUT_S:.0f} s of output")
+    plan = motion.validate_plan(st["plan"], float(mapped["duration"]), {r["path"] for r in st["files"]})
+    fps = float(Fraction(str(mapped["fps"])))
+    frames = int(mapped["frames"])
+    work = ctx.root.with_suffix(".work")
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(mode=0o700)
+    motion.materialize(project, work)
+    (work / "defleur").mkdir(exist_ok=True)
+    shutil.copyfile(GSAP, work / "defleur" / "gsap.min.js")
+    ids, windows = motion.base_map(mapped, plan)
+    (work / "defleur" / "ledger.js").write_text(motion.ledger_js(mapped, plan, ids, CANVAS))
+    resolved = ctx.root / "preset-resolution.json"
+    style = json.loads(resolved.read_text())["preset"]["caption"] if resolved.is_file() else _caption_style(ctx, value)
+    words, adjusted = _locked_words(json.loads(asr.read_text())["words"], float(mapped["duration"]))
+    if not words:
+        raise Rejected("the edited-audio transcript has no words; captions need at least one")
+    timeline = {"duration": mapped["duration"], "fps": mapped["fps"], "frames": frames, "canvas": list(CANVAS), "words": words,
+                "transcript": " ".join(w["word"] for w in words), "word_source": "Transcriber ASR of the edited audio (apply_cuts' edited-asr job)",
+                "timing_adjustments": adjusted}
+    ledger = json.loads(ledger_path.read_text())
+    ledger["fullscreen_exceptions"] = [{"start": r["start"], "end": r["end"], "reason": r["reason"], "asset": r["asset"]} for r in plan.get("inserts", [])]
+    for name, obj in (("locked-timeline.json", timeline), ("visual-plan.json", plan), ("crop-ledger.json", ledger),
+                      ("caption-style.json", style), ("package.json", {"private": True, "description": "DeFleur Video capture project"}),
+                      ("base-map.json", {"base_frames": ids, "source_frames": mapped["source_frame_indices"], "inserts": windows})):
+        (work / name).write_text(json.dumps(obj, indent=2))
+    code, out, err = ctx.run("validate_project", [work], timeout=60, check=False)
+    if code:
+        raise Rejected("James' validate_project.py rejected the plan: " + _tail(err))
+    if mode == "smoke":
+        wanted = list(range(min(frames, math.ceil(6 * fps))))
+    elif mode == "proof":
+        wanted = _proof_indices(frames, fps, float(mapped["duration"]), plan)
+    else:
+        wanted = list(range(frames))
+    (work / "wanted.json").write_text(json.dumps(wanted))
+    ctx.app("motion_frames.py", ["base", ctx.source, edit_map, work / "crop-ledger.json", work / "base-map.json", work / "wanted.json",
+                                 work, motion.src_dir(project)], timeout=deadline_for("final-render"), cpu=36000,
+            as_limit=8 * 1024**3, nofile=256, file_limit=2 * 1024**3, threads="2")
+    return work, st, plan, mapped, timeline, style, json.loads(validate_out(out))
+
+
+def validate_out(out):
+    text = out.decode() if isinstance(out, bytes) else out
+    return text.strip().splitlines()[-1] if text.strip() else "{}"
+
+
+def _capture(ctx, work, mode):
+    """Run James' capture.cjs (adapted to the shared Browser app) on the capture project."""
+    try:
+        url = browser_url()
+    except Rejected as e:
+        raise Rejected(str(e)) from None
+    status = browser_status()
+    if not status["reachable"]:
+        raise Rejected(f"the Browser app is not reachable at {url} ({status.get('error')}). {BROWSER_HINT}")
+    helper("capture")  # James' original is bundled unchanged; the adaptation is pinned by hash too
+    if sha(CAPTURE_SCRIPT) != CAPTURE_ADAPTED_SHA256:
+        raise Rejected("adapted capture.cjs hash mismatch")
+    ctx.used["capture"] = HELPERS["capture"][1]
+    ctx.used["capture-remote.cjs (James' capture.cjs adapted for the Browser app; see NOTICE)"] = CAPTURE_ADAPTED_SHA256
+    started = time.monotonic()
+    code, out, err = ctx.native([NODE, CAPTURE_SCRIPT, work, mode], timeout=deadline_for("final-render"), cwd=work, check=False,
+                                env_extra={**ctx.env(), "BROWSER_URL": url, "NODE_PATH": str(CAPTURE_DIR / "node_modules"),
+                                           "NODE_OPTIONS": "--max-old-space-size=2048"},
+                                cpu=36000, as_limit=64 * 1024**3, nofile=1024, file_limit=256 * 1024**2, max_log=1024 * 1024,
+                                threads="2", explain=True)
+    if code:
+        raise Rejected(f"capture.cjs {mode} failed: " + _tail(err))
+    cap = json.loads((work / f"capture-{mode}.json").read_text())
+    cap["seconds"] = round(time.monotonic() - started, 1)
+    return cap
+
+
+def _capture_checks(cap, plan, fps):
+    """Compare the page's declared captionSuppressed/visualMode with the plan, per captured frame."""
+    sup = plan.get("caption_suppress", [])
+    ins = plan.get("inserts", [])
+    inside = lambda t, rows: any(r["start"] <= t < r["end"] for r in rows)
+    bad_sup, bad_mode = [], []
+    for g in cap["geometry"]:
+        t = g["frame"] / fps
+        if bool(g.get("captionSuppressed")) != inside(t, sup):
+            bad_sup.append(g["frame"])
+        if inside(t, ins) and g.get("mode") not in ("fullscreen-insert", "fullscreen", "insert"):
+            bad_mode.append(g["frame"])
+    return {"caption_suppression_matches_plan": not bad_sup, "suppression_mismatch_frames": bad_sup[:20],
+            "insert_mode_declared": not bad_mode, "insert_mode_mismatch_frames": bad_mode[:20]}
+
+
+def _motion_capture(ctx, value, source, metadata):
+    ctx.source = source
+    from fractions import Fraction
+    mode = value["mode"]
+    work = None
+    try:
+        work, st, plan, mapped, timeline, style, _ = _motion_root(ctx, value, mode)
+        cap = _capture(ctx, work, mode)
+        fps = float(Fraction(str(mapped["fps"])))
+        checks = _capture_checks(cap, plan, fps)
+        frames_dir = work / ("proof-raw" if mode == "proof" else "picture-frames")
+        ctx.app("motion_frames.py", ["sheet", work / f"capture-{mode}.json", frames_dir, ctx.root / f"{mode}-sheet.png"],
+                timeout=300, cpu=600, as_limit=4 * 1024**3, nofile=128, file_limit=256 * 1024**2)
+        from PIL import Image
+        picks = cap["indices"] if len(cap["indices"]) <= 8 else [cap["indices"][round(i * (len(cap["indices"]) - 1) / 7)] for i in range(8)]
+        frames_out = []
+        for f in picks:
+            with Image.open(frames_dir / f"{f:06d}.jpg") as im:
+                im.convert("RGB").resize((540, 960), Image.LANCZOS).save(ctx.root / f"{mode}-frame-{f:06d}.png")
+            frames_out.append({"frame": f, "t": round(f / fps, 3), "image": f"{mode}-frame-{f:06d}.png"})
+        shutil.copyfile(work / f"capture-{mode}.json", ctx.root / f"capture-{mode}.json")
+        for name in ("visual-plan.json", "locked-timeline.json", "base-map.json"):
+            shutil.copyfile(work / name, ctx.root / name)
+        ok = not cap["errors"] and checks["caption_suppression_matches_plan"] and checks["insert_mode_declared"]
+        return {"mode": mode, "pass": ok, "frames_captured": cap["frame_count"], "reverse_seek_checked": len(cap["reverse_seek_checked"]),
+                "determinism": "every reverse-seek re-render matched its forward capture byte-for-byte (capture.cjs)",
+                "page_errors": cap["errors"], "blocked_requests": cap.get("blocked_requests", []), "capture_seconds": cap["seconds"],
+                "checks": checks, "frames": frames_out, "sheet": f"{mode}-sheet.png",
+                "composition_sha256": st["composition_sha256"], "assemble_job": value["assemble_job"], "crop_job": value["crop_job"],
+                "edited_asr_job": value["edited_asr_job"], "beats": len(plan["beats"]), "inserts": len(plan.get("inserts", [])),
+                "browser": browser_status().get("browser")}
+    finally:
+        if work is not None:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def _delivery_gate(ctx, value, source, metadata):
@@ -849,5 +1162,5 @@ STAGE_RUNNERS = {
     "source-audio": _source_audio, "resolve-preset": _resolve_preset, "preflight": _preflight, "asr": _asr,
     "align": _align, "acoustic-ctc": _ctc, "pcm-assemble": _pcm_assemble, "speech-cut-audit": _speech_cut_audit,
     "acoustic-scan": _acoustic_scan, "dialogue-gate": _dialogue_gate, "validate-project": _validate_project,
-    "face-crop": _face_crop, "final-render": _final_render, "delivery-gate": _delivery_gate,
+    "face-crop": _face_crop, "final-render": _final_render, "delivery-gate": _delivery_gate, "motion-capture": _motion_capture,
 }

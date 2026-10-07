@@ -63,5 +63,12 @@
   "scripts/e2e-video-audio.py",
   "scripts/e2e-video-mcp.py",
   "scripts/smoke-video.py",
-  "scripts/translate-video-recipe.mjs"
+  "scripts/translate-video-recipe.mjs",
+  "images/defleur-video/motion.py",
+  "images/defleur-video/motion_frames.py",
+  "images/defleur-video/capture/package.json",
+  "images/defleur-video/capture/package-lock.json",
+  "images/defleur-video/capture/capture-remote.cjs",
+  "images/defleur-video/capture/capture-remote.diff",
+  "scripts/e2e-video-motion.py"
 ]

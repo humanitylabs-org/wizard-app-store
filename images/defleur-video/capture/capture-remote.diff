@@ -1,0 +1,83 @@
+--- defleur/skills/defleur-motion/scripts/capture.cjs
++++ capture/capture-remote.cjs
+@@ -1,8 +1,13 @@
+ #!/usr/bin/env node
+ /* Deterministic project-local HTML capture. Requires puppeteer-core and Chromium. */
++/* DeFleur Video adaptation (see NOTICE): connects to the shared Browser app at BROWSER_URL instead of launching a
++   local Chromium, serves the project on an internal per-render random-token URL the browser container can reach,
++   and blocks every request outside that project. James' capture, determinism and reverse-seek logic is unchanged. */
+ const crypto = require('crypto');
++const dns = require('dns');
+ const fs = require('fs');
+ const http = require('http');
++const net = require('net');
+ const path = require('path');
+ 
+ function usage() { console.error('Usage: node capture.cjs PROJECT smoke|proof|full. PROJECT needs locked-timeline.json, index.html, and base_frames/.'); }
+@@ -14,10 +19,12 @@
+   return numerator / denominator;
+ }
+ function hash(buffer) { return crypto.createHash('sha256').update(buffer).digest('hex'); }
+-function staticServer(root) {
++function staticServer(root, token) {
+   const types = {'.html':'text/html', '.js':'text/javascript', '.json':'application/json', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.svg':'image/svg+xml', '.css':'text/css', '.woff2':'font/woff2'};
+   return http.createServer((request, response) => {
+-    const target = path.resolve(root, '.' + decodeURIComponent(new URL(request.url, 'http://localhost').pathname));
++    const pathname = new URL(request.url, 'http://localhost').pathname;
++    if (!pathname.startsWith(`/${token}/`)) { response.writeHead(403); return response.end(); }
++    const target = path.resolve(root, '.' + decodeURIComponent(pathname.slice(token.length + 1)));
+     if (!target.startsWith(root + path.sep)) { response.writeHead(403); return response.end(); }
+     fs.stat(target, (error, stat) => {
+       if (error || !stat.isFile()) { response.writeHead(404); return response.end(); }
+@@ -25,6 +32,16 @@
+       fs.createReadStream(target).pipe(response);
+     });
+   });
++}
++async function connectBrowser(puppeteer) {
++  const target = new URL(process.env.BROWSER_URL || 'http://browser:9222');
++  const port = Number(target.port || 80);
++  // Chrome only answers DevTools HTTP for an IP or localhost Host header: resolve the service name first.
++  const {address} = await dns.promises.lookup(target.hostname, {family: 4});
++  const browser = await puppeteer.connect({browserURL: `http://${address}:${port}`, protocolTimeout: 180000});
++  // Local address of the interface that reaches the browser: the only address the project server binds.
++  const local = await new Promise((resolve, reject) => { const socket = net.connect(port, address, () => { resolve(socket.localAddress); socket.destroy(); }); socket.on('error', reject); });
++  return {browser, local};
+ }
+ (async () => {
+   const [projectArg, mode] = process.argv.slice(2);
+@@ -35,14 +52,20 @@
+   const canvas = Array.isArray(timeline.canvas) ? timeline.canvas : [1080, 1920];
+   if (!Number.isInteger(frames) || frames <= 0 || !Number.isFinite(duration) || duration <= 0) throw new Error('Invalid locked timeline.');
+   const puppeteer = require('module').createRequire(path.join(root, 'package.json'))('puppeteer-core');
+-  const server = staticServer(root);
+-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+-  const browser = await puppeteer.launch({executablePath: process.env.CHROME_PATH || 'chromium', headless: true, args: ['--disable-gpu', '--disable-dev-shm-usage', '--no-sandbox', '--force-color-profile=srgb', '--hide-scrollbars']});
++  const {browser, local} = await connectBrowser(puppeteer);
++  const token = crypto.randomBytes(24).toString('hex');
++  const server = staticServer(root, token);
++  await new Promise(resolve => server.listen(0, local, resolve));
++  const origin = `http://${local}:${server.address().port}/${token}/`;
++  const context = await browser.createBrowserContext();
++  const blocked = [];
+   try {
+-    const page = await browser.newPage();
++    const page = await context.newPage();
++    await page.setRequestInterception(true);
++    page.on('request', request => { const url = request.url(); if (url.startsWith(origin) || url.startsWith('data:') || url.startsWith('blob:')) return request.continue(); if (blocked.length < 50) blocked.push(url.slice(0, 200)); return request.abort('blockedbyclient'); });
+     await page.setViewport({width: canvas[0], height: canvas[1], deviceScaleFactor: 1});
+     const errors = []; page.on('pageerror', error => errors.push(String(error)));
+-    await page.goto(`http://127.0.0.1:${server.address().port}/index.html`, {waitUntil: 'domcontentloaded', timeout: 60000});
++    await page.goto(`${origin}index.html`, {waitUntil: 'domcontentloaded', timeout: 60000});
+     await page.evaluate(async () => { await document.fonts.ready; if (typeof window.renderFrame !== 'function') throw new Error('Missing window.renderFrame(t)'); if (!document.querySelector('#live')) throw new Error('Missing #live element'); if (window.gsap) window.gsap.ticker.sleep(); });
+     let indices;
+     if (mode === 'smoke') indices = Array.from({length: Math.min(frames, Math.ceil(6 * fps))}, (_, index) => index);
+@@ -65,6 +88,6 @@
+     const reverse = [...indices].sort((a,b) => b-a).slice(0, Math.min(indices.length, 12));
+     for (const frame of reverse) { await page.evaluate(async ({frame, seconds}) => { const live = document.querySelector('#live'); const sourceFrame = window.sourceFrameForOutputFrame(frame); live.src = `base_frames/${String(sourceFrame).padStart(6, '0')}.jpg`; await live.decode(); window.renderFrame(seconds); if (window.gsap) window.gsap.ticker.sleep(); }, {frame, seconds: frame / fps}); const bytes = await page.screenshot({type: 'jpeg', quality: 95, captureBeyondViewport: false}); if (captured.get(frame) !== hash(bytes)) throw new Error(`Nondeterministic reverse seek at frame ${frame}`); }
+     if (errors.length) throw new Error(JSON.stringify(errors));
+-    fs.writeFileSync(path.join(root, `capture-${mode}.json`), JSON.stringify({canvas, fps: timeline.fps, frame_count: indices.length, indices, reverse_seek_checked: reverse, errors, geometry}, null, 2));
+-  } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
++    fs.writeFileSync(path.join(root, `capture-${mode}.json`), JSON.stringify({canvas, fps: timeline.fps, frame_count: indices.length, indices, reverse_seek_checked: reverse, errors, geometry, blocked_requests: blocked}, null, 2));
++  } finally { await context.close().catch(() => {}); await browser.disconnect(); await new Promise(resolve => server.close(resolve)); }
+ })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

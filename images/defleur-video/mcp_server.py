@@ -38,9 +38,49 @@ LOCK = threading.Lock()
 LANG_NAMES = {"english": "en", "spanish": "es", "french": "fr", "german": "de", "italian": "it", "portuguese": "pt",
               "dutch": "nl", "japanese": "ja", "chinese": "zh", "korean": "ko", "russian": "ru", "arabic": "ar", "hindi": "hi"}
 
-NOT_BUILT = ["HTML/SVG/GSAP motion graphics (James' capture.cjs + Chromium): the final video is live footage plus captions only",
-             "fullscreen inserts / B-roll and multi-speaker reframing within one setup",
-             "human viewing and listening review (always the owner's job)"]
+NOT_BUILT = ["human viewing and listening review (always the owner's job)",
+             "animated (moving) crops: James' contract forbids detector-driven pans; reframing is one fixed crop per setup"]
+
+MOTION_CONTRACT = {
+    "what": ("Optional motion graphics (James DeFleur's defleur-motion piece). YOU author a small project-local HTML/SVG/GSAP page; "
+             "the app captures it frame-by-frame with James' capture.cjs in the shared Browser app, burns captions and encodes. "
+             "Without a submission render_final makes live footage plus captions."),
+    "page_rules": [
+        "index.html must include <script src=\"defleur/ledger.js\"></script> (app-generated: defines window.sourceFrameForOutputFrame(frame) from the locked source-frame map, plus window.DEFLEUR with fps, frames, duration, beats, inserts) and <script src=\"defleur/gsap.min.js\"></script> (vendored GSAP 3.15.0) BEFORE your own script.",
+        "Canvas is exactly 1080x1920 CSS px; body margin 0; overflow hidden.",
+        "<img id=\"live\"> is the live footage: the app sets its src to the already-cropped 1080x1920 frame for every output frame (and to the insert media during an insert window). Keep it full-canvas (position:absolute; inset:0; width:1080px; height:1920px) unless a beat deliberately shrinks/moves it.",
+        "window.renderFrame = (t) => {...}: SYNCHRONOUS, deterministic state reconstruction for second t. Reset or hide EVERY scene node on each call, then set them for t. Build GSAP timelines paused and call tl.seek(t, false) / tl.progress(); never rely on playback, Date, Math.random or requestAnimationFrame. Seeking backward after late scenes must not leave their nodes visible (capture.cjs re-renders frames in reverse and fails on any byte difference).",
+        "window.captionSuppressed = (t) => bool: true only inside plan.caption_suppress ranges (the default from ledger.js already does this; capture fails if the page disagrees with the plan).",
+        "window.visualMode = (t) => 'live' | 'beat' | 'fullscreen-insert' (default from ledger.js; inside an insert window it must return 'fullscreen-insert').",
+        "No network: every file must be in the submission (fonts as .woff2). Requests outside the composition are blocked and reported.",
+        "Outside beat and insert windows the picture must be the plain live frame: hide all overlays there (checked in decoded pixels).",
+        "Keep text inside the essential rect x 120-960, y 220-1180; captions live in y 1240-1430 (James' neutral preset), so do not put graphics there while captions show.",
+    ],
+    "beat_rules": (
+        "Every beat makes an EXPLANATORY change: route a cause to an effect, replace a state, accumulate a quantity that changes behaviour, "
+        "transform a topology, reveal a comparison, or return to the source with new meaning. No static title cards or opacity-only labels. "
+        "Each beat in plan.beats needs numeric start/end (seconds of the EDITED timeline) and text fields spoken_anchor (the words it explains), "
+        "viewer_inference, visual_family (documentary|diagram|photographic-metaphor|typographic-explanation|illustration), state_before, "
+        "state_after, causal_action, caption_treatment ('show' or 'suppress') and speaker_return. Give readable content dwell time."),
+    "captions": ("Captions are burned from the edited-audio words. Suppress them ONLY where the visual itself carries the same spoken words: "
+                 "list the range in plan.caption_suppress [{start, end, reason}] inside a beat whose caption_treatment is 'suppress'."),
+    "inserts": ("Fullscreen inserts / B-roll: upload the media (create_asset_upload for .mp4/.jpg/.png/.webp, or base64 in submit_motion for small "
+                "images) and list plan.inserts [{start, end, asset: 'assets/clip.mp4', fit: 'cover'|'contain', clip_start_s, reason}]. During an "
+                "insert window #live shows the insert media (cropped to fill 1080x1920 for cover) instead of the speaker; audio stays the speaker's. "
+                "Fullscreen ranges are James' explicit exceptions to the live crop policy and are recorded in crop-ledger fullscreen_exceptions."),
+    "sequence": ["submit_motion(project_id, files, plan)", "capture_motion(project_id, 'smoke') - first ~6 s; look at the returned frame images",
+                 "fix the page if anything looks wrong and submit again", "capture_motion(project_id, 'proof') - starts, middles and ends of every beat plus reverse-seek determinism; look at the frames and the contact sheet",
+                 "render_final(project_id, {'motion': true}) - full capture (every frame), captions, encode, checks, delivery gate"],
+    "skeleton": (
+        "<!doctype html><html><head><meta charset=\"utf-8\"><link rel=\"stylesheet\" href=\"style.css\"></head><body>"
+        "<img id=\"live\" alt=\"\"><div id=\"beat1\" class=\"scene\">...</div>"
+        "<script src=\"defleur/ledger.js\"></script><script src=\"defleur/gsap.min.js\"></script><script src=\"main.js\"></script></body></html>  "
+        "main.js: const tl = gsap.timeline({paused: true}); tl.set('.scene', {autoAlpha: 0}, 0); tl.fromTo('#beat1', {autoAlpha: 0, y: 40}, {autoAlpha: 1, y: 0, duration: 0.4}, 2.0) ... ; "
+        "window.renderFrame = (t) => { tl.seek(t, false); };"),
+    "files": ("Allowed paths: lowercase a-z0-9_- names, up to 3 levels (e.g. index.html, main.js, style.css, assets/chart.svg, assets/clip.mp4). "
+              "Kinds: .html .css .js .svg .json (UTF-8 text, 2 MiB each) and .png .jpg .jpeg .webp (32 MiB) .woff2 (8 MiB) .mp4 (2 GiB, upload URL only). "
+              "Reserved: defleur/, base_frames/, timeline/plan/capture files. Inline submission total 3 MiB."),
+}
 
 RULES = [
     "Edit for a coherent, faithful thought: keep claims, context, speaker meaning and sentence syntax. Never stitch words into a new meaning.",
@@ -55,11 +95,12 @@ RULES = [
 
 GUIDE = {
     "what_this_app_does": (
-        "DeFleur Video runs the audio/edit half of James DeFleur's short-form video workflow on this server: "
-        "upload, H.264/CFR normalization of HEVC or variable-frame-rate phone footage, 48 kHz PCM extraction, "
-        "speech-to-text through the separate Transcriber app, local word alignment, sample-exact audio cutting, "
-        "per-edge waveform/spectrogram evidence, re-transcription of the edited audio and James' dialogue audio gate. "
-        "You (the agent) are the editor: you choose the cuts with the owner. The app never calls an LLM."),
+        "DeFleur Video runs James DeFleur's complete short-form video workflow on this server: upload (up to 20 min, up to 4K; "
+        "HEVC, VFR and larger-than-1080p footage is normalized to 1080p H.264 CFR), 48 kHz PCM extraction, speech-to-text through "
+        "the separate Transcriber app, local word alignment, sample-exact audio cutting with per-edge evidence, re-transcription "
+        "and James' dialogue gate; then fixed per-setup face crops (optionally choosing which speaker each segment frames), optional "
+        "HTML/SVG/GSAP motion graphics and fullscreen inserts captured by James' capture.cjs in the shared Browser app, burned "
+        "captions, his 1080x1920 encode and delivery gate. You (the agent) are the editor and motion author; the app never calls an LLM."),
     "steps": [
         "1. capabilities - check the Transcriber is reachable and its model installed; if not, relay the exact fix.",
         "2. create_upload - get a one-time upload URL and curl command (or point the owner to the /upload page). Files never travel through MCP.",
@@ -67,15 +108,20 @@ GUIDE = {
         "4. Show the owner the proposed cut list (time, words, reason) and get approval or changes. Do not skip this.",
         "5. apply_cuts(project_id, segments) with the approved ranges TO REMOVE; call get_status(run_id) until 'done' for the report: seconds removed, words lost/added, gate pass/fail and download URLs.",
         "6. Tell the owner the apply_cuts result. If words were lost or the dialogue gate failed, adjust the cuts with them and run apply_cuts again.",
-        "7. render_final(project_id) - face audit and fixed 9:16 crop, burned captions from the edited-audio words, James' 1080x1920 H.264/AAC encode, full decode, final re-transcription and James' delivery gate; call get_status(run_id) until 'done'.",
-        "8. Report in plain words: resolution, duration, crop result (and any face flag), caption count, delivery gate pass/fail, words lost, and the final MP4 download link. Ask the owner to watch it on a phone. Use delete_project when finished.",
+        "7. Optional framing: preview_framing(project_id, framing) shows the fixed crop per setup with face evidence images. For a two-person shot pass framing={'targets': {'<kept segment index>': 'left'|'right'|'center'|'largest'}} (a change of target starts a new setup); 'new_setup_at': [index] forces a new setup.",
+        "8. Optional motion graphics (James' piece 3; read motion_contract below): submit_motion -> capture_motion 'smoke' -> look at the frames -> capture_motion 'proof' -> look again. Skip this for a plain captioned talking-head video.",
+        "9. render_final(project_id, options) - options {} for live footage + captions, {'motion': true} after a passing proof capture, plus 'framing' if you previewed one. It does the face audit and fixed crops, full motion capture if requested, burned captions, James' 1080x1920 encode, full decode, pixel checks, final re-transcription and James' delivery gate; call get_status(run_id) until 'done'.",
+        "10. Report in plain words: resolution, duration, crop result (and any face flag), motion beats and inserts, caption count and suppressions, delivery gate pass/fail, words lost, and the final MP4 download link. Ask the owner to watch it on a phone. Use delete_project when finished.",
     ],
-    "long_work": "start_edit, apply_cuts and render_final return immediately with a run_id. Keep calling get_status(run_id) (each call waits up to ~55 s) until state is 'done' or 'failed'. Transcription and alignment of a few minutes of speech can take several minutes on CPU.",
+    "motion_contract": MOTION_CONTRACT,
+    "long_work": "start_edit, apply_cuts, capture_motion and render_final return immediately with a run_id. Keep calling get_status(run_id) (each call waits up to ~55 s) until state is 'done' or 'failed'. Transcription and alignment of a few minutes of speech can take several minutes on CPU.",
     "not_built_yet": NOT_BUILT,
     "outputs_today": ("apply_cuts: edited 48 kHz WAV, edit map, cut evidence images, dialogue gate receipt and a low-resolution 9:16 preview. "
-                      "render_final: the finished 1080x1920 H.264/AAC MP4 (speaker framed by a fixed crop per setup, burned-in captions), "
-                      "crop ledger, face audit, decode/pixel checks and James' delivery gate receipt. No motion graphics yet."),
-    "limits": "One video and one audio stream, at most 300 s and 512 MiB per upload, 8 projects at a time.",
+                      "capture_motion: captured frame images and a contact sheet to look at. render_final: the finished 1080x1920 H.264/AAC MP4 "
+                      "(fixed crop per setup, optional motion graphics and fullscreen inserts, burned-in captions), crop ledger, face audit, "
+                      "decode/pixel/motion-window checks and James' delivery gate receipt."),
+    "limits": ("One video and one audio stream per upload, at most 20 minutes and 8 GiB, up to 4K (edited at 1080p); finished video up to 6 minutes; "
+               "8 projects at a time. capabilities reports host RAM, free disk and per-job estimates."),
 }
 
 
@@ -455,20 +501,71 @@ def do_apply_cuts(run: dict) -> dict:
         "jobs": {"pcm_assemble": asm["id"], "speech_cut_audit": audit["id"], "acoustic_scan": scan["id"], "edited_asr": easr["id"], "dialogue_gate": gate["id"]},
         "next": ("Tell the owner in plain words: seconds removed, any words lost or added, gate pass/fail with the reason, and the download links. "
                  "Ask them to listen to the edited audio/preview. If words were lost or the gate failed, propose adjusted cuts and call apply_cuts again. "
-                 "When the owner is happy with the cut, call render_final(project_id) for the finished 1080x1920 captioned video "
-                 "(motion graphics are not built yet)."),
+                 "When the owner is happy with the cut: optionally preview_framing (two-person shots) and motion graphics "
+                 "(submit_motion -> capture_motion smoke/proof), then render_final(project_id) for the finished 1080x1920 captioned video."),
     }
 
 
 # ---------- render_final ----------
 
+def crop_body(jobs: dict, framing: dict | None) -> dict:
+    body = {"assemble_job": jobs["pcm_assemble"]}
+    if framing:
+        body["framing"] = framing
+    return body
+
+
+def do_preview_framing(run: dict) -> dict:
+    jobs = run["params"]["cut"]["jobs"]
+    crop = stage(run, "face-crop", crop_body(jobs, run["params"].get("framing")), wait_s=1900)
+    cs = crop["result"]["summary"]
+    base = run["params"]["base_url"]
+    dl = lambda n: f"{base}/v1/jobs/{crop['id']}/stage-artifacts/{n}"
+    return {"project_id": run["project"], "framing": run["params"].get("framing") or {},
+            "setups": [{**{k: s[k] for k in ("setup", "segments", "crop", "zoom", "detected", "samples", "pass", "flags")},
+                        "evidence_image": dl(f"{s['setup']}-crop.png")} for s in cs["setups"]],
+            "face_inside_crop_all_samples": cs["pass"], "flags": cs["flags"], "crop_job": crop["id"],
+            "face_audit_json": dl("face-audit.json"), "crop_ledger_json": dl("crop-ledger.json"),
+            "next": ("Look at each evidence_image (green = fixed crop, red = detected faces, yellow = caption band). If a two-person "
+                     "segment frames the wrong person, call preview_framing again with framing.targets for that kept-segment index. "
+                     "Pass the same framing to capture_motion / render_final.")}
+
+
+def do_capture_motion(run: dict) -> dict:
+    p = run["params"]
+    jobs = p["cut"]["jobs"]
+    crop = stage(run, "face-crop", crop_body(jobs, p.get("framing")), wait_s=1900)
+    cap = stage(run, "motion-capture", {"assemble_job": jobs["pcm_assemble"], "crop_job": crop["id"], "edited_asr_job": jobs["edited_asr"],
+                                        "mode": p["mode"], "composition_sha256": p["composition_sha256"]}, wait_s=3700)
+    cs = cap["result"]["summary"]
+    base = p["base_url"]
+    dl = lambda n: f"{base}/v1/jobs/{cap['id']}/stage-artifacts/{n}"
+    return {"project_id": run["project"], "mode": p["mode"], "pass": cs["pass"], "frames_captured": cs["frames_captured"],
+            "determinism": {"reverse_seek_frames_checked": cs["reverse_seek_checked"], "result": cs["determinism"]},
+            "page_errors": cs["page_errors"], "blocked_requests": cs["blocked_requests"], "checks": cs["checks"],
+            "frame_images": [{**f, "url": dl(f["image"])} for f in cs["frames"]], "contact_sheet": dl(cs["sheet"]),
+            "capture_json": dl(f"capture-{p['mode']}.json"), "composition_sha256": cs["composition_sha256"],
+            "capture_seconds": cs["capture_seconds"], "crop_job": crop["id"], "capture_job": cap["id"], "framing": p.get("framing") or {},
+            "next": ("LOOK at the frame images and the contact sheet (download them and view them). Check: overlays appear only in "
+                     "planned beats, text is readable at phone size and inside x 120-960 / y 220-1180, inserts fill the frame, nothing "
+                     "is left over after a beat. Fix and submit_motion again if needed. "
+                     + ("Then run capture_motion(project_id, 'proof')." if p["mode"] == "smoke" else
+                        "If it all looks right, call render_final(project_id, {'motion': true}" + (", 'framing': <same framing>" if p.get("framing") else "") + ")."))}
+
+
 def do_render_final(run: dict) -> dict:
     cut = run["params"]["cut"]
     jobs = cut["jobs"]
     t0 = time.monotonic()
-    crop = stage(run, "face-crop", {"assemble_job": jobs["pcm_assemble"]})
-    render = stage(run, "final-render", {"assemble_job": jobs["pcm_assemble"], "crop_job": crop["id"],
-                                         "edited_asr_job": jobs["edited_asr"]}, wait_s=3700)
+    proof = run["params"].get("proof")
+    if proof:
+        crop = api("GET", f"/v1/jobs/{proof['crop_job']}")
+        body = {"assemble_job": jobs["pcm_assemble"], "crop_job": proof["crop_job"], "edited_asr_job": jobs["edited_asr"],
+                "proof_job": proof["capture_job"]}
+    else:
+        crop = stage(run, "face-crop", crop_body(jobs, run["params"].get("framing")), wait_s=1900)
+        body = {"assemble_job": jobs["pcm_assemble"], "crop_job": crop["id"], "edited_asr_job": jobs["edited_asr"]}
+    render = stage(run, "final-render", body, wait_s=14500)
     lang = run["params"]["language"]
     fasr = stage(run, "asr", {"audio_job": render["id"], "language": lang})
     fscan = stage(run, "acoustic-scan", {"assemble_job": render["id"]})
@@ -489,7 +586,9 @@ def do_render_final(run: dict) -> dict:
     downloads = {"final_mp4": dl(render["id"], "final.mp4"), "crop_ledger_json": dl(crop["id"], "crop-ledger.json"),
                  "face_audit_json": dl(crop["id"], "face-audit.json"), "final_integrity_json": dl(render["id"], "final-integrity.json"),
                  "media_verification_json": dl(render["id"], "media-verification.json"),
-                 "pixel_check_json": dl(render["id"], "live-check.json"), "frame_sample_png": dl(render["id"], "final-frame-sample.png")}
+                 "pixel_check_json": dl(render["id"], "motion-check.json" if proof else "live-check.json")}
+    if not proof:
+        downloads["frame_sample_png"] = dl(render["id"], "final-frame-sample.png")
     downloads.update({f"crop_evidence_{s['setup']}_png": dl(crop["id"], f"{s['setup']}-crop.png") for s in cs["setups"]})
     if gate_job:
         downloads["delivery_gate_result_json"] = dl(gate_job["id"], "delivery-gate-result.json")
@@ -511,7 +610,7 @@ def do_render_final(run: dict) -> dict:
                           "words_lost_vs_edited_audio": lost, "words_added_vs_edited_audio": gs.get("words_added_vs_edited"),
                           "min_source_region_correlation": rs["checks"]["min_source_region_correlation"],
                           "scope": "James' audio_gate.py --stage delivery: evidence completeness, custody and thresholds. Final acoustic-window findings are app-written; it is not human viewing or listening approval."},
-        "motion_graphics": "not built yet: live footage plus captions only",
+        "motion_graphics": rs["motion_layer"],
         "downloads": downloads,
         "auth_note": "Downloads need 'Authorization: Bearer ***' when the app has a token set." if TOKEN else None,
         "render_seconds": round(time.monotonic() - t0, 1),
@@ -529,7 +628,8 @@ mcp = MCPServer("defleur-video", version=VERSION, instructions=(
     "DeFleur Video edits talking-head videos on the owner's own server. Start with workflow_guide, then capabilities. "
     "Flow: create_upload -> (owner uploads with the curl command or /upload page) -> start_edit -> get_status until done -> "
     "show the proposed cuts and get approval -> apply_cuts -> get_status until done -> render_final -> get_status until done -> "
-    "report and share the final 1080x1920 MP4 link. Motion graphics are not built yet."))
+    "report and share the final 1080x1920 MP4 link. Optional: preview_framing for per-setup crops / speaker choice, and motion graphics "
+    "(submit_motion -> capture_motion smoke -> proof -> render_final with {'motion': true}); the contract is in workflow_guide.motion_contract."))
 
 
 def _result(fn, *a, **kw):
@@ -541,16 +641,18 @@ def _result(fn, *a, **kw):
 
 @mcp.tool(description=(
     "Call this FIRST when the user wants to edit a video. Explains what DeFleur Video does on this server, the exact order of "
-    "tools to call (capabilities -> create_upload -> start_edit -> get_status -> owner approval -> apply_cuts -> get_status), "
-    "and what is NOT built yet (motion graphics). No arguments."))
+    "tools to call (capabilities -> create_upload -> start_edit -> get_status -> owner approval -> apply_cuts -> get_status -> "
+    "optional preview_framing / submit_motion -> capture_motion smoke -> proof -> render_final), James DeFleur's motion "
+    "contract for motion graphics and fullscreen inserts (motion_contract), limits, and what is not automated. No arguments."))
 def workflow_guide() -> dict:
     return GUIDE
 
 
 @mcp.tool(description=(
     "Check the app is ready before editing (second step, after workflow_guide). Reports app version, limits, whether the "
-    "Transcriber app is reachable and has its speech model installed, alignment model cache, and the exact fix to relay to the "
-    "owner when something is broken."))
+    "Transcriber app is reachable and has its speech model installed, whether the Browser app (needed only for motion graphics) "
+    "is reachable, alignment model cache, host RAM / free disk / per-job estimates, and the exact fix to relay to the owner when "
+    "something is broken."))
 def capabilities() -> dict:
     def go():
         caps = api("GET", "/v1/capabilities")
@@ -567,7 +669,13 @@ def capabilities() -> dict:
         else:
             fix = None
         al = wf.get("alignment", {})
-        return {"version": caps["version"], "ready": fix is None, "transcriber": t, "fix": fix,
+        b = wf.get("motion", {}).get("browser", {})
+        browser = {**b, "fix": None if b.get("reachable") else ("Install the Browser app from the Wizard App Store on this same Runtipi server "
+                                                                   "(it answers as http://browser:9222), or set BROWSER_URL in DeFleur Video's settings."),
+                   "needed_for": "motion graphics and fullscreen inserts only; plain render_final works without it"}
+        return {"version": caps["version"], "ready": fix is None, "transcriber": t, "fix": fix, "browser": browser,
+                "motion_ready": bool(b.get("reachable")) and bool(wf.get("motion", {}).get("gsap_present")),
+                "resources": wf.get("resources"),
                 "alignment": {"model": al.get("model"), "cached": al.get("cached"),
                               "note": None if al.get("cached") else "First alignment downloads the Whisper checkpoint (needs internet once, ~1-2 GB for turbo)."},
                 "limits": caps["limits"], "not_built_yet": NOT_BUILT, "ai_calls": False}
@@ -587,7 +695,7 @@ def create_upload(ctx: Context) -> dict:
         return {"upload_url": url, "expires_in_s": u["expires_in_s"], "one_time": True,
                 "curl": f"curl -fS -X POST -H 'Content-Type: video/mp4' -T /path/to/video.mp4 '{url}'",
                 "browser_page": base + "/upload",
-                "accepts": "MP4/MOV with one video and one audio stream, at most 300 s and 512 MiB",
+                "accepts": "MP4/MOV with one video and one audio stream, at most 20 minutes and 8 GiB, up to 4K (normalized to 1080p for editing)",
                 "next": "After the upload returns {\"id\": ...}, call start_edit(project_id=<id>). If this URL expires or was used, call create_upload again."}
     return _result(go)
 
@@ -640,30 +748,157 @@ def apply_cuts(project_id: str, segments: list[dict], ctx: Context) -> dict:
     return _result(go)
 
 
+def latest_cut(project_id: str) -> dict:
+    cuts = runs_for(project_id, "apply_cuts", "done")
+    if not cuts:
+        raise ToolError("run apply_cuts for this project first and wait for it to finish (get_status)")
+    return cuts[-1]
+
+
+def latest_proof(project_id: str, cut_run: str) -> dict:
+    current = api("GET", f"/v1/projects/{project_id}/motion")
+    if not current.get("submitted"):
+        raise ToolError("no motion composition submitted; call submit_motion first or render without {'motion': true}")
+    for r in reversed(runs_for(project_id, "capture_motion", "done")):
+        res = r["result"]
+        if res["mode"] == "proof" and r["params"]["cut"]["run"] == cut_run:
+            if res["composition_sha256"] != current["composition_sha256"]:
+                raise ToolError("the composition changed after the last proof capture; run capture_motion(project_id, 'proof') again")
+            if not res["pass"]:
+                raise ToolError("the last proof capture did not pass; fix the composition and capture a proof again")
+            return {"crop_job": res["crop_job"], "capture_job": res["capture_job"], "framing": res["framing"]}
+    raise ToolError("no passing proof capture for the current cut; run capture_motion(project_id, 'smoke') then 'proof' first")
+
+
+def check_framing(framing):
+    if framing is None:
+        return None
+    if not isinstance(framing, dict) or set(framing) - {"targets", "new_setup_at"}:
+        raise ToolError("framing must be {'targets': {'<kept segment index>': 'largest'|'left'|'right'|'center'}, 'new_setup_at': [index]}")
+    return framing
+
+
 @mcp.tool(description=(
-    "Step 7, after apply_cuts is done and the owner accepts the cut. Renders the finished vertical short in the background and "
+    "Optional, after apply_cuts: preview the fixed 9:16 crop of every camera setup with face-audit evidence images, and choose "
+    "which person each kept segment frames in a two-person shot. framing (optional): {'targets': {'<kept segment index>': "
+    "'largest'|'left'|'right'|'center'}, 'new_setup_at': [kept segment index]}; segments are numbered from 0 in the kept "
+    "order (apply_cuts reports kept_segments). Each setup gets ONE fixed crop (no animated pans, per James' contract); a "
+    "change of target starts a new setup. Returns a run_id; call get_status until 'done', then look at each evidence_image."))
+def preview_framing(project_id: str, ctx: Context, framing: dict | None = None) -> dict:
+    def go():
+        if not ID.fullmatch(project_id or ""):
+            raise ToolError("project_id must be the 32-hex project id")
+        cut = latest_cut(project_id)
+        with LOCK:
+            if runs_for(project_id, state="running"):
+                raise ToolError("a run is already in progress for this project; call get_status(project_id)")
+            run = start_run("preview_framing", project_id, {"cut": {"jobs": cut["result"]["jobs"], "run": cut["id"]},
+                                                            "framing": check_framing(framing), "base_url": base_url(ctx)}, do_preview_framing)
+        return {"run_id": run["id"], "state": "running", "next": f"Call get_status('{run['id']}') until 'done'."}
+    return _result(go)
+
+
+@mcp.tool(description=(
+    "Motion graphics step 1 (optional; James DeFleur's defleur-motion contract, condensed in workflow_guide.motion_contract). "
+    "Upload YOUR composition for this project: files = {path: text} for index.html, .css, .js, .svg, .json, or "
+    "{path: {'base64': ...}} for small .png/.jpg/.webp/.woff2 (use create_asset_upload for video clips and big images). "
+    "plan = James' visual-plan: {'beats': [{start, end, spoken_anchor, viewer_inference, visual_family, state_before, "
+    "state_after, causal_action, caption_treatment: 'show'|'suppress', speaker_return}], 'caption_suppress': [{start, end, "
+    "reason}], 'inserts': [{start, end, asset, fit: 'cover'|'contain', clip_start_s, reason}]}, times in seconds of the EDITED "
+    "video. index.html MUST load defleur/ledger.js (app-generated sourceFrameForOutputFrame + DEFLEUR data) and "
+    "defleur/gsap.min.js (vendored GSAP 3.15.0), have <img id=\"live\"> and define window.renderFrame(t) as synchronous "
+    "deterministic state reconstruction (paused GSAP timeline + seek); optional window.visualMode(t) and "
+    "window.captionSuppressed(t). Every beat must make an explanatory change (cause->effect, state replacement, accumulation, "
+    "topology change, comparison, return to source with new meaning), not a static title card. No network: everything local. "
+    "replace (default true) drops earlier text files but keeps uploaded media. Then capture_motion 'smoke'."))
+def submit_motion(project_id: str, files: dict, plan: dict, replace: bool = True) -> dict:
+    def go():
+        if not ID.fullmatch(project_id or ""):
+            raise ToolError("project_id must be the 32-hex project id")
+        if runs_for(project_id, state="running"):
+            raise ToolError("a run is in progress for this project; wait for it with get_status first")
+        st = api("POST", f"/v1/projects/{project_id}/motion", {"files": files, "plan": plan, "replace": replace})
+        return {**{k: v for k, v in st.items() if k != "plan"},
+                "next": "Call capture_motion(project_id, 'smoke') and look at the returned frames."}
+    return _result(go)
+
+
+@mcp.tool(description=(
+    "Motion graphics: get a one-time upload URL (30 minutes) and curl command for ONE larger asset of the composition, e.g. a "
+    "B-roll clip for a fullscreen insert or a big image. path is where it lands in the composition, e.g. 'assets/broll.mp4' "
+    "(.mp4 up to 2 GiB; .png/.jpg/.webp up to 32 MiB; .woff2 up to 8 MiB). Reference it from index.html or plan.inserts[].asset. "
+    "Bytes never go through MCP."))
+def create_asset_upload(project_id: str, path: str, ctx: Context) -> dict:
+    def go():
+        if not ID.fullmatch(project_id or ""):
+            raise ToolError("project_id must be the 32-hex project id")
+        u = api("POST", f"/v1/projects/{project_id}/asset-uploads", {"path": path})
+        url = base_url(ctx) + u["path"]
+        return {"upload_url": url, "asset_path": u["asset_path"], "expires_in_s": u["expires_in_s"], "max_bytes": u["max_bytes"],
+                "curl": f"curl -fS -X POST -H 'Content-Type: application/octet-stream' -T /path/to/file '{url}'",
+                "next": "After the upload answers 201, reference the asset_path in your composition or plan.inserts, then submit_motion."}
+    return _result(go)
+
+
+@mcp.tool(description=(
+    "Motion graphics: capture the submitted composition with James' capture.cjs in the shared Browser app. mode 'smoke' = "
+    "the first ~6 s; 'proof' = start, 0.25 s, end and the start/middle/end of every beat, plus James' reverse-seek determinism "
+    "check (a mismatch fails). Returns a run_id; call get_status until 'done' for frame image URLs and a contact sheet. LOOK AT "
+    "THEM before continuing. Needs the Browser app (capabilities shows it). framing as in preview_framing (optional)."))
+def capture_motion(project_id: str, mode: str, ctx: Context, framing: dict | None = None) -> dict:
+    def go():
+        if not ID.fullmatch(project_id or ""):
+            raise ToolError("project_id must be the 32-hex project id")
+        if mode not in ("smoke", "proof"):
+            raise ToolError("mode must be 'smoke' or 'proof' (render_final does the full capture)")
+        cut = latest_cut(project_id)
+        st = api("GET", f"/v1/projects/{project_id}/motion")
+        if not st.get("submitted"):
+            raise ToolError("no motion composition submitted; call submit_motion first")
+        with LOCK:
+            if runs_for(project_id, state="running"):
+                raise ToolError("a run is already in progress for this project; call get_status(project_id)")
+            run = start_run("capture_motion", project_id, {"cut": {"jobs": cut["result"]["jobs"], "run": cut["id"]}, "mode": mode,
+                                                           "composition_sha256": st["composition_sha256"], "framing": check_framing(framing),
+                                                           "base_url": base_url(ctx)}, do_capture_motion)
+        return {"run_id": run["id"], "state": "running", "next": f"Call get_status('{run['id']}') until 'done', then look at the frames."}
+    return _result(go)
+
+
+@mcp.tool(description=(
+    "Step 9, after apply_cuts is done and the owner accepts the cut. Renders the finished vertical short in the background and "
     "returns a run_id: face audit and one fixed 9:16 crop per setup (centered and flagged if no face is found), burned-in "
     "captions from the edited-audio word timings (James' caption_layer.py), the 1080x1920 H.264/AAC encode and --verify-only "
     "(James' encode.py), full decode, decoded-pixel crop/caption checks, re-transcription of the final audio and James' "
     "delivery gate. Keep calling get_status(run_id) until 'done' for resolution, duration, crop summary, caption count, gate "
-    "result, words lost and download URLs. options: {} today (reserved). No motion graphics yet."))
+    "result, words lost and download URLs. options: {} for live footage + captions (no Browser needed); "
+    "{'motion': true} after a passing capture_motion 'proof' of the current composition (full capture of every frame, "
+    "motion-window and caption-suppression checks); {'framing': {...}} as in preview_framing (with motion, the proof's "
+    "framing is used)."))
 def render_final(project_id: str, ctx: Context, options: dict | None = None) -> dict:
     def go():
         if not ID.fullmatch(project_id or ""):
             raise ToolError("project_id must be the 32-hex project id")
-        if options:
-            raise ToolError("render_final takes no options yet; call it with project_id only")
+        opts = options or {}
+        if not isinstance(opts, dict) or set(opts) - {"motion", "framing"}:
+            raise ToolError("options may contain only 'motion' (bool) and 'framing' (object)")
         cuts = runs_for(project_id, "apply_cuts", "done")
         if not cuts:
             raise ToolError("run apply_cuts for this project first and wait for it to finish (get_status)")
         cut = cuts[-1]
+        proof = None
+        if opts.get("motion"):
+            proof = latest_proof(project_id, cut["id"])
+            if opts.get("framing") and opts["framing"] != proof["framing"]:
+                raise ToolError("framing differs from the proof capture's framing; capture a new proof with this framing")
         edits = runs_for(project_id, "start_edit", "done")
         lang = cut["params"]["edit"].get("language") or (edits[-1]["result"]["language"] if edits else "auto")
         with LOCK:
             if runs_for(project_id, state="running"):
                 raise ToolError("a run is already in progress for this project; call get_status(project_id)")
             run = start_run("render_final", project_id, {"cut": {"jobs": cut["result"]["jobs"], "run": cut["id"]},
-                                                         "language": lang, "base_url": base_url(ctx)}, do_render_final)
+                                                         "language": lang, "base_url": base_url(ctx), "proof": proof,
+                                                         "framing": opts.get("framing")}, do_render_final)
         return {"run_id": run["id"], "state": "running", "from_apply_cuts_run": cut["id"],
                 "next": f"Call get_status('{run['id']}') now and keep calling it until state is 'done' (each call waits up to ~55 s). "
                         "Rendering takes roughly 1-3x the video length on this server."}

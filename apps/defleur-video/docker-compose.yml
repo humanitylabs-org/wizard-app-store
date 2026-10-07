@@ -1,19 +1,21 @@
 services:
   defleur-video:
-    image: ghcr.io/humanitylabs-org/defleur-video:0.5.0-testing
+    image: ghcr.io/humanitylabs-org/defleur-video:0.6.0-testing
     user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    pids_limit: 64
-    mem_limit: 1536m
-    memswap_limit: 1536m
-    cpus: 2.0
-    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    # Generous ceilings (see RELEASE.md for the measured 3-minute 1080p peak); no CPU cap.
+    pids_limit: 2048
+    mem_limit: 8g
+    memswap_limit: 8g
+    shm_size: 1g
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
     environment:
       VIDEO_DATA_DIR: /data
       VIDEO_BIND: 0.0.0.0
       TRANSCRIBER_URL: ${TRANSCRIBER_URL}
+      BROWSER_URL: ${BROWSER_URL}
       TRANSCRIBER_MODEL: ${TRANSCRIBER_MODEL}
     volumes:
       - ${APP_DATA_DIR}/data:/data

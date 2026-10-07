@@ -11,6 +11,10 @@ caption band. With no face at all the crop is centered and flagged.
 
 Outputs in OUT: crop-ledger.json, face-audit.json, face-audit-setup-<k>.json,
 setup-<k>-crop.png. Evidence for review; not a perceptual judgement.
+
+--framing (optional) lets the operator pick, per kept segment, which detected face
+a two-person shot frames (largest|left|right|center) and force new setups at
+named segments. A change of target always starts a new fixed-crop setup.
 """
 from __future__ import annotations
 
@@ -112,7 +116,11 @@ def main() -> None:
     ap.add_argument("--model", type=Path, required=True)
     ap.add_argument("--canvas", default="1080x1920")
     ap.add_argument("--caption-top", type=int, required=True, help="caption safe_rect top on the output canvas")
+    ap.add_argument("--framing", type=Path, help="optional JSON {targets: {segment: largest|left|right|center}, new_setup_at: [segment]}")
     a = ap.parse_args()
+    framing = json.loads(a.framing.read_text()) if a.framing else {}
+    targets = {int(k): v for k, v in (framing.get("targets") or {}).items()}
+    breaks = set(int(k) for k in framing.get("new_setup_at") or [])
     import cv2
     cw_out, ch_out = (int(v) for v in a.canvas.split("x"))
     aspect, cap_frac = cw_out / ch_out, a.caption_top / ch_out
@@ -144,13 +152,28 @@ def main() -> None:
             thumbs[index] = img
     if len(found) != len(wanted):
         raise SystemExit(f"sampled {len(found)} of {len(wanted)} frames")
-    seg_boxes = {k: [found[f][0][:4] for kk, f in samples if kk == k and found[f]] for k in range(len(segments))}
+    def choose(k, faces):
+        """The face this segment frames: the largest (default), or the operator's per-segment speaker choice."""
+        mode = targets.get(k, "largest")
+        if not faces or mode == "largest":
+            return faces[0] if faces else None
+        big = [r for r in faces if r[2] * r[3] >= 0.35 * faces[0][2] * faces[0][3]] or faces[:1]
+        key = {"left": lambda r: r[0] + r[2] / 2, "right": lambda r: -(r[0] + r[2] / 2),
+               "center": lambda r: abs(r[0] + r[2] / 2 - W / 2)}[mode]
+        return min(big, key=key)
+    for k, f in samples:
+        if found[f]:
+            chosen = choose(k, found[f])
+            found[(k, f)] = [chosen] + [r for r in found[f] if r is not chosen]
+    face = lambda k, f: found.get((k, f), found[f])
+    seg_boxes = {k: [face(kk, f)[0][:4] for kk, f in samples if kk == k and found[f]] for k in range(len(segments))}
     # Greedy setups: consecutive kept segments share one fixed crop while their faces still fit it.
     setups, current = [], []
     for k in range(len(segments)):
         trial = current + [k]
         boxes = [b for j in trial for b in seg_boxes[j]]
-        if current and not plan_crop(boxes, W, H, aspect, cap_frac)[2] and plan_crop([b for j in current for b in seg_boxes[j]], W, H, aspect, cap_frac)[2]:
+        forced = k in breaks or (current and targets.get(k, "largest") != targets.get(current[-1], "largest"))
+        if current and (forced or not plan_crop(boxes, W, H, aspect, cap_frac)[2] and plan_crop([b for j in current for b in seg_boxes[j]], W, H, aspect, cap_frac)[2]):
             setups.append(current); current = [k]
         else:
             current = trial
@@ -165,8 +188,8 @@ def main() -> None:
         for k, f in samples:
             if k not in members:
                 continue
-            faces = found[f]
-            row = {"segment": k, "source_frame": f, "source_s": round(f / float(fps), 3), "faces": len(faces)}
+            faces = face(k, f)
+            row = {"segment": k, "target": targets.get(k, "largest"), "source_frame": f, "source_s": round(f / float(fps), 3), "faces": len(faces)}
             if faces:
                 inside, clear = judge(faces[0][:4], crop, cap_frac)
                 row.update({"box": [round(v, 1) for v in faces[0][:4]], "score": round(faces[0][4], 3), "inside_crop_with_margin": inside,
@@ -191,7 +214,8 @@ def main() -> None:
         for k in members:
             s = segments[k]
             ledger["ranges"].append({"start": s["output_start"], "end": s["output_end"], "setup": f"setup-{sid}", "crop": crop,
-                                     "source_start_s": s["start_s"], "source_end_s": s["end_s"], "face_audit": f"face-audit-setup-{sid}.json"})
+                                     "source_start_s": s["start_s"], "source_end_s": s["end_s"], "face_audit": f"face-audit-setup-{sid}.json",
+                                     "target": targets.get(k, "largest")})
         # Evidence image: a representative sampled frame with crop (green), faces (red) and caption band (yellow).
         pick = next((f for k, f in samples if k in members and f in thumbs), None)
         if pick is not None:
