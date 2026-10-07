@@ -55,7 +55,9 @@ HEVC or variable-frame-rate phone video is converted to H.264 at a constant fram
 - The face audit samples frames (about 2 per second) with a local detector. A face it misses isn't audited, and a video with no detectable face gets a centered crop that is flagged in the report.
 - The final-audio window notes for the delivery gate are written automatically from measurements and the final transcript. Always watch the final video on a phone before posting.
 - `apply_cuts` writes the edge and window review notes for the gate automatically from measurements. The gate therefore proves that the evidence is complete and its hashes match. It does not prove anyone listened, so always listen to the edit.
-- ASR can miss fillers. A long pause candidate with sound in it is probably an untranscribed "um".
+- ASR can miss fillers and even whole sentences. start_edit proposes a pause only after measuring it silent; gaps with sound come back as `untranscribed_sound`. Tell the owner about each one and never cut them without the owner listening first.
+- apply_cuts measures every cut you send (`cut_sound_check`). If a cut contains speech-like sound, the gate fails with the time range. Mark a cut `owner_approved_sound: true` only after the owner has listened and approved.
+- Fillers heard in only one transcript (`fillers_heard_in_edit_only`) and ASR spelling variants (`asr_spelling_variants`) are not lost words.
 
 ## Without MCP
 The plain HTTP API and `client.py` (one command per stage, with hand-written reviews) still work unchanged; see [README.md](README.md) and [EDITING.md](EDITING.md).
