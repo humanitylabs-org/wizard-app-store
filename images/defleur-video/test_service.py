@@ -660,5 +660,45 @@ class MediaTests(unittest.TestCase):
         self.request("DELETE", f"/v1/projects/{pid}")
 
 
+    def test_one_time_upload_url_project_list_and_upload_page(self):
+        status, data = self.request("POST", "/v1/uploads", b"", auth=False)
+        self.assertEqual(status, 401)
+        status, ticket = self.request("POST", "/v1/uploads", b"")
+        self.assertEqual(status, 201)
+        self.assertTrue(ticket["path"].startswith("/v1/uploads/") and ticket["one_time"])
+        body = self.source.read_bytes()
+        status, project = self.request("POST", ticket["path"], body, "video/mp4", auth=False)
+        self.assertEqual(status, 201, project)
+        self.assertNotIn("normalization", project)  # H.264 CFR source keeps its original bytes
+        status, again = self.request("POST", ticket["path"], body, "video/mp4", auth=False)
+        self.assertEqual(status, 403)
+        status, bogus = self.request("POST", "/v1/uploads/" + "x" * 43, body, "video/mp4", auth=False)
+        self.assertEqual(status, 403)
+        status, listing = self.request("GET", "/v1/projects")
+        self.assertIn(project["id"], [p["id"] for p in listing["projects"]])
+        status, page = self.request("GET", "/upload", auth=False)
+        self.assertEqual(status, 200)
+        self.assertIn(b'type="file"', page)
+        self.assertNotIn(b"http", page.split(b"<script>")[1])  # no external assets
+        self.request("DELETE", f"/v1/projects/{project['id']}")
+
+    def test_hevc_and_vfr_sources_are_normalized_with_provenance(self):
+        hevc, vfr = self.root / "hevc.mp4", self.root / "vfr.mp4"
+        subprocess.run(["/usr/bin/ffmpeg", "-v", "error", "-y", "-i", str(self.source), "-c:v", "libx265", "-x265-params", "log-level=error:pools=1:frame-threads=1",
+                        "-tag:v", "hvc1", "-c:a", "copy", str(hevc)], check=True, timeout=120)
+        subprocess.run(["/usr/bin/ffmpeg", "-v", "error", "-y", "-i", str(self.source), "-vf", "setpts='if(lt(N,24),N/24/TB,(N*1.6)/24/TB)'",
+                        "-fps_mode", "vfr", "-c:v", "libx264", "-threads", "1", "-c:a", "copy", str(vfr)], check=True, timeout=60)
+        for path, reason in ((hevc, "HEVC video"), (vfr, "variable frame rate")):
+            status, project = self.request("POST", "/v1/projects", path.read_bytes(), "video/mp4")
+            self.assertEqual(status, 201, project)
+            self.assertEqual(project["video_codec"], "h264")
+            self.assertIn(reason, project["normalization"]["reasons"])
+            self.assertEqual(project["normalization"]["frame_rate_mode"], "constant")
+            self.assertEqual(project["original"]["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertNotEqual(project["source_sha256"], project["original"]["sha256"])
+            self.assertEqual(service.frame_rate_mode(self.server.store.path(project["id"]) / "source.mp4",
+                                                     {"r_frame_rate": project["normalization"]["fps"]})[0], "constant")
+            self.request("DELETE", f"/v1/projects/{project['id']}")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

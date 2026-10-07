@@ -392,9 +392,14 @@ def normalize_if_needed(path):
         fps = target_fps(v)
         out = path.with_name(path.name + ".norm.mp4")
         started = time.monotonic()
-        # Fit inside 1920x1920 and 2073600 px, even dimensions; ffmpeg applies display rotation itself.
-        scale = ("scale='trunc(min(1,min(1920/iw,1920/ih,sqrt(2073600/(iw*ih))))*iw/2)*2':"
-                 "'trunc(min(1,min(1920/iw,1920/ih,sqrt(2073600/(iw*ih))))*ih/2)*2',setsar=1")
+        # Fit inside 1920x1920 and 2073600 px with even dimensions. Rotation metadata is applied
+        # by ffmpeg's autorotate, so swap the axes for 90/270-degree sources.
+        w, h = int(v.get("width", 0)), int(v.get("height", 0))
+        rot = next((abs(int(float(x["rotation"]))) for x in v.get("side_data_list", []) if "rotation" in x), 0)
+        if rot % 180 == 90:
+            w, h = h, w
+        f = min(1.0, 1920 / max(w, h), math.sqrt(2073600 / (w * h)))
+        scale = f"scale={max(2, int(w * f) // 2 * 2)}:{max(2, int(h * f) // 2 * 2)},setsar=1"
         native(["/usr/bin/ffmpeg", "-v", "error", "-nostdin", *loose_input_args(), "-map", "0:v:0", "-map", "0:a:0",
                 "-vf", scale, "-fps_mode", "cfr", "-r", fps, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", str(min(2, int(a.get("channels") or 2))),
