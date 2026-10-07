@@ -53,13 +53,21 @@ Fixture: a 1920×1080, 30 fps talking head built from a public-domain NASA portr
 
 See RELEASE.md for the full verification record.
 
+### Piece 3, varied 3-minute source (2026-10-07, `scripts/e2e-video-motion.py --long 180`, local only)
+A non-repetitive 130.7 s Kokoro script (5 ums, 4 one-second pauses) on the real-face 1080p picture, run through the full MCP flow with a GSAP beat, a B-roll insert and two crop setups. **Pass.**
+- 25 cuts removed 11.17 s (to 119.54 s), all measured near-silent (0.04 s of speech-like audio in total). 0 content words lost; dialogue and delivery gates pass (1 ASR spelling variant, trellis/trellies, reported separately).
+- 1080x1920 H.264/AAC, 3587 frames, full decode. 79 caption cues; captions suppressed exactly where declared; motion only in planned windows; 2 setups with faces in crop.
+- Memory peaks: video app 2.97 GiB (limit 10 GiB), Browser 0.70 GiB (limit 6 GiB). Time: 1159 s in total. render_final took 971 s: Browser capture 679 s (~0.19 s per frame), `encode.py` 130 s, checks ~80 s.
+- On the earlier *looped* fixture, 11 of 31 transcript-gap "pauses" held speech (32.7 s; Whisper skipped repeated sentences). That's why pauses are now proposed only when measured silent, gaps with sound go to `untranscribed_sound`, and `apply_cuts` measures every cut (`cut_sound_check`).
+
 ## Known limits
+- Silence is judged by an energy threshold (speech level - 15 dB, word tails at - 30 dB), not a trained VAD. Noise in a gap is listed for review, not cut; very quiet speech could still look like a pause. The owner listening to the edit is the final check.
 - Motion graphics are authored by Hermes; the app checks mechanics (determinism, windows, suppression), not whether a beat explains well. Phone-size readability and continuous playback stay a human review (James' contract says so too).
 - Crops are fixed per setup (James' rule); there are no animated pans. A speaker change inside one kept segment needs a cut there first.
 - Remaining named gap: VFR sources are re-encoded to CFR on upload instead of carrying a PTS-to-output-frame ledger (James' `vfr-ledger` source mode).
 - `final-render` writes one JPEG per output frame before encoding (about 0.3 MB each at 1080×1920; a 5-minute 30 fps video needs about 3 GB of free disk at peak) and deletes them after the encode.
 - The face audit is sampled (about 2 frames per second), and a face the detector misses isn't audited.
-- Alignment memory grows with model size. `base` peaked at 896 MB (limit now 8 GB). `small` is untested. `medium` and `large-v3-turbo` would need a higher memory limit; also untested.
+- Alignment memory grows with model size. `base` peaked at 896 MB (limit now 10 GiB). `small` is untested. `medium` and `large-v3-turbo` would need a higher memory limit; also untested.
 - The Transcriber runs ASR at about real time on CPU, so a long source takes about as long as it plays. ASR and alignment stages each have a 30-minute limit.
 - VFR is handled by re-encoding to CFR on upload (0.4.0). Frame-exact editing of the original VFR timeline would need the PTS picture ledger from piece 2.
 - Through MCP, `apply_cuts` writes the gate's edge/window review notes automatically from measurements. The gate then proves the evidence is complete, not that anyone listened.
