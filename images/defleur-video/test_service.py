@@ -824,6 +824,27 @@ class MediaTests(unittest.TestCase):
             self.assertEqual((out / row["image"]).read_bytes()[:4], b"\x89PNG")
         self.assertEqual((out / "proof-sheet.png").read_bytes()[:4], b"\x89PNG")
 
+    def test_cut_regions_match_assembly_with_adjacent_and_overlapping_cuts(self):
+        """Regions must retain exactly what assemble_pcm kept, even for words crossing cut edges (James' speech_cut_audit rule)."""
+        from editing import cut_regions
+        sr = 48000
+        # Cuts as the app merges them: 1.0-1.5 and 1.5-1.8 (adjacent) and 3.2-3.9 overlapping 3.6-4.1 -> blocks between.
+        bounds = [(0, round(1.0 * sr)), (round(1.8 * sr), round(3.2 * sr)), (round(4.1 * sr), round(6.0 * sr))]
+        blocks = [{"start_s": a / sr, "end_s": b / sr} for a, b in bounds]
+        words = [{"word": "a", "start": 0.2, "end": 0.6}, {"word": "edge", "start": 0.9, "end": 1.2},   # crosses a cut start
+                 {"word": "um", "start": 1.3, "end": 1.45}, {"word": "b", "start": 1.75, "end": 2.1},   # um inside; b crosses an end
+                 {"word": "c", "start": 3.0, "end": 3.3}, {"word": "d", "start": 4.0, "end": 4.6}, {"word": "e", "start": 5.0, "end": 5.4}]
+        regions, removed, kept = cut_regions(words, blocks, 6.0)
+        for r in regions:  # replicate speech_cut_audit.py's coverage arithmetic
+            overlaps = sorted((max(r["start_s"], b["start_s"]), min(r["end_s"], b["end_s"])) for b in blocks
+                              if b["start_s"] < r["end_s"] and b["end_s"] > r["start_s"])
+            retained = sum(h - l for l, h in overlaps)
+            wanted = r["end_s"] - r["start_s"] if r["mode"] == "keep" else 0.0
+            self.assertLess(abs(retained - wanted), 1e-6, r)
+        self.assertEqual(removed, ["um"])
+        self.assertEqual(kept, ["a", "edge", "b", "c", "d", "e"])
+        self.assertEqual(sum(1 for r in regions if r["mode"] == "drop" and "word" not in r), 2)
+
     def test_capabilities_report_browser_and_resources(self):
         os.environ["BROWSER_URL"] = "http://127.0.0.1:9"
         try:

@@ -21,6 +21,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # run with -I: make the app's pure helpers importable
+from editing import cut_regions  # noqa: E402
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -395,19 +398,10 @@ def do_apply_cuts(run: dict) -> dict:
     words = [{"word": w[1], "start": w[2], "end": w[3]} for w in edit["words"]]
     lang = edit["language"]
     asm = stage(run, "pcm-assemble", {"audio_job": edit["jobs"]["source_audio"], "segments": keeps})
-    regions, removed, expected = [], [], []
-    for w in words:
-        if w["end"] - w["start"] < 0.005:
-            continue
-        if in_cut((w["start"] + w["end"]) / 2, cuts):
-            removed.append(w["word"])
-            regions.append({"mode": "drop", "start_s": w["start"], "end_s": w["end"], "word": w["word"][:100], "reason": "inside an approved cut"})
-        else:
-            expected.append(norm(w["word"]))
-            regions.append({"mode": "keep", "start_s": w["start"], "end_s": w["end"], "word": w["word"][:100]})
-    for c in cuts:
-        regions.append({"mode": "drop", "start_s": c["start_s"], "end_s": c["end_s"], "reason": c["reason"][:500]})
-    regions.sort(key=lambda r: r["start_s"])
+    # Regions come from the assembled (sample-exact) segments, the same list the audio was built from.
+    blocks = artifact(asm["id"], "edit-map.json")["segments"]
+    regions, removed, kept_words = cut_regions(words, blocks, duration)
+    expected = [norm(w) for w in kept_words]
     audit = stage(run, "speech-cut-audit", {"assemble_job": asm["id"], "regions": regions[:2000]})
     cut_receipt = artifact(audit["id"], "cut-regression.json")
     scan = stage(run, "acoustic-scan", {"assemble_job": asm["id"]})
@@ -456,6 +450,11 @@ def do_apply_cuts(run: dict) -> dict:
                                         "edited_asr_job": easr["id"], "filler_review": filler_review,
                                         "acoustic_review": acoustic_review, "reviewed_edges": edges})
     gsum = gate["result"]["summary"]
+    if failed_regions:
+        r0 = failed_regions[0]
+        gsum = {**gsum, "error": (gsum.get("error") or "") + f" - {len(failed_regions)} cut-audit region(s) failed; first: {r0['mode']} "
+                f"{float(r0['start_s']):.3f}-{float(r0['end_s']):.3f} s{' (' + r0['word'] + ')' if r0.get('word') else ''} should retain "
+                f"{(float(r0['end_s']) - float(r0['start_s'])) if r0['mode'] == 'keep' else 0:.3f} s but the assembly retained {float(r0['retained_s']):.3f} s"}
     base = run["params"]["base_url"]
     dl = lambda j, n: f"{base}/v1/jobs/{j}/stage-artifacts/{n}"
     names = {a["name"] for a in asm["result"]["artifacts"]}

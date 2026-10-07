@@ -145,3 +145,38 @@ def review_artifacts(source, target, plan, metadata, native, input_args, digest)
             "audio_lock": False, "human_audition": False,
             "caption_timing_basis": "externally supplied output seconds, 24fps quantization; alignment unverified",
             "protected_region_basis": "caller assertion; geometry checked, no face detection or tracking"}
+
+
+def cut_regions(words, blocks, duration):
+    """Keep/drop regions for James' speech_cut_audit.py built from the ASSEMBLED blocks (sample-exact edit-map
+    segments), so every region's retained time equals what it claims. A word crossing a block edge is split into
+    a keep part and a drop part; drop regions for the cuts are the exact gaps between blocks. Returns
+    (regions, removed_words, kept_words) where a word counts as removed when most of it lies outside the blocks."""
+    spans = sorted((float(b["start_s"]), float(b["end_s"])) for b in blocks)
+    gaps, cursor = [], 0.0
+    for a, b in spans:
+        if a - cursor > 1e-9:
+            gaps.append((cursor, a))
+        cursor = max(cursor, b)
+    if duration - cursor > 1e-9:
+        gaps.append((cursor, float(duration)))
+    regions, removed, kept = [], [], []
+    for w in words:
+        s, e = float(w["start"]), float(w["end"])
+        if e - s < 0.005:
+            continue
+        inside = 0.0
+        for a, b in spans:
+            lo, hi = max(s, a), min(e, b)
+            if hi - lo >= 0.001:
+                regions.append({"mode": "keep", "start_s": lo, "end_s": hi, "word": str(w["word"])[:100]})
+                inside += hi - lo
+        for a, b in gaps:
+            lo, hi = max(s, a), min(e, b)
+            if hi - lo >= 0.001:
+                regions.append({"mode": "drop", "start_s": lo, "end_s": hi, "word": str(w["word"])[:100], "reason": "inside an approved cut"})
+        (kept if inside >= (e - s) / 2 else removed).append(w["word"])
+    for a, b in gaps:
+        regions.append({"mode": "drop", "start_s": a, "end_s": b, "reason": "approved cut (exact assembled gap)"})
+    regions.sort(key=lambda r: (r["start_s"], r["end_s"]))
+    return regions, removed, kept
