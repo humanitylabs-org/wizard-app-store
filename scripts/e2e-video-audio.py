@@ -75,6 +75,14 @@ class Peak(threading.Thread):
                 pass
 
 
+def ff(tool, *args, cwd):
+    """Host ffmpeg/ffprobe if present, else the copy inside the candidate image (CI runners lack it)."""
+    if shutil.which(tool) and not os.environ.get("E2E_FFMPEG_DOCKER"):
+        return run(tool, *args, cwd=cwd)
+    return run("docker", "run", "--rm", "--network", "none", "--mount", f"type=bind,source={cwd},target=/w", "-w", "/w",
+               "--entrypoint", f"/usr/bin/{tool}", IMAGE, *args)
+
+
 def build_fixture(speaches_image, hf_cache):
     """Synthesize speech with a filler and a pause using a throwaway Speaches container (Kokoro TTS)."""
     fixture = OUT / "fixture"
@@ -82,6 +90,7 @@ def build_fixture(speaches_image, hf_cache):
         return fixture, json.loads((fixture / "truth.json").read_text())
     shutil.rmtree(fixture, ignore_errors=True)
     fixture.mkdir(parents=True)
+    os.chmod(fixture, 0o777)  # the image's ffmpeg runs as uid 1000
     name = "defleur-e2e-tts-" + secrets.token_hex(4)
     run("docker", "run", "-d", "--name", name, "-p", "127.0.0.1::8000", "--mount", f"type=bind,source={hf_cache},target=/home/ubuntu/.cache/huggingface",
         speaches_image)
@@ -99,18 +108,18 @@ def build_fixture(speaches_image, hf_cache):
         http_call("POST", base + "/v1/models/" + TTS_MODEL, timeout=900)
         clips, truth, cursor = [], {}, 0.0
         for i, (kind, value) in enumerate(PARTS):
-            path = fixture / f"part-{i}.wav"
+            path = f"part-{i}.wav"
             if kind == "speech":
                 body = json.dumps({"model": TTS_MODEL, "voice": "af_heart", "input": value, "response_format": "wav"}).encode()
-                raw = fixture / f"part-{i}.tts.wav"
-                raw.write_bytes(http_call("POST", base + "/v1/audio/speech", body, {"Content-Type": "application/json"}, timeout=300)[1])
+                raw = f"part-{i}.tts.wav"
+                (fixture / raw).write_bytes(http_call("POST", base + "/v1/audio/speech", body, {"Content-Type": "application/json"}, timeout=300)[1])
                 # Trim TTS leading/trailing silence so clip boundaries are speech boundaries.
-                run("ffmpeg", "-v", "error", "-y", "-i", str(raw), "-af",
-                    "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse",
-                    "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(path))
+                ff("ffmpeg", "-v", "error", "-y", "-i", raw, "-af",
+                   "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse",
+                   "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", path, cwd=fixture)
             else:
-                run("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", str(value), "-c:a", "pcm_s16le", str(path))
-            dur = float(run("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)))
+                ff("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", str(value), "-c:a", "pcm_s16le", path, cwd=fixture)
+            dur = float(ff("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path, cwd=fixture))
             if kind == "speech" and value == "Um,":
                 truth["um"] = {"start_s": round(cursor, 3), "end_s": round(cursor + dur, 3)}
             if kind == "gap" and value == 0.9:
@@ -120,11 +129,11 @@ def build_fixture(speaches_image, hf_cache):
         truth["duration_s"] = round(cursor, 3)
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
-    (fixture / "list.txt").write_text("".join(f"file '{p.name}'\n" for p in clips))
-    run("ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(fixture / "list.txt"), "-c", "copy", str(fixture / "speech.wav"))
-    run("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30", "-i", str(fixture / "speech.wav"),
-        "-shortest", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
-        "-movflags", "+faststart", str(fixture / "source.mp4"))
+    (fixture / "list.txt").write_text("".join(f"file '{p}'\n" for p in clips))
+    ff("ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "speech.wav", cwd=fixture)
+    ff("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30", "-i", "speech.wav",
+       "-shortest", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
+       "-movflags", "+faststart", "source.mp4", cwd=fixture)
     (fixture / "truth.json").write_text(json.dumps(truth, indent=2))
     return fixture, truth
 
