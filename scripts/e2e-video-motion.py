@@ -226,7 +226,8 @@ async def flow(url, fixture, truth, report):
                                                          "caption_band_changes_with_cues", "captions_suppressed_where_declared",
                                                          "suppressed_samples_with_speech", "live_max_capture_vs_base", "encode_matches_capture",
                                                          "caption_band_changed_fraction")},
-                "ledger": {"setups": sorted({r["setup"] for r in ledger["ranges"]}), "fullscreen_exceptions": ledger["fullscreen_exceptions"]},
+                "ledger": {"ranges": [{k: r.get(k) for k in ("start", "end", "setup", "crop")} for r in ledger["ranges"]],
+                           "setups": sorted({r["setup"] for r in ledger["ranges"]}), "fullscreen_exceptions": ledger["fullscreen_exceptions"]},
                 "independent_face_check": faces}
             assert (vid["codec_name"], vid["width"], vid["height"], aud["codec_name"]) == ("h264", 1080, 1920, "aac")
             assert int(vid["nb_read_frames"]) == final["final"]["frames"]

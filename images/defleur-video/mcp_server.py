@@ -583,7 +583,8 @@ def do_render_final(run: dict) -> dict:
     gs = gate_job["result"]["summary"] if gate_job else {}
     base = run["params"]["base_url"]
     dl = lambda j, n: f"{base}/v1/jobs/{j}/stage-artifacts/{n}"
-    downloads = {"final_mp4": dl(render["id"], "final.mp4"), "crop_ledger_json": dl(crop["id"], "crop-ledger.json"),
+    # The final-render job's crop-ledger.json is the delivered one: with motion it adds fullscreen_exceptions for inserts.
+    downloads = {"final_mp4": dl(render["id"], "final.mp4"), "crop_ledger_json": dl(render["id"], "crop-ledger.json"),
                  "face_audit_json": dl(crop["id"], "face-audit.json"), "final_integrity_json": dl(render["id"], "final-integrity.json"),
                  "media_verification_json": dl(render["id"], "media-verification.json"),
                  "pixel_check_json": dl(render["id"], "motion-check.json" if proof else "live-check.json")}
