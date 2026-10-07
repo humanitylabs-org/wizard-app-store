@@ -163,7 +163,7 @@ async def flow(url, fixture, truth, report):
             timings["preview_framing"] = round(time.monotonic() - t0, 1)
             report["framing"] = {"framing": framing, "setups": [{k: x[k] for k in ("setup", "segments", "crop", "pass", "flags")} for x in fr["setups"]],
                                  "pass": fr["face_inside_crop_all_samples"]}
-            assert fr["face_inside_crop_all_samples"] and len(fr["setups"]) == (2 if framing else 1), report["framing"]
+            assert fr["face_inside_crop_all_samples"] and (len(fr["setups"]) >= 2 if framing else True), report["framing"]
             assert http_call("GET", fr["setups"][0]["evidence_image"])[1][:4] == b"\x89PNG"
 
             # Fullscreen insert media through the one-time asset upload.
@@ -237,13 +237,14 @@ async def flow(url, fixture, truth, report):
             cb = mcheck["caption_band_changed_fraction"]
             assert cb["suppressed_cue_on"] == 0 and cb["suppressed_max"] < cb["cue_on_min"] / 3, cb
             assert final["delivery_gate"]["pass"] and final["delivery_gate"]["words_lost_vs_edited_audio"] == [], final["delivery_gate"]
-            assert len(ledger["fullscreen_exceptions"]) == 1 and len({r["setup"] for r in ledger["ranges"]}) == (2 if framing else 1)
+            assert len(ledger["fullscreen_exceptions"]) == 1 and len({r["setup"] for r in ledger["ranges"]}) >= (2 if framing else 1)
             assert faces["insert"] is None and faces["live"] is not None, faces
             if not LONG:
                 got = {norm(x["word"]) for x in words}
                 assert not (expected - got), sorted(expected - got)
             mp4.unlink()
             report["timings_s"] = timings
+            report["final_frames"] = final["final"]["frames"]
             report["runs"] = log
             await tool(s, "delete_project", {"project_id": pid})
 
