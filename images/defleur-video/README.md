@@ -1,4 +1,4 @@
-# DeFleur Video API (0.3.0-testing)
+# DeFleur Video API (0.4.0-testing)
 
 HTTP service that runs the audio/edit half (piece 1 of 3) of James DeFleur's DeFleur Video workflow. James' plugin files ship unchanged in `defleur/` (installed at `/opt/defleur`; upstream commit `30768288eb1308b18216a5df5eb4648fbce3e55b`, MIT per plugin.json, redistributed with the author's authorization; see [NOTICE](NOTICE)). Hermes or any HTTP client is the editor; the service never calls an LLM. Speech-to-text comes from the separate **Transcriber** store app (`TRANSCRIBER_URL`, default `http://transcriber:8000`); word alignment runs locally with stable-ts on CPU.
 
@@ -19,16 +19,22 @@ python3 service.py
 Do not commit `.local-data` or credentials. The default listener is loopback port 8787. To use a container, build from this directory:
 
 ```sh
-docker build -t wizard-defleur-video:0.3.0-testing .
+docker build -t wizard-defleur-video:0.4.0-testing .
 ```
 
-Published amd64 image: `ghcr.io/humanitylabs-org/defleur-video:0.3.0-testing` (listed in the store as a testing app). It owns `/data` with no Hermes dependency, Docker socket or host agent directories. The workflow builds only this directory; its allowlisted context excludes vendor source, Git history, evidence and user data. Publication and public registry visibility are separate steps. Local tests are not a completed Runtipi dashboard install.
+Published amd64 image: `ghcr.io/humanitylabs-org/defleur-video:0.4.0-testing` (listed in the store as a testing app). It owns `/data` with no Hermes dependency, Docker socket or host agent directories. The workflow builds only this directory; its allowlisted context excludes vendor source, Git history, evidence and user data. Publication and public registry visibility are separate steps. Local tests are not a completed Runtipi dashboard install.
 
 **Fresh-bind permissions:** Runtipi 4.8.0's actual translator is exercised by the lifecycle smoke. `uid`/`gid` metadata does not chown the bind. Runtipi runs `chmod -Rf a+rwx` on app data **after** Compose starts; initial permission failures can precede the translated `unless-stopped` restart. The resulting data root is broadly writable and lifecycle operations may also broaden existing file permissions. Keep this a private, single-owner host. For manual deployment, provision the bind for container UID/GID 1000 before starting, accounting for rootless user-namespace mapping. `exposable:false` is not a firewall: opening the app port can publish it on all host interfaces.
 
+## MCP endpoint (agents)
+
+`/mcp` on port 8787 serves MCP over Streamable HTTP. It is the official `mcp` SDK 2.0.0 (`mcp_server.py`) running on loopback port 8788, started by `service.py`, which proxies `/mcp` to it. When `VIDEO_API_TOKEN` is set, the same bearer auth applies. The 8 tools (`workflow_guide`, `capabilities`, `create_upload`, `start_edit`, `apply_cuts`, `get_status`, `list_projects`, `delete_project`) call the HTTP API below on loopback, and their descriptions tell the agent the order to call them in. To connect Hermes, see [HERMES.md](HERMES.md).
+
+Routes added for it: `POST /v1/uploads` returns a one-time path. `POST /v1/uploads/<token>` takes the video body with no other credential and is single-use, expiring after 30 min. `GET /upload` is a minimal browser upload page, and `GET /v1/projects` lists projects. HEVC or variable-frame-rate uploads are normalized to H.264 CFR, and the project records `original.sha256` and `normalization`.
+
 ## Supported API v1
 
-All routes except `GET /healthz` require `Authorization: Bearer <VIDEO_API_TOKEN>`. Token must contain at least 32 non-whitespace ASCII characters. No CORS or cookie authentication. Keep it on loopback/private networks behind appropriate TLS/access control. It is single-owner, not multi-tenant, and uses a development stdlib HTTP server, not an internet-hardened gateway.
+All routes except `GET /healthz`, `GET /upload` and the one-time `POST /v1/uploads/<token>` require (when a token is set) `Authorization: Bearer <VIDEO_API_TOKEN>`. Token must contain at least 32 non-whitespace ASCII characters. No CORS or cookie authentication. Keep it on loopback/private networks behind appropriate TLS/access control. It is single-owner, not multi-tenant, and uses a development stdlib HTTP server, not an internet-hardened gateway.
 
 | Method / route | Input | Output |
 | --- | --- | --- |

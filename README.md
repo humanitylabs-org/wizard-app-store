@@ -23,7 +23,7 @@ Every Wizard app is exactly one of four types. The type is shown at the start of
 | **View** | Frontend only; connects to a backend that runs elsewhere | Hermes Frontend 3 |
 | **External** | Holds the key for an outside service so other apps can use it | none yet |
 
-Services and External apps are marked no-GUI, so Runtipi shows no Open button. Agent-facing apps should also expose an MCP endpoint so an agent can discover and use them without a long prompt. DeFleur Video is the first; the others will follow.
+Services and External apps are marked no-GUI, so Runtipi shows no Open button. Agent-facing apps should also expose an MCP endpoint so an agent can discover and use them without a long prompt. DeFleur Video is the first (`/mcp` on its own port); the Transcriber and Secret Drop will follow the same pattern.
 
 ## Agents
 
@@ -37,7 +37,7 @@ Keep it on a trusted private network. Disabling Runtipi domain exposure is not a
 
 **Secret Drop**: a one-time, write-only way to give any agent an API key or password without pasting it into chat. The agent sends you a link. Your browser encrypts the value to that agent's own public key (HPKE: X25519 + AES-256-GCM, pure-JS so it works over plain `http://` on Tailscale), and the agent picks it up once and decrypts it locally. The app relays ciphertext only and keeps nothing long-term. Agents fetch instructions and a single-file client from `http://<server>:8792/SKILL.md` and `/client.py`. Verified by `scripts/smoke-secret-drop.py`, which runs a real Chromium in an insecure context. [Design and trust model](images/secret-drop/README.md).
 
-**DeFleur Video (Testing)**: runs James DeFleur's video workflow for an agent, with his original helper scripts bundled. It currently covers the audio/edit half: transcription via the **Transcriber** app (install it first), local word alignment, sample-exact audio cuts, per-edge waveform/spectrogram evidence and the dialogue audio gate. The older 9:16 preview still works. Face/crop audit, captions, final encode, motion graphics and delivery are not built yet. [Operator guide](images/defleur-video/HERMES.md) · [Parity status](images/defleur-video/WORKFLOW-PARITY.md).
+**DeFleur Video (Testing)**: runs James DeFleur's video workflow for an agent over MCP (`hermes mcp add defleur-video --url http://<server>:8787/mcp`, then just ask Hermes to edit a video), with his original helper scripts bundled. It currently covers the audio/edit half: transcription via the **Transcriber** app (install it first), local word alignment, sample-exact audio cuts, per-edge waveform/spectrogram evidence and the dialogue audio gate. The older 9:16 preview still works. Face/crop audit, captions, final encode, motion graphics and delivery are not built yet. [Connect Hermes](images/defleur-video/HERMES.md) · [Parity status](images/defleur-video/WORKFLOW-PARITY.md).
 
 ## Views
 

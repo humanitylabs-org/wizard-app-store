@@ -2,11 +2,11 @@
 
 James' plugin is bundled unchanged at `/opt/defleur`: upstream commit `30768288eb1308b18216a5df5eb4648fbce3e55b`, licensed MIT per its plugin.json, and redistributed with the author's authorization (see NOTICE). Each script's SHA-256 is pinned in `workflow.py`, checked before every run and recorded in every job. Hermes is the operator. The app runs helpers only on paths it owns; clients never supply paths.
 
-The port is split into three pieces. **Piece 1 (audio/edit) is done in 0.3.0-testing.**
+The port is split into three pieces. **Piece 1 (audio/edit) is done (0.3.0-testing). 0.4.0-testing adds an MCP endpoint whose `start_edit`/`apply_cuts` tools chain these stages for an agent, plus H.264/CFR normalization of HEVC/VFR uploads.**
 
-| James' step | Helper | 0.3.0 stage | Status |
+| James' step | Helper | Stage | Status |
 |---|---|---|---|
-| Source probe, CFR/VFR check | `probe_source.py` | `source-audio` | Done. VFR is reported, and PCM assembly then refuses. |
+| Source probe, CFR/VFR check | `probe_source.py` | `source-audio` | Done. VFR uploads are normalized to CFR on upload (0.4.0), so the edit source is CFR; a VFR file that reaches PCM assembly some other way is still refused. |
 | Lossless 48 kHz source PCM | ffmpeg decode | `source-audio` | Done |
 | Preset resolution | `preset.py` + `defaults/neutral-preset.json` | `resolve-preset` | Done. The font must be under `/usr/share/fonts/truetype/dejavu/`. |
 | Dependency check | `preflight.py` | `preflight` | Done. `faster_whisper` and `node` show as missing by design; the app explains why. |
@@ -40,4 +40,5 @@ See RELEASE.md for the full verification record.
 ## Known limits
 - Alignment memory grows with model size. `base` fits the 1.5 GB limit (896 MB peak measured). `small` is untested. `medium` and `large-v3-turbo` would need a higher memory limit; also untested.
 - The Transcriber runs ASR at about real time on CPU, so a long source takes about as long as it plays. ASR and alignment stages each have a 30-minute limit.
-- No VFR support; that needs the PTS picture ledger from piece 2.
+- VFR is handled by re-encoding to CFR on upload (0.4.0). Frame-exact editing of the original VFR timeline would need the PTS picture ledger from piece 2.
+- Through MCP, `apply_cuts` writes the gate's edge/window review notes automatically from measurements. The gate then proves the evidence is complete, not that anyone listened.
