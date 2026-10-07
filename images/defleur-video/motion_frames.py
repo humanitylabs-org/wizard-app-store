@@ -228,7 +228,8 @@ def check(a) -> None:
                "capture_vs_base_outside_band": mad(out_band(cap), out_band(base)),
                "changed_fraction_vs_base": chg(out_band(cap), out_band(base)),
                "final_vs_capture_outside_band": mad(out_band(fin), out_band(cap)),
-               "caption_band_final_vs_capture": mad(band(fin), band(cap))}
+               "caption_band_final_vs_capture": mad(band(fin), band(cap)),
+               "caption_band_changed_fraction": chg(band(fin), band(cap))}
         if row["in_insert"]:
             lp = a.base_dir / f"{timeline_source(ids, f):06d}.jpg"
             if lp.is_file():
@@ -242,11 +243,13 @@ def check(a) -> None:
     for k in range(len(inserts)):
         rr = [r for r in rows if r["window"] == f"insert-{k}"]
         ins_ok[f"insert-{k}"] = bool(rr) and all(r.get("changed_fraction_vs_live_source", 0) >= 0.05 and r["changed_fraction_vs_base"] < a.live_threshold for r in rr)
-    on = [r["caption_band_final_vs_capture"] for r in rows if r["cue_on"]]
-    off = [r["caption_band_final_vs_capture"] for r in rows if not r["cue_on"]]
+    # Changed-pixel fraction in the caption rect (|diff| > 40 on any channel): burned text changes several percent of the
+    # rect; H.264-vs-JPEG noise on live footage changes almost none. Mean difference alone mixes the two.
+    on = [r["caption_band_changed_fraction"] for r in rows if r["cue_on"]]
+    off = [r["caption_band_changed_fraction"] for r in rows if not r["cue_on"]]
     sup_rows = [r for r in rows if r["suppressed"]]
-    captions_ok = bool(on) and min(on) >= 4.0 and (not off or max(off) < min(on) / 2)
-    suppressed_ok = all(not r["cue_on"] and r["caption_band_final_vs_capture"] < 2.0 for r in sup_rows)
+    captions_ok = bool(on) and min(on) >= 0.01 and (not off or max(off) < 0.004)
+    suppressed_ok = bool(sup_rows) and all(not r["cue_on"] and r["caption_band_changed_fraction"] < 0.004 for r in sup_rows)
     encode_ok = max(r["final_vs_capture_outside_band"] for r in rows) < 6.0
     cues = len(_chunks(timeline["words"], int(style["max_words"]), int(style["max_chars"])))
     result = {"frames": frames, "samples": rows, "caption_cues": cues, "cue_on_frames": sum(1 for f in range(frames) if cue(f)),
@@ -255,6 +258,9 @@ def check(a) -> None:
               "beats_show_motion": beats_ok, "inserts_show_media": ins_ok,
               "caption_band_changes_with_cues": captions_ok, "captions_suppressed_where_declared": suppressed_ok,
               "suppressed_samples_with_speech": sum(1 for r in sup_rows if r["words_spoken"]),
+              "caption_band_changed_fraction": {"cue_on_min": min(on, default=None), "cue_off_max": max(off, default=None),
+                                                "suppressed_max": max((r["caption_band_changed_fraction"] for r in sup_rows), default=None),
+                                                "suppressed_cue_on": sum(1 for r in sup_rows if r["cue_on"])},
               "encode_matches_capture": encode_ok,
               "pass": live_max < a.live_threshold and all(beats_ok.values()) and all(ins_ok.values()) and captions_ok and suppressed_ok and encode_ok,
               "method": ("Sampled frames: capture.cjs output vs the plain live base frame it fed to #live (outside the caption band, "

@@ -594,6 +594,12 @@ def do_render_final(run: dict) -> dict:
         downloads["delivery_gate_result_json"] = dl(gate_job["id"], "delivery-gate-result.json")
         downloads["delivery_audio_gate_receipt_json"] = dl(gate_job["id"], "audio-gate.json")
     lost = gs.get("words_lost_vs_edited")
+    failed_checks = [k for k, v in rs["checks"].items() if v is False]
+    mg = rs.get("motion_layer")
+    if isinstance(mg, dict):
+        failed_checks += [f"motion: {k}" for k in ("no_motion_outside_planned_windows", "captions_suppressed_where_declared", "motion_check_pass")
+                          if mg.get(k) is False]
+        failed_checks += [f"motion: {k} not shown" for d in ("beats_show_motion", "inserts_show_media") for k, v in (mg.get(d) or {}).items() if not v]
     return {
         "project_id": run["project"],
         "final": {"resolution": f"{rs['width']}x{rs['height']}", "codec": "H.264 video + AAC audio (James' encode.py)",
@@ -606,7 +612,10 @@ def do_render_final(run: dict) -> dict:
         "captions": {"cues": rs["captions"]["cues"], "words": rs["captions"]["words"], "frames_with_caption": rs["captions"]["frames_with_cue"],
                      "font": rs["captions"]["font"], "caption_band_changes_with_cues": rs["checks"]["caption_bounds_and_band"],
                      "word_source": "Transcriber ASR of the edited audio (apply_cuts)"},
-        "delivery_gate": {"pass": bool(gs.get("delivery_gate_pass")), "reason": gate_error or gs.get("error") or "all delivery evidence present and fresh",
+        "delivery_gate": {"pass": bool(gs.get("delivery_gate_pass")),
+                          "reason": (gate_error or gs.get("error") or "all delivery evidence present and fresh")
+                                    + (f" (failing picture checks: {', '.join(failed_checks)}; see pixel_check_json)" if failed_checks else ""),
+                          "failed_checks": failed_checks,
                           "words_lost_vs_edited_audio": lost, "words_added_vs_edited_audio": gs.get("words_added_vs_edited"),
                           "min_source_region_correlation": rs["checks"]["min_source_region_correlation"],
                           "scope": "James' audio_gate.py --stage delivery: evidence completeness, custody and thresholds. Final acoustic-window findings are app-written; it is not human viewing or listening approval."},

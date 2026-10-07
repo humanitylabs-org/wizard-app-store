@@ -224,7 +224,8 @@ async def flow(url, fixture, truth, report):
                 "independent_probe": [vid["codec_name"], vid["width"], vid["height"], vid["nb_read_frames"], aud["codec_name"]],
                 "motion_check": {k: mcheck[k] for k in ("pass", "no_motion_outside_planned_windows", "beats_show_motion", "inserts_show_media",
                                                          "caption_band_changes_with_cues", "captions_suppressed_where_declared",
-                                                         "suppressed_samples_with_speech", "live_max_capture_vs_base", "encode_matches_capture")},
+                                                         "suppressed_samples_with_speech", "live_max_capture_vs_base", "encode_matches_capture",
+                                                         "caption_band_changed_fraction")},
                 "ledger": {"setups": sorted({r["setup"] for r in ledger["ranges"]}), "fullscreen_exceptions": ledger["fullscreen_exceptions"]},
                 "independent_face_check": faces}
             assert (vid["codec_name"], vid["width"], vid["height"], aud["codec_name"]) == ("h264", 1080, 1920, "aac")
@@ -232,6 +233,8 @@ async def flow(url, fixture, truth, report):
             assert mcheck["pass"] and mcheck["no_motion_outside_planned_windows"] and all(mcheck["beats_show_motion"].values())
             assert all(mcheck["inserts_show_media"].values()) and mcheck["captions_suppressed_where_declared"]
             assert mcheck["caption_band_changes_with_cues"] and mcheck["suppressed_samples_with_speech"] > 0
+            cb = mcheck["caption_band_changed_fraction"]
+            assert cb["suppressed_cue_on"] == 0 and cb["suppressed_max"] < cb["cue_on_min"] / 3, cb
             assert final["delivery_gate"]["pass"] and final["delivery_gate"]["words_lost_vs_edited_audio"] == [], final["delivery_gate"]
             assert len(ledger["fullscreen_exceptions"]) == 1 and len({r["setup"] for r in ledger["ranges"]}) == (2 if framing else 1)
             assert faces["insert"] is None and faces["live"] is not None, faces
