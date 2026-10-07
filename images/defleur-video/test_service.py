@@ -802,6 +802,28 @@ class MediaTests(unittest.TestCase):
         self.assertFalse(st["submitted"])
         self.request("DELETE", f"/v1/projects/{pid}")
 
+    def test_proof_frame_outputs_run_without_pillow_in_service_python(self):
+        """Regression: the service process (/usr/bin/python3) has no Pillow; capture outputs must use venv helpers."""
+        import importlib.util
+        import workflow
+        self.assertIsNone(importlib.util.find_spec("PIL"))  # this suite runs under the service interpreter
+        work = self.root / "cap-work"
+        out = self.root / "cap-out"
+        (work / "proof-raw").mkdir(parents=True)
+        out.mkdir()
+        indices = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27]
+        for f in indices:
+            subprocess.run(["/usr/bin/ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"color=c=0x{f * 9:02x}4060:s=1080x1920",
+                            "-frames:v", "1", str(work / "proof-raw" / f"{f:06d}.jpg")], check=True, timeout=60)
+        (work / "capture-proof.json").write_text(json.dumps({"fps": "30/1", "indices": indices, "frame_count": len(indices),
+            "geometry": [{"frame": f, "mode": "live", "captionSuppressed": False} for f in indices]}))
+        ctx = workflow.Ctx(out, service.native, None, time.monotonic() + 120)
+        frames = workflow._capture_outputs(ctx, work, "proof", 30.0)
+        self.assertEqual(len(frames), 8)
+        for row in frames:
+            self.assertEqual((out / row["image"]).read_bytes()[:4], b"\x89PNG")
+        self.assertEqual((out / "proof-sheet.png").read_bytes()[:4], b"\x89PNG")
+
     def test_capabilities_report_browser_and_resources(self):
         os.environ["BROWSER_URL"] = "http://127.0.0.1:9"
         try:

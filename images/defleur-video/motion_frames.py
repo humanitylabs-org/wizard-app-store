@@ -155,6 +155,17 @@ def sheet(a) -> None:
     print(json.dumps({"sheet_frames": len(picks)}))
 
 
+def thumbs(a) -> None:
+    """Up to 8 evenly spaced captured frames as 540x960 PNGs for the agent to look at."""
+    from PIL import Image
+    idx = json.loads(a.capture.read_text())["indices"]
+    picks = idx if len(idx) <= 8 else [idx[round(i * (len(idx) - 1) / 7)] for i in range(8)]
+    for f in picks:
+        with Image.open(a.frames_dir / f"{f:06d}.jpg") as im:
+            im.convert("RGB").resize((540, 960), Image.LANCZOS).save(a.out_dir / f"{a.prefix}-frame-{f:06d}.png")
+    print(json.dumps({"frames": picks}))
+
+
 def check(a) -> None:
     """Motion-mode picture checks on the exact final.mp4 (live-only renders use final_render.py check)."""
     import sys
@@ -270,6 +281,10 @@ def main() -> None:
         s.add_argument(n, type=Path)
     s.add_argument("--max", type=int, default=24)
     s.add_argument("--font", default="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    t = sub.add_parser("thumbs")
+    for n in ("capture", "frames_dir", "out_dir"):
+        t.add_argument(n, type=Path)
+    t.add_argument("--prefix", required=True)
     c = sub.add_parser("check")
     for n in ("final", "base_map", "project", "base_dir", "picture_dir", "out"):
         c.add_argument(n, type=Path)
@@ -277,7 +292,7 @@ def main() -> None:
     c.add_argument("--live-threshold", type=float, default=0.002, help="max changed-pixel fraction outside planned windows")
     c.add_argument("--motion-threshold", type=float, default=0.003, help="min changed-pixel fraction somewhere in each beat")
     a = ap.parse_args()
-    {"base": base, "sheet": sheet, "check": check}[a.cmd](a)
+    {"base": base, "sheet": sheet, "thumbs": thumbs, "check": check}[a.cmd](a)
 
 
 if __name__ == "__main__":

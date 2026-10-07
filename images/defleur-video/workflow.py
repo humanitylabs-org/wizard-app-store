@@ -1085,6 +1085,18 @@ def _capture_checks(cap, plan, fps):
             "insert_mode_declared": not bad_mode, "insert_mode_mismatch_frames": bad_mode[:20]}
 
 
+def _capture_outputs(ctx, work, mode, fps):
+    """Contact sheet + frame thumbnails for the agent. Runs entirely in venv helper children (Pillow is not in the service Python)."""
+    frames_dir = work / ("proof-raw" if mode == "proof" else "picture-frames")
+    ctx.app("motion_frames.py", ["sheet", work / f"capture-{mode}.json", frames_dir, ctx.root / f"{mode}-sheet.png"],
+            timeout=300, cpu=600, as_limit=4 * 1024**3, nofile=128, file_limit=256 * 1024**2)
+    # Pillow lives only in the helper venv: thumbnails run as a venv child, never in the service process.
+    picks = json.loads(ctx.app("motion_frames.py", ["thumbs", work / f"capture-{mode}.json", frames_dir, ctx.root, "--prefix", mode],
+                               timeout=300, cpu=600, as_limit=4 * 1024**3, nofile=128, file_limit=256 * 1024**2))["frames"]
+    frames_out = [{"frame": f, "t": round(f / fps, 3), "image": f"{mode}-frame-{f:06d}.png"} for f in picks]
+    return frames_out
+
+
 def _motion_capture(ctx, value, source, metadata):
     ctx.source = source
     from fractions import Fraction
@@ -1095,16 +1107,7 @@ def _motion_capture(ctx, value, source, metadata):
         cap = _capture(ctx, work, mode)
         fps = float(Fraction(str(mapped["fps"])))
         checks = _capture_checks(cap, plan, fps)
-        frames_dir = work / ("proof-raw" if mode == "proof" else "picture-frames")
-        ctx.app("motion_frames.py", ["sheet", work / f"capture-{mode}.json", frames_dir, ctx.root / f"{mode}-sheet.png"],
-                timeout=300, cpu=600, as_limit=4 * 1024**3, nofile=128, file_limit=256 * 1024**2)
-        from PIL import Image
-        picks = cap["indices"] if len(cap["indices"]) <= 8 else [cap["indices"][round(i * (len(cap["indices"]) - 1) / 7)] for i in range(8)]
-        frames_out = []
-        for f in picks:
-            with Image.open(frames_dir / f"{f:06d}.jpg") as im:
-                im.convert("RGB").resize((540, 960), Image.LANCZOS).save(ctx.root / f"{mode}-frame-{f:06d}.png")
-            frames_out.append({"frame": f, "t": round(f / fps, 3), "image": f"{mode}-frame-{f:06d}.png"})
+        frames_out = _capture_outputs(ctx, work, mode, fps)
         shutil.copyfile(work / f"capture-{mode}.json", ctx.root / f"capture-{mode}.json")
         for name in ("visual-plan.json", "locked-timeline.json", "base-map.json"):
             shutil.copyfile(work / name, ctx.root / name)
