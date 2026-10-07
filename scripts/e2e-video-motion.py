@@ -81,7 +81,10 @@ def broll(path):
     """A 3 s 1280x720 synthetic B-roll clip (lavfi test pattern, no face)."""
     e2e.ff("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30:d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p",
            "-preset", "veryfast", "-movflags", "+faststart", path.name, cwd=path.parent)
-    os.chmod(path, 0o666)
+    try:
+        os.chmod(path, 0o666)
+    except PermissionError:  # written by the image's ffmpeg (CI runners have none): other uid, already world-readable
+        pass
 
 
 LONG_SCRIPT = HERE / "fixtures/video-long-script.json"
