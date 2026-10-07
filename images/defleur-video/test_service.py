@@ -290,6 +290,41 @@ class MediaTests(unittest.TestCase):
         failing = self.stage(pid, "dialogue-gate", {**gate, "audit_job": bad["id"]})
         self.assertIn("phonetic checks did not pass", failing["result"]["summary"]["error"])
 
+        # Piece 2: face audit / fixed crop, James' caption_layer + encode.py, delivery gate (no face in testsrc2 -> flagged).
+        with patch.dict(os.environ, {"TRANSCRIBER_URL": url}):
+            easr = self.stage(pid, "asr", {"audio_job": asm["id"], "language": "en"})
+        crop = self.stage(pid, "face-crop", {"assemble_job": asm["id"]})
+        cs = crop["result"]["summary"]
+        self.assertFalse(cs["pass"])
+        self.assertIn("no face found: centered crop", cs["setups"][0]["flags"])
+        self.assertEqual(cs["setups"][0]["crop"], [110, 0, 100, 180])
+        self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/final-render",
+                         json.dumps({"assemble_job": asm["id"], "crop_job": crop["id"], "edited_asr_job": asr["id"]}))[0], 422)
+        render = self.stage(pid, "final-render", {"assemble_job": asm["id"], "crop_job": crop["id"], "edited_asr_job": easr["id"]})
+        rs = render["result"]["summary"]
+        self.assertEqual((rs["width"], rs["height"], rs["frames"]), (1080, 1920, 34), rs)
+        self.assertTrue(all(v is True for k, v in rs["checks"].items() if k != "min_source_region_correlation"), rs["checks"])
+        self.assertGreaterEqual(rs["checks"]["min_source_region_correlation"], 0.99)
+        self.assertEqual(rs["captions"]["words"], 3)
+        self.assertEqual(render["result"]["helpers"]["encode"], workflow.HELPERS["encode"][1])
+        self.assertEqual(render["result"]["helpers"]["caption_layer"], workflow.HELPERS["caption_layer"][1])
+        names = {a["name"] for a in render["result"]["artifacts"]}
+        self.assertTrue({"final.mp4", "final-integrity.json", "media-verification.json", "live-check.json", "final-audio.wav"} <= names)
+        status, mp4 = self.request("GET", f"/v1/jobs/{render['id']}/stage-artifacts/final.mp4")
+        self.assertEqual(status, 200)
+        self.assertEqual(hashlib.sha256(mp4).hexdigest(), rs["final_sha256"])
+        with patch.dict(os.environ, {"TRANSCRIBER_URL": url}):
+            fasr = self.stage(pid, "asr", {"audio_job": render["id"], "language": "en"})
+        fscan = self.stage(pid, "acoustic-scan", {"assemble_job": render["id"]})
+        self.assertEqual(fscan["result"]["summary"]["audio"], "final-audio.wav")
+        dg = {"render_job": render["id"], "final_asr_job": fasr["id"], "final_scan_job": fscan["id"], "dialogue_gate_job": result["id"]}
+        self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/delivery-gate", json.dumps({**dg, "final_asr_job": easr["id"]}))[0], 422)
+        delivery = self.stage(pid, "delivery-gate", dg)
+        ds = delivery["result"]["summary"]
+        self.assertTrue(ds["delivery_gate_pass"], ds)
+        self.assertEqual(ds["words_lost_vs_edited"], [])
+        self.assertEqual(delivery["result"]["helpers"]["audio_gate"], workflow.HELPERS["audio_gate"][1])
+
         project = {"locked_timeline": {"fps": "24", "frames": 34, "duration": 1.4},
                    "visual_plan": {"beats": [{"start": 0, "end": 1.4, **{k: "x" for k in ("spoken_anchor", "viewer_inference", "visual_family", "state_before", "state_after", "causal_action", "caption_treatment", "speaker_return")}}]},
                    "crop_ledger": {"source_mode": "cfr", "ranges": [{"start": 0, "end": 1.4}]}}

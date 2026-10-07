@@ -38,8 +38,9 @@ LOCK = threading.Lock()
 LANG_NAMES = {"english": "en", "spanish": "es", "french": "fr", "german": "de", "italian": "it", "portuguese": "pt",
               "dutch": "nl", "japanese": "ja", "chinese": "zh", "korean": "ko", "russian": "ru", "arabic": "ar", "hindi": "hi"}
 
-NOT_BUILT = ["face audit / fixed 9:16 crop", "burned captions", "final 1080x1920 encode",
-             "HTML/SVG/GSAP motion graphics", "delivery gate and final MP4 delivery"]
+NOT_BUILT = ["HTML/SVG/GSAP motion graphics (James' capture.cjs + Chromium): the final video is live footage plus captions only",
+             "fullscreen inserts / B-roll and multi-speaker reframing within one setup",
+             "human viewing and listening review (always the owner's job)"]
 
 RULES = [
     "Edit for a coherent, faithful thought: keep claims, context, speaker meaning and sentence syntax. Never stitch words into a new meaning.",
@@ -65,11 +66,15 @@ GUIDE = {
         "3. start_edit(project_id) - transcribes and aligns; call get_status(run_id) until state is 'done' to get the transcript, word timings, filler/pause candidates, proposed cuts and editorial rules.",
         "4. Show the owner the proposed cut list (time, words, reason) and get approval or changes. Do not skip this.",
         "5. apply_cuts(project_id, segments) with the approved ranges TO REMOVE; call get_status(run_id) until 'done' for the report: seconds removed, words lost/added, gate pass/fail and download URLs.",
-        "6. Give the owner the download links and remind them to listen. Use delete_project when finished.",
+        "6. Tell the owner the apply_cuts result. If words were lost or the dialogue gate failed, adjust the cuts with them and run apply_cuts again.",
+        "7. render_final(project_id) - face audit and fixed 9:16 crop, burned captions from the edited-audio words, James' 1080x1920 H.264/AAC encode, full decode, final re-transcription and James' delivery gate; call get_status(run_id) until 'done'.",
+        "8. Report in plain words: resolution, duration, crop result (and any face flag), caption count, delivery gate pass/fail, words lost, and the final MP4 download link. Ask the owner to watch it on a phone. Use delete_project when finished.",
     ],
-    "long_work": "start_edit and apply_cuts return immediately with a run_id. Keep calling get_status(run_id) (each call waits up to ~55 s) until state is 'done' or 'failed'. Transcription and alignment of a few minutes of speech can take several minutes on CPU.",
+    "long_work": "start_edit, apply_cuts and render_final return immediately with a run_id. Keep calling get_status(run_id) (each call waits up to ~55 s) until state is 'done' or 'failed'. Transcription and alignment of a few minutes of speech can take several minutes on CPU.",
     "not_built_yet": NOT_BUILT,
-    "outputs_today": "Edited 48 kHz WAV, edit map, cut evidence images, gate receipts, and a low-resolution 9:16 preview MP4 of the cut when the edit has at most 8 kept segments. No final delivery video yet.",
+    "outputs_today": ("apply_cuts: edited 48 kHz WAV, edit map, cut evidence images, dialogue gate receipt and a low-resolution 9:16 preview. "
+                      "render_final: the finished 1080x1920 H.264/AAC MP4 (speaker framed by a fixed crop per setup, burned-in captions), "
+                      "crop ledger, face audit, decode/pixel checks and James' delivery gate receipt. No motion graphics yet."),
     "limits": "One video and one audio stream, at most 300 s and 512 MiB per upload, 8 projects at a time.",
 }
 
@@ -450,7 +455,71 @@ def do_apply_cuts(run: dict) -> dict:
         "jobs": {"pcm_assemble": asm["id"], "speech_cut_audit": audit["id"], "acoustic_scan": scan["id"], "edited_asr": easr["id"], "dialogue_gate": gate["id"]},
         "next": ("Tell the owner in plain words: seconds removed, any words lost or added, gate pass/fail with the reason, and the download links. "
                  "Ask them to listen to the edited audio/preview. If words were lost or the gate failed, propose adjusted cuts and call apply_cuts again. "
-                 "Captions, face crop, final 1080x1920 encode and motion are not built yet."),
+                 "When the owner is happy with the cut, call render_final(project_id) for the finished 1080x1920 captioned video "
+                 "(motion graphics are not built yet)."),
+    }
+
+
+# ---------- render_final ----------
+
+def do_render_final(run: dict) -> dict:
+    cut = run["params"]["cut"]
+    jobs = cut["jobs"]
+    t0 = time.monotonic()
+    crop = stage(run, "face-crop", {"assemble_job": jobs["pcm_assemble"]})
+    render = stage(run, "final-render", {"assemble_job": jobs["pcm_assemble"], "crop_job": crop["id"],
+                                         "edited_asr_job": jobs["edited_asr"]}, wait_s=3700)
+    lang = run["params"]["language"]
+    fasr = stage(run, "asr", {"audio_job": render["id"], "language": lang})
+    fscan = stage(run, "acoustic-scan", {"assemble_job": render["id"]})
+    gate_job = None
+    run["step"] = "delivery-gate"
+    save(run)
+    try:
+        gate_job = stage(run, "delivery-gate", {"render_job": render["id"], "final_asr_job": fasr["id"],
+                                                "final_scan_job": fscan["id"], "dialogue_gate_job": jobs["dialogue_gate"]})
+    except ToolError as e:
+        gate_error = str(e)
+    else:
+        gate_error = None
+    rs, cs = render["result"]["summary"], crop["result"]["summary"]
+    gs = gate_job["result"]["summary"] if gate_job else {}
+    base = run["params"]["base_url"]
+    dl = lambda j, n: f"{base}/v1/jobs/{j}/stage-artifacts/{n}"
+    downloads = {"final_mp4": dl(render["id"], "final.mp4"), "crop_ledger_json": dl(crop["id"], "crop-ledger.json"),
+                 "face_audit_json": dl(crop["id"], "face-audit.json"), "final_integrity_json": dl(render["id"], "final-integrity.json"),
+                 "media_verification_json": dl(render["id"], "media-verification.json"),
+                 "pixel_check_json": dl(render["id"], "live-check.json"), "frame_sample_png": dl(render["id"], "final-frame-sample.png")}
+    downloads.update({f"crop_evidence_{s['setup']}_png": dl(crop["id"], f"{s['setup']}-crop.png") for s in cs["setups"]})
+    if gate_job:
+        downloads["delivery_gate_result_json"] = dl(gate_job["id"], "delivery-gate-result.json")
+        downloads["delivery_audio_gate_receipt_json"] = dl(gate_job["id"], "audio-gate.json")
+    lost = gs.get("words_lost_vs_edited")
+    return {
+        "project_id": run["project"],
+        "final": {"resolution": f"{rs['width']}x{rs['height']}", "codec": "H.264 video + AAC audio (James' encode.py)",
+                  "duration_s": rs["duration_s"], "frames": rs["frames"], "fps": rs["fps"], "bytes": rs["final_bytes"],
+                  "sha256": rs["final_sha256"], "full_decode": rs["checks"]["full_decode"]},
+        "crop": {"setups": [{k: s[k] for k in ("setup", "segments", "crop", "zoom", "detected", "samples", "pass", "flags")} for s in cs["setups"]],
+                 "face_inside_crop_all_samples": cs["pass"], "flags": cs["flags"],
+                 "crop_matches_ledger_in_decoded_pixels": rs["checks"]["crop_matches_ledger"],
+                 "basis": "[x, y, w, h] source-pixel crop, fixed per setup; faces checked on sampled frames (YuNet) with a 15% margin and above the caption band."},
+        "captions": {"cues": rs["captions"]["cues"], "words": rs["captions"]["words"], "frames_with_caption": rs["captions"]["frames_with_cue"],
+                     "font": rs["captions"]["font"], "caption_band_changes_with_cues": rs["checks"]["caption_bounds_and_band"],
+                     "word_source": "Transcriber ASR of the edited audio (apply_cuts)"},
+        "delivery_gate": {"pass": bool(gs.get("delivery_gate_pass")), "reason": gate_error or gs.get("error") or "all delivery evidence present and fresh",
+                          "words_lost_vs_edited_audio": lost, "words_added_vs_edited_audio": gs.get("words_added_vs_edited"),
+                          "min_source_region_correlation": rs["checks"]["min_source_region_correlation"],
+                          "scope": "James' audio_gate.py --stage delivery: evidence completeness, custody and thresholds. Final acoustic-window findings are app-written; it is not human viewing or listening approval."},
+        "motion_graphics": "not built yet: live footage plus captions only",
+        "downloads": downloads,
+        "auth_note": "Downloads need 'Authorization: Bearer ***' when the app has a token set." if TOKEN else None,
+        "render_seconds": round(time.monotonic() - t0, 1),
+        "jobs": {"face_crop": crop["id"], "final_render": render["id"], "final_asr": fasr["id"], "final_scan": fscan["id"],
+                 "delivery_gate": gate_job["id"] if gate_job else None},
+        "next": ("Tell the owner in plain words: resolution, duration, how the speaker is framed (and any crop flag), caption count, "
+                 "delivery gate pass/fail with the reason, any words lost, and the final_mp4 link. Ask them to watch it on a phone before "
+                 "posting. If a face flag or lost word appears, say so plainly; do not call the video approved."),
     }
 
 
@@ -459,7 +528,8 @@ def do_apply_cuts(run: dict) -> dict:
 mcp = MCPServer("defleur-video", version=VERSION, instructions=(
     "DeFleur Video edits talking-head videos on the owner's own server. Start with workflow_guide, then capabilities. "
     "Flow: create_upload -> (owner uploads with the curl command or /upload page) -> start_edit -> get_status until done -> "
-    "show the proposed cuts and get approval -> apply_cuts -> get_status until done -> report and share download links."))
+    "show the proposed cuts and get approval -> apply_cuts -> get_status until done -> render_final -> get_status until done -> "
+    "report and share the final 1080x1920 MP4 link. Motion graphics are not built yet."))
 
 
 def _result(fn, *a, **kw):
@@ -570,6 +640,36 @@ def apply_cuts(project_id: str, segments: list[dict], ctx: Context) -> dict:
     return _result(go)
 
 
+@mcp.tool(description=(
+    "Step 7, after apply_cuts is done and the owner accepts the cut. Renders the finished vertical short in the background and "
+    "returns a run_id: face audit and one fixed 9:16 crop per setup (centered and flagged if no face is found), burned-in "
+    "captions from the edited-audio word timings (James' caption_layer.py), the 1080x1920 H.264/AAC encode and --verify-only "
+    "(James' encode.py), full decode, decoded-pixel crop/caption checks, re-transcription of the final audio and James' "
+    "delivery gate. Keep calling get_status(run_id) until 'done' for resolution, duration, crop summary, caption count, gate "
+    "result, words lost and download URLs. options: {} today (reserved). No motion graphics yet."))
+def render_final(project_id: str, ctx: Context, options: dict | None = None) -> dict:
+    def go():
+        if not ID.fullmatch(project_id or ""):
+            raise ToolError("project_id must be the 32-hex project id")
+        if options:
+            raise ToolError("render_final takes no options yet; call it with project_id only")
+        cuts = runs_for(project_id, "apply_cuts", "done")
+        if not cuts:
+            raise ToolError("run apply_cuts for this project first and wait for it to finish (get_status)")
+        cut = cuts[-1]
+        edits = runs_for(project_id, "start_edit", "done")
+        lang = cut["params"]["edit"].get("language") or (edits[-1]["result"]["language"] if edits else "auto")
+        with LOCK:
+            if runs_for(project_id, state="running"):
+                raise ToolError("a run is already in progress for this project; call get_status(project_id)")
+            run = start_run("render_final", project_id, {"cut": {"jobs": cut["result"]["jobs"], "run": cut["id"]},
+                                                         "language": lang, "base_url": base_url(ctx)}, do_render_final)
+        return {"run_id": run["id"], "state": "running", "from_apply_cuts_run": cut["id"],
+                "next": f"Call get_status('{run['id']}') now and keep calling it until state is 'done' (each call waits up to ~55 s). "
+                        "Rendering takes roughly 1-3x the video length on this server."}
+    return _result(go)
+
+
 def public_run(r: dict) -> dict:
     out = {k: r.get(k) for k in ("id", "kind", "project", "state", "step", "error")}
     out["elapsed_s"] = round((r.get("updated") or time.time()) - r["created"], 1)
@@ -582,7 +682,7 @@ def public_run(r: dict) -> dict:
 
 
 @mcp.tool(description=(
-    "Poll long work. Pass a run_id from start_edit/apply_cuts (waits up to wait_s, default 55, max 60, for it to finish), a "
+    "Poll long work. Pass a run_id from start_edit/apply_cuts/render_final (waits up to wait_s, default 55, max 60, for it to finish), a "
     "project id (latest run plus project info) or a stage job id. While state is 'running', call get_status again: analysis "
     "and checks of a few minutes of video can take several minutes."))
 def get_status(job_or_project: str, wait_s: float = 55) -> dict:

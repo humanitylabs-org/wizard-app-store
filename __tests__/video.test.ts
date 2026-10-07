@@ -92,7 +92,7 @@ test("video has independent state, no agent volumes, bounded unprivileged servic
   expect(service.memswap_limit).toBe(service.mem_limit);
   expect(service.cpus).toBe(2);
   expect(service.pids_limit).toBe(64);
-  expect(config.version).toBe("0.4.0-testing");
+  expect(config.version).toBe("0.5.0-testing");
   expect(service.image).toBe(`ghcr.io/humanitylabs-org/defleur-video:${config.version}`);
   expect(service.environment.VIDEO_API_TOKEN).toBeUndefined();
   for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "depends_on"]) {
@@ -105,7 +105,7 @@ test("MCP endpoint ships in the image and is exercised before publish", () => {
   expect(readFileSync("images/defleur-video/requirements.in", "utf8")).toContain("mcp==2.0.0");
   expect(readFileSync("images/defleur-video/requirements.lock", "utf8")).toMatch(/^mcp==2\.0\.0 \\$/m);
   const mcp = readFileSync("images/defleur-video/mcp_server.py", "utf8");
-  for (const tool of ["workflow_guide", "capabilities", "create_upload", "start_edit", "apply_cuts", "get_status", "list_projects", "delete_project"])
+  for (const tool of ["workflow_guide", "capabilities", "create_upload", "start_edit", "apply_cuts", "render_final", "get_status", "list_projects", "delete_project"])
     expect(mcp).toContain(`def ${tool}(`);
   expect(mcp).not.toMatch(/openai|anthropic|api\.openai/i);
   expect(readFileSync("images/defleur-video/HERMES.md", "utf8")).toContain("hermes mcp add defleur-video --url http://defleur-video:8787/mcp");
