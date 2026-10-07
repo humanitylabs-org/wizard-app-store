@@ -2,7 +2,7 @@ name: Validate Browser
 on:
   push:
     branches: [main]
-    paths: ['apps/browser/**', 'scripts/smoke-browser.py', 'images/defleur-video/capture/package*.json', 'scripts/translate-video-recipe.mjs', '.github/workflows/browser.yml']
+    paths: ['apps/browser/**', 'scripts/smoke-browser.py', 'scripts/translate-video-recipe.mjs', '.github/workflows/browser.yml']
   pull_request:
     branches: [main]
     paths: ['apps/browser/**', 'scripts/smoke-browser.py', '.github/workflows/browser.yml']

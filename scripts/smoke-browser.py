@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import shutil
 import socket
 import subprocess
 import sys
@@ -23,7 +22,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 APP = "browser"
 NODE = "node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392"
-CAPTURE_DEPS = ROOT / "images/defleur-video/capture"
+PUPPETEER = "puppeteer-core@25.12.0"  # same exact version DeFleur Video pins
 
 CLIENT = r"""
 const puppeteer = require('puppeteer-core');
@@ -79,9 +78,8 @@ def main():
         app.mkdir()
         client = tmp / "client"
         client.mkdir()
-        shutil.copy(CAPTURE_DEPS / "package.json", client)
-        shutil.copy(CAPTURE_DEPS / "package-lock.json", client)
-        run("npm", "ci", "--omit=dev", "--no-audit", "--no-fund", "--ignore-scripts", cwd=client, timeout=300)
+        (client / "package.json").write_text('{"private": true}')
+        run("npm", "install", "--no-audit", "--no-fund", "--ignore-scripts", "--save-exact", PUPPETEER, cwd=client, timeout=300)
         (client / "client.cjs").write_text(CLIENT)
         env = {**os.environ, "APP_DATA_DIR": str(app), "APP_PORT": str(port)}
         recipe = tmp / "compose.json"

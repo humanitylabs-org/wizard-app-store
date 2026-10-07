@@ -1,9 +1,0 @@
-{
-  "name": "defleur-video-capture",
-  "private": true,
-  "description": "Pinned runtime deps for James DeFleur's capture.cjs (puppeteer-core) and the vendored GSAP copy served to compositions.",
-  "dependencies": {
-    "gsap": "3.15.0",
-    "puppeteer-core": "25.12.0"
-  }
-}
