@@ -1,0 +1,7 @@
+# Install only on the designated media worker when a production requires them.
+numpy>=1.26
+matplotlib>=3.8
+pillow>=10.0
+faster-whisper>=1.0
+stable-ts>=2.18
+onnxruntime>=1.17

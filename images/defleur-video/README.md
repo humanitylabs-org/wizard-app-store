@@ -1,14 +1,14 @@
-# Agent-operated video service — private development candidate
+# DeFleur Video API (0.3.0-testing)
 
-**Incomplete original-workflow port; preview-only delivery is not the accepted product.** See [WORKFLOW-PARITY.md](WORKFLOW-PARITY.md) for the recovered helpers, actual stage implementation, measured capacity and remaining blockers. Hermes remains the editorial operator; no autonomous director daemon is required. No Hermes import, plugin installation, model weights, provider credentials or paid calls. This service owns its data and jobs. Any HTTP client, including an optional Hermes integration, can operate it.
+HTTP service that runs the audio/edit half (piece 1 of 3) of James DeFleur's DeFleur Video workflow. James' plugin files ship unchanged in `defleur/` (installed at `/opt/defleur`; upstream commit `30768288eb1308b18216a5df5eb4648fbce3e55b`, MIT per plugin.json, redistributed with the author's authorization; see [NOTICE](NOTICE)). Hermes or any HTTP client is the editor; the service never calls an LLM. Speech-to-text comes from the separate **Transcriber** store app (`TRANSCRIBER_URL`, default `http://transcriber:8000`); word alignment runs locally with stable-ts on CPU.
 
-**0.2.0 additions:** immutable transcript/edit decisions, validated timed caption burns, fixed protected-region portrait crops, per-edge WAV/waveform/spectrogram evidence, exact-preview decoded audio, and a standalone `client.py` producing an offline review page. See [EDITING.md](EDITING.md) for the complete contract and upload/edit/review/download walkthrough. These mechanics do not clear upstream quality gates.
-
-Informed by Wizard Modules DeFleur video 0.1.0, revision `30768288eb1308b18216a5df5eb4648fbce3e55b`; independently implemented, not that plugin. No recovered helper is packaged. An authorized administrator can privately side-load the pinned original PCM/preset helpers for bounded execution; see HERMES.md. Other upstream stages remain incomplete. The private vendor snapshot declares MIT in metadata but lacks a complete standalone license/copyright notice: do not publish it or its containing Git history, invent notices or relicense it. See [RELEASE.md](RELEASE.md) for the clean-publication boundary and [HERMES.md](HERMES.md) for optional agent-client instructions.
+- Operator guide: [HERMES.md](HERMES.md). Stage map and measurements: [WORKFLOW-PARITY.md](WORKFLOW-PARITY.md). Release record: [RELEASE.md](RELEASE.md). The older 9:16 preview: [EDITING.md](EDITING.md).
+- James' SKILL.md files and references are served read-only at `GET /v1/workflow/docs` and `GET /v1/workflow/docs/{name}` (`client.py docs`).
+- Stages: `POST /v1/projects/{id}/stages/{source-audio|resolve-preset|preflight|asr|align|acoustic-ctc|pcm-assemble|speech-cut-audit|acoustic-scan|dialogue-gate|validate-project}`. Inputs are JSON and job ids only, never paths, shell commands or filters. Each job lists its artifacts with SHA-256; later stages re-check those hashes before they read anything.
 
 ## Run locally
 
-Requires Linux, Python 3.11+, FFmpeg/ffprobe with `fd` protocol, drawtext, libx264 and AAC, `prlimit`, and DejaVu Sans Mono. The image guarantees the caption font exists via `fonts-dejavu-core` when needed. Verified on Ubuntu 24.04 / FFmpeg 6.1.1. From this directory:
+For the workflow stages outside the image, set `DEFLEUR_ROOT` to `defleur/` and `VIDEO_HELPER_PYTHON` to a venv built from `requirements.lock`. The legacy preview requires Linux, Python 3.11+, FFmpeg/ffprobe with `fd` protocol, drawtext, libx264 and AAC, `prlimit`, and DejaVu Sans Mono. The image guarantees the caption font exists via `fonts-dejavu-core` when needed. Verified on Ubuntu 24.04 / FFmpeg 6.1.1. From this directory:
 
 ```sh
 export VIDEO_API_TOKEN="$(openssl rand -hex 24)"
@@ -19,10 +19,10 @@ python3 service.py
 Do not commit `.local-data` or credentials. The default listener is loopback port 8787. To use a container, build from this directory:
 
 ```sh
-docker build -t wizard-defleur-video:0.2.1-testing .
+docker build -t wizard-defleur-video:0.3.0-testing .
 ```
 
-The Runtipi recipe remains **`available:false`** pending original-workflow parity, licensing, remote publication and user-host installation validation. Intended amd64 image: `ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing`. It owns `/data` with no Hermes dependency, Docker socket or host agent directories. The workflow builds only this directory; its allowlisted context excludes vendor source, Git history, evidence and user data. Publication and public registry visibility are separate steps. Local tests are not a completed Runtipi dashboard install.
+Published amd64 image: `ghcr.io/humanitylabs-org/defleur-video:0.3.0-testing` (listed in the store as a testing app). It owns `/data` with no Hermes dependency, Docker socket or host agent directories. The workflow builds only this directory; its allowlisted context excludes vendor source, Git history, evidence and user data. Publication and public registry visibility are separate steps. Local tests are not a completed Runtipi dashboard install.
 
 **Fresh-bind permissions:** Runtipi 4.8.0's actual translator is exercised by the lifecycle smoke. `uid`/`gid` metadata does not chown the bind. Runtipi runs `chmod -Rf a+rwx` on app data **after** Compose starts; initial permission failures can precede the translated `unless-stopped` restart. The resulting data root is broadly writable and lifecycle operations may also broaden existing file permissions. Keep this a private, single-owner host. For manual deployment, provision the bind for container UID/GID 1000 before starting, accounting for rootless user-namespace mapping. `exposable:false` is not a firewall: opening the app port can publish it on all host interfaces.
 
@@ -37,8 +37,9 @@ All routes except `GET /healthz` require `Authorization: Bearer <VIDEO_API_TOKEN
 | `POST /v1/projects` | Raw `video/mp4`, one Content-Length | `201` project ID, hash, metadata, unmet gates |
 | `GET /v1/projects/{id}` | Bearer | Persisted source metadata |
 | `POST /v1/projects/{id}/previews` | `application/json` edit plan, Content-Length | `202` persistent job |
-| `POST /v1/projects/{id}/stages/{operation}` | Stage JSON | Durable source-audio / pcm-assemble / resolve-preset job |
-| `GET /v1/jobs/{id}/stage-artifacts/{name}` | Manifest-allowlisted name | Exact hashed stage JSON/WAV |
+| `POST /v1/projects/{id}/stages/{operation}` | Stage JSON (≤1 MiB) | Durable piece-1 stage job (see HERMES.md) |
+| `GET /v1/jobs/{id}/stage-artifacts/{name}` | Manifest-allowlisted name | Exact hashed stage JSON/WAV/PNG |
+| `GET /v1/workflow/docs[/{name}]` | Allowlisted name | James' SKILL.md / references / NOTICE, read-only |
 | `GET /v1/jobs/{id}` | Bearer | State, submitted plan, result checksum/evidence or error |
 | `GET /v1/jobs/{id}/preview` | Bearer | Exact MP4 attachment once `needs_review`; otherwise `409` |
 | `DELETE /v1/projects/{id}` | Bearer | Deletes original, previews and job rows; refuses active work |
@@ -51,7 +52,7 @@ Plan shape follows the recovered DeFleur project contract:
 
 Submit real source-specific reasons; these intervals merely illustrate syntax. Segments must be ordered, nonoverlapping, within the actual source, at least 0.1 seconds long, and number one through eight. Unknown keys, strings as numbers, booleans, nonfinite numbers and arbitrary filter expressions are rejected. Human/AI editorial judgments remain the caller's responsibility; this API does not certify faithful meaning or phonetic cut safety.
 
-Errors are JSON: `401` missing/wrong token, `404` absent target, `409` preview unavailable or artifact hash changed, `422` unsupported media, malformed input or exhausted quota, `500` internal failure. Limits are deliberately strict, not negotiated. Version 0.2 is experimental; incompatible changes require a new major route or an explicit migration before promotion. Request JSON is limited to 64 KiB. Chunked uploads and source URLs are not supported. Downloads currently return complete attachments, not byte-range streaming.
+Errors are JSON: `401` missing/wrong token, `404` absent target, `409` preview unavailable or artifact hash changed, `422` unsupported media, malformed input or exhausted quota, `500` internal failure. Limits are deliberately strict, not negotiated. Version 0.3 is experimental; incompatible changes require a new major route or an explicit migration before promotion. Preview JSON is limited to 64 KiB; stage JSON to 1 MiB. Chunked uploads and source URLs are not supported. Downloads currently return complete attachments, not byte-range streaming.
 
 Example requests, after starting the service:
 

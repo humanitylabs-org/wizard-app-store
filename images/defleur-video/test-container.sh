@@ -1,19 +1,19 @@
 #!/bin/sh
+# Build the image and run the unit suite plus James' test_audio_gate.py inside it,
+# with the same hardening as the Runtipi recipe. Network is off: the Transcriber is
+# faked on loopback here; the real Transcriber runs in scripts/e2e-video-audio.py.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-docker build -t wizard-defleur-video:0.2.1-testing "$ROOT"
-# 1 GiB is a scratch quota, not a preallocation. Stages reserve 512 MiB.
-set --
-if [ -n "${VIDEO_HELPER_ROOT:-}" ]; then
-  set -- --mount "type=bind,source=$VIDEO_HELPER_ROOT,target=/opt/workflow,readonly" -e VIDEO_HELPER_ROOT=/opt/workflow
-fi
-docker run "$@" --rm --network none --read-only --cap-drop ALL \
+IMAGE=${VIDEO_IMAGE:-wizard-defleur-video:0.3.0-testing}
+[ -n "${VIDEO_SKIP_BUILD:-}" ] || docker build -t "$IMAGE" "$ROOT"
+docker run --rm --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges --cpus 2 --memory 1536m --memory-swap 1536m \
   --pids-limit 64 --tmpfs /scratch:rw,noexec,nosuid,size=1024m,mode=1777 \
   -e TMPDIR=/scratch \
   --mount "type=bind,source=$ROOT/test_service.py,target=/app/test_service.py,readonly" \
-  --entrypoint /usr/bin/python3 wizard-defleur-video:0.2.1-testing -c '
-import unittest, pathlib, json, os
+  --entrypoint /usr/bin/python3 "$IMAGE" -c '
+import unittest, pathlib, json, os, subprocess
+gate = subprocess.run(["/opt/venv/bin/python", "-I", "/opt/defleur/skills/defleur-audio/scripts/test_audio_gate.py"])
 r = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover("/app", pattern="test_service.py"))
-print(json.dumps({"uid": os.getuid(), **{n: pathlib.Path("/sys/fs/cgroup/" + n).read_text().strip() for n in ("memory.peak", "memory.max", "memory.swap.max", "cpu.max")}}))
-raise SystemExit(not r.wasSuccessful())'
+print(json.dumps({"uid": os.getuid(), "test_audio_gate_rc": gate.returncode, **{n: pathlib.Path("/sys/fs/cgroup/" + n).read_text().strip() for n in ("memory.peak", "memory.max", "memory.swap.max", "cpu.max")}}))
+raise SystemExit(gate.returncode or not r.wasSuccessful())'

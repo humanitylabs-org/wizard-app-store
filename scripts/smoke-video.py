@@ -16,7 +16,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = os.environ.get("VIDEO_TEST_IMAGE", "wizard-defleur-video:0.2.1-testing")
+IMAGE = os.environ.get("VIDEO_TEST_IMAGE", "wizard-defleur-video:0.3.0-testing")
 sys.path.insert(0, str(ROOT / "images/defleur-video"))
 from client import Client  # pyright: ignore[reportMissingImports]
 
@@ -37,7 +37,7 @@ def main():
         compose = translated["compose"]
         service = compose["services"]["defleur-video"]
         assert service["restart"] == "unless-stopped"
-        assert service["image"] == "ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing"
+        assert service["image"] == "ghcr.io/humanitylabs-org/defleur-video:0.3.0-testing"
         assert service["user"] == "1000:1000" and service["read_only"] is True
         assert service["ports"] == ["${APP_PORT}:8787"]
         # Test-only substitutions: cached image, loopback ephemeral port, isolated network.
@@ -47,7 +47,9 @@ def main():
         compose["networks"]["tipi_main_network"] = {"name": name, "external": True}
         app = tmp / "app-data"
         app.mkdir()
-        env = {**os.environ, "APP_DATA_DIR": str(app)}
+        # Runtipi writes form-field defaults into the app env file.
+        fields = {f["env_variable"]: f["default"] for f in json.loads((ROOT / "apps/defleur-video/config.json").read_text())["form_fields"]}
+        env = {**os.environ, "APP_DATA_DIR": str(app), **fields}
         recipe = tmp / "compose.json"
         recipe.write_text(json.dumps(compose))
         cmd = ["docker", "compose", "-p", name, "-f", str(recipe)]
@@ -84,7 +86,7 @@ def main():
                         time.sleep(.25)
             client, health = ready()
             assert Client("http://127.0.0.1:" + run(*cmd, "port", "defleur-video", "8787", env=env).rsplit(":", 1)[1], "").request("GET", "/v1/capabilities")["operations"]
-            assert health["version"] == "0.2.1-testing"
+            assert health["version"] == "0.3.0-testing"
             report["health"] = health
             inspect = json.loads(run("docker", "inspect", cid))[0]
             assert inspect["Config"]["User"] == "1000:1000"
@@ -116,6 +118,28 @@ def main():
             before_movie = client.request("GET", f"/v1/jobs/{job['id']}/preview")
             assert hashlib.sha256(before_movie).hexdigest() == job["result"]["sha256"]
             client.review(job["id"], tmp / "before-review")
+            # Piece-1 workflow stages (no Transcriber here; e2e-video-audio.py covers ASR/alignment).
+            caps = client.request("GET", "/v1/capabilities")["workflow"]
+            assert all(h["available"] for h in caps["helpers"].values()), caps["helpers"]
+            assert caps["transcriber"]["url_host"] == "transcriber:8000" and caps["transcriber"]["reachable"] is False
+            report["transcriber_absent_reported"] = caps["transcriber"]
+            assert client.request("GET", "/v1/workflow/docs/defleur-audio", raw=True).startswith(b"---")
+            stages = {}
+            def stage(op, body):
+                j = client.wait(client.request("POST", f"/v1/projects/{pid}/stages/{op}", json.dumps(body))["id"], True)
+                stages[op] = j
+                return j
+            src = stage("source-audio", {})
+            assert src["state"] == "needs_review", src
+            asr = stage("asr", {"audio_job": src["id"], "language": "en"})
+            assert asr["state"] == "failed" and "Install the Transcriber app" in asr["error"], asr
+            report["asr_without_transcriber"] = asr["error"]
+            asm = stage("pcm-assemble", {"audio_job": src["id"], "segments": [{"start_s": 0, "end_s": .6, "reason": "smoke"}, {"start_s": 1.0, "end_s": 1.9, "reason": "smoke"}]})
+            assert asm["state"] == "needs_review", asm
+            audit = stage("speech-cut-audit", {"assemble_job": asm["id"], "regions": [{"mode": "keep", "start_s": .1, "end_s": .5}, {"mode": "drop", "start_s": .7, "end_s": .9}]})
+            assert audit["state"] == "needs_review" and audit["result"]["summary"]["pass"], audit
+            edited = client.request("GET", f"/v1/jobs/{asm['id']}/stage-artifacts/edited.wav")
+            edge_png = client.request("GET", f"/v1/jobs/{audit['id']}/stage-artifacts/1-start-spectrogram.png")
             # Read back exact project, decision, job, source and output after each lifecycle.
             for label, command in [("restart", ["restart", "-t", "5"]), ("stop-start", ["stop", "-t", "5"]), ("recreate", ["up", "-d", "--force-recreate"])]:
                 run(*cmd, *command, env=env)
@@ -127,7 +151,11 @@ def main():
                 assert client.request("GET", f"/v1/jobs/{job['id']}") == job
                 assert client.request("GET", f"/v1/projects/{pid}/source") == original
                 assert client.request("GET", f"/v1/jobs/{job['id']}/preview") == before_movie
-                report[label] = "exact project/decision/job/source/preview preserved"
+                for op, j in stages.items():
+                    assert client.request("GET", f"/v1/jobs/{j['id']}") == j, op
+                assert client.request("GET", f"/v1/jobs/{asm['id']}/stage-artifacts/edited.wav") == edited
+                assert client.request("GET", f"/v1/jobs/{audit['id']}/stage-artifacts/1-start-spectrogram.png") == edge_png
+                report[label] = "exact project/decision/job/source/preview and workflow stage jobs/artifacts preserved"
             client.review(job["id"], tmp / "after-review")
             report["render"] = {"sha256": job["result"]["sha256"], "bytes": len(before_movie),
                 "state": job["state"], "artifacts_verified": len(job["result"]["review"]["artifacts"]), "captions_burned": True}
@@ -135,6 +163,7 @@ def main():
             assert client.request("GET", f"/v1/projects/{pid}", missing_ok=True) is None
             assert client.request("GET", f"/v1/jobs/{job['id']}", missing_ok=True) is None
             report["delete_read_back"] = True
+            report["workflow_stages"] = {op: {"state": j["state"], "artifacts": len((j.get("result") or {}).get("artifacts", []))} for op, j in stages.items()}
         finally:
             run(*cmd, "down", "--remove-orphans", env=env)
             run("docker", "network", "rm", name)

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "defleur-video",
+  "version": "0.1.0",
+  "description": "Style-neutral, evidence-led short-form video editing workflow.",
+  "license": "MIT",
+  "keywords": ["video-editing", "captions", "audio-integrity", "motion-graphics"]
+}

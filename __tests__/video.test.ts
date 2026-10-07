@@ -10,7 +10,7 @@ test("publication allowlist excludes recovered vendor, history, evidence and loc
   expect(new Set(files).size).toBe(files.length);
   for (const file of files) {
     expect(existsSync(file)).toBe(true);
-    expect(file).not.toMatch(/(^|\/)(vendor|docs|\.git|node_modules|\.local-data)(\/|$)/);
+    expect(file).not.toMatch(/(^|\/)(vendor|docs|\.git|node_modules|\.local-data|__pycache__)(\/|$)/);
     expect(file).not.toContain("..");
   }
   for (const root of ["images/defleur-video", "apps/defleur-video"]) {
@@ -25,29 +25,58 @@ test("publication allowlist excludes recovered vendor, history, evidence and loc
   expect(files).toContain("scripts/translate-video-recipe.mjs");
 });
 
-test("image context and release workflow contain only the original service", () => {
+test("image bundles James' helpers byte-for-byte with NOTICE, no faster-whisper", () => {
   expect(readFileSync("images/defleur-video/.dockerignore", "utf8").trim().split("\n"))
-    .toEqual(["*", "!Dockerfile", "!service.py", "!editing.py", "!client.py", "!workflow.py"]);
+    .toEqual(["*", "!Dockerfile", "!service.py", "!editing.py", "!client.py", "!workflow.py", "!transcriber.py",
+              "!scan_windows.py", "!NOTICE", "!requirements.lock", "!defleur", "!defleur/**", "defleur/.gitignore"]);
   const dockerfile = readFileSync("images/defleur-video/Dockerfile", "utf8");
-  expect(dockerfile).toContain("COPY service.py editing.py client.py workflow.py /app/");
+  expect(dockerfile).toContain("COPY defleur/ /opt/defleur/");
+  expect(dockerfile).toContain("COPY NOTICE /opt/defleur/NOTICE");
+  expect(dockerfile).toContain("--require-hashes");
+  expect(dockerfile).toContain("test_audio_gate.py");
   expect(dockerfile).toContain("fonts-dejavu-core");
+  const lock = readFileSync("images/defleur-video/requirements.lock", "utf8");
+  expect(lock).toContain("torch==2.11.0+cpu");
+  expect(lock).toContain("stable-ts==");
+  expect(lock).not.toMatch(/^faster-whisper==/m);
+  const notice = readFileSync("images/defleur-video/NOTICE", "utf8");
+  expect(notice).toContain("30768288eb1308b18216a5df5eb4648fbce3e55b");
+  expect(notice).toContain("MIT");
+  expect(JSON.parse(readFileSync("images/defleur-video/defleur/plugin.json", "utf8")).license).toBe("MIT");
+  // Every pinned helper hash in workflow.py must match the bundled bytes.
+  const workflowPy = readFileSync("images/defleur-video/workflow.py", "utf8");
+  const pins = [...workflowPy.matchAll(/"((?:skills|defaults)\/[^"]+)", "([a-f0-9]{64})"/g)];
+  expect(pins.length).toBeGreaterThanOrEqual(12);
+  for (const [, rel, hash] of pins) {
+    const digest = new Bun.CryptoHasher("sha256").update(readFileSync(`images/defleur-video/defleur/${rel}`)).digest("hex");
+    expect(digest).toBe(hash ?? "");
+  }
+});
+
+test("release workflow tests, runs the two-app e2e, then publishes", () => {
   const workflow = parse(readFileSync(".github/workflows/video.yml", "utf8"));
   const steps = workflow.jobs["video-image"].steps;
   const firstPublish = steps.findIndex((step: {uses?: string; run?: string}) => step.uses === "docker/login-action@v3" || step.run?.includes("docker push"));
-  const lastTest = steps.findIndex((step: {run?: string}) => step.run?.includes("scripts/smoke-video.py"));
-  expect(lastTest).toBeGreaterThan(-1);
+  const lastTest = Math.max(...["scripts/smoke-video.py", "scripts/e2e-video-audio.py"].map(s => steps.findIndex((step: {run?: string}) => step.run?.includes(s))));
+  expect(steps.findIndex((step: {run?: string}) => step.run?.includes("scripts/e2e-video-audio.py"))).toBeGreaterThan(-1);
   expect(firstPublish).toBeGreaterThan(lastTest);
-  const commands = workflow.jobs["video-image"].steps.map((step: {run?: string}) => step.run || "").join("\n");
+  const commands = steps.map((step: {run?: string}) => step.run || "").join("\n");
   expect(commands).toContain("sh images/defleur-video/test-container.sh");
   expect(commands).toContain("python3 scripts/smoke-video.py");
-  expect(commands).toContain("docker push ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing");
+  expect(commands).toContain(`docker push ghcr.io/humanitylabs-org/defleur-video:${config.version}`);
 });
 
-test("video testing release is private, no-GUI and needs no token form", () => {
+test("video testing release is private, no-GUI, no token form; optional Transcriber settings", () => {
   expect(config.available).toBe(true);
   expect(config.exposable).toBe(false);
   expect(config.no_gui).toBe(true);
-  expect(config.form_fields).toBeUndefined();
+  expect(config.form_fields.map((f: {env_variable: string}) => f.env_variable)).toEqual(["TRANSCRIBER_URL", "TRANSCRIBER_MODEL"]);
+  for (const field of config.form_fields) expect(field.required).toBe(false);
+  expect(config.form_fields[0].default).toBe("http://transcriber:8000");
+  expect(config.form_fields[1].default).toBe("Systran/faster-whisper-small");
+  const env = compose.services["defleur-video"].environment;
+  expect(env.TRANSCRIBER_URL).toBe("${TRANSCRIBER_URL}");
+  expect(env.TRANSCRIBER_MODEL).toBe("${TRANSCRIBER_MODEL}");
 });
 
 test("video has independent state, no agent volumes, bounded unprivileged service", () => {
@@ -62,7 +91,7 @@ test("video has independent state, no agent volumes, bounded unprivileged servic
   expect(service.memswap_limit).toBe(service.mem_limit);
   expect(service.cpus).toBe(2);
   expect(service.pids_limit).toBe(64);
-  expect(config.version).toBe("0.2.1-testing");
+  expect(config.version).toBe("0.3.0-testing");
   expect(service.image).toBe(`ghcr.io/humanitylabs-org/defleur-video:${config.version}`);
   expect(service.environment.VIDEO_API_TOKEN).toBeUndefined();
   for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "depends_on"]) {

@@ -1,0 +1,16 @@
+DeFleur Video workflow helpers
+
+The directory defleur/ in this source tree (installed at /opt/defleur in the
+image) contains James DeFleur's DeFleur Video plugin files, copied unchanged
+from upstream commit 30768288eb1308b18216a5df5eb4648fbce3e55b: README.md,
+SETUP.md, plugin.json, package.json, wizard-module.json, requirements.txt,
+defaults/neutral-preset.json and the skills defleur-edit, defleur-audio and
+defleur-motion (SKILL.md, references and scripts).
+
+The plugin's plugin.json declares the license "MIT". They are redistributed in
+this Humanity Labs app with the author's authorization.
+
+Everything else in images/defleur-video (service.py, workflow.py,
+transcriber.py, scan_windows.py, editing.py, client.py, tests and docs) is
+original to this app. The app does not modify James' scripts; it runs them with
+server-owned paths and records each script's SHA-256 in every job result.

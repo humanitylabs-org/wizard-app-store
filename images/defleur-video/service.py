@@ -24,19 +24,21 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import cast
 from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.2.1-testing"
+VERSION = "0.3.0-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PROJECTS = 8
-MAX_JOBS = 32
+MAX_JOBS = 256
 MAX_DURATION = 300
 MAX_NATIVE_LOG = 256 * 1024
+MAX_STAGE_JSON = 1024 * 1024
 ID = re.compile(r"^[a-f0-9]{32}$")
-GATES = ["coherent-thought/editorial-review", "transcript-and-word-alignment",
-         "filler-and-phonetic-review", "waveform-and-spectrogram-per-edge",
-         "audio-dialogue-lock", "fixed-per-setup-face-audit",
-         "semantic-HTML-SVG-GSAP-motion", "burned-aligned-captions",
-         "phone-size-and-motion-review", "delivery-audio-receipt"]
+# Delivery is never approved by this app. Piece 1 supplies the audio/edit
+# stages (ASR, alignment, per-edge evidence, dialogue gate) as operator tools.
+GATES = ["coherent-thought/editorial-review (operator)", "audio-dialogue-lock (dialogue-gate stage, operator evidence)",
+         "fixed-per-setup-face-audit (not built)", "semantic-HTML-SVG-GSAP-motion (not built)",
+         "burned-aligned-captions via caption_layer (not built)", "1080x1920 encode (not built)",
+         "phone-size-and-motion-review (operator)", "delivery-audio-receipt (not built)"]
 
 
 NATIVE_CONTEXT = threading.local()
@@ -121,18 +123,21 @@ def mp4_structure(path):
         raise Rejected("incomplete or unsupported MP4 structure")
 
 
-def native(args, source=None, timeout=30, cwd=None, file_limit=33554432):
+def native(args, source=None, timeout=30, cwd=None, file_limit=33554432, env_extra=None, check=True,
+           explain=False, cpu=90, as_limit=1073741824, nofile=64, max_log=MAX_NATIVE_LOG, threads="1"):
     """Bounded native process; one private descriptor, no shell or network inputs.
 
     prlimit is deliberately a separate executable, avoiding preexec_fn in this
     threaded process. RLIMIT_AS is a native child ceiling, not an OS sandbox.
+    Returns stdout, or (returncode, stdout, stderr) when check is False.
     """
     timeout = min(timeout, getattr(NATIVE_CONTEXT, "deadline", float("inf")) - time.monotonic())
     if timeout <= 0:
         raise Rejected("job wall-time limit")
-    env = {"PATH": "/usr/bin:/bin", "LANG": "C", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
+    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "OMP_NUM_THREADS": threads, "OPENBLAS_NUM_THREADS": threads,
+           "MKL_NUM_THREADS": threads, **(env_extra or {})}
     with (source.open("rb") if source else open(os.devnull, "rb")) as f:
-        command = ["/usr/bin/prlimit", "--as=1073741824", "--cpu=90", f"--fsize={file_limit}", "--nofile=64", "--", *args]
+        command = ["/usr/bin/prlimit", f"--as={as_limit}", f"--cpu={cpu}", f"--fsize={file_limit}", f"--nofile={nofile}", "--", *args]
         command = [str(f.fileno()) if x == "@FD@" else str(x) for x in command]
         p = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, pass_fds=(f.fileno(),) if source else (),
@@ -153,16 +158,25 @@ def native(args, source=None, timeout=30, cwd=None, file_limit=33554432):
                             sel.unregister(key.fileobj)
                             continue
                         output[key.data].extend(chunk)
-                        if sum(map(len, output.values())) > MAX_NATIVE_LOG:
+                        if key.data == "err" and len(output["err"]) > max_log:
+                            del output["err"][:len(output["err"]) - max_log // 2]  # keep the tail of progress logs
+                        if len(output["out"]) > max_log:
                             raise Rejected("native process output limit")
-                if p.wait(timeout=max(0.1, deadline - time.monotonic())):
-                    raise Rejected("native media processing failed")
+                code = p.wait(timeout=max(0.1, deadline - time.monotonic()))
+                if code and check:
+                    detail = ""
+                    if explain:
+                        tail = bytes(output["err"]).decode(errors="replace").strip().splitlines()
+                        detail = ": " + (tail[-1][:400] if tail else f"exit {code}")
+                    raise Rejected("native media processing failed" + detail)
         finally:
             if p.poll() is None:
                 os.killpg(p.pid, signal.SIGKILL)
             p.wait()
             p.stdout.close()
             p.stderr.close()
+        if not check:
+            return p.returncode, bytes(output["out"]), bytes(output["err"])
         return bytes(output["out"])
 
 
@@ -401,9 +415,21 @@ class Store:
                 c.execute("INSERT INTO job_decisions VALUES(?,?)", (jid, decision_id))
         return self.job(jid)
 
+    def stage_ref(self, project, jid, stages):
+        """Resolve a client-supplied job reference to a finished stage of the same project."""
+        if not isinstance(jid, str) or not ID.fullmatch(jid):
+            raise Rejected("job reference must be a 32-hex job id")
+        try:
+            job = self.job(jid)
+        except FileNotFoundError:
+            raise Rejected(f"referenced job {jid} not found")
+        if job["project"] != project or job["state"] != "needs_review" or not job["result"] or job["result"].get("stage") not in stages:
+            raise Rejected(f"job {jid} is not a finished {'/'.join(sorted(stages))} stage of this project")
+        return job, self.path(project) / (jid + ".stage")
+
     def submit_stage(self, identifier, stage, value):
         metadata = self.project(identifier)
-        workflow.validate(stage, value, metadata, edit_plan)
+        workflow.validate(stage, value, metadata, lambda jid, stages: self.stage_ref(identifier, jid, stages))
         if __import__("shutil").disk_usage(self.root).free < 512 * 1024 * 1024:
             raise Rejected("workflow stages require 512 MiB free scratch reserve")
         with self.connect() as c:
@@ -456,13 +482,14 @@ class Store:
             target = self.path(row["project"]) / (row["id"] + ".mp4")
             started = time.monotonic()
             try:
-                NATIVE_CONTEXT.deadline = time.monotonic() + 180
                 plan = parse_json(row["plan"])
+                stage = plan.get("workflow_stage")
+                NATIVE_CONTEXT.deadline = time.monotonic() + (workflow.deadline_for(stage) if stage else 180)
                 source = self.path(row["project"]) / "source.mp4"
                 metadata = self.project(row["project"])
-                if "workflow_stage" in plan:
-                    result = workflow.run(plan["workflow_stage"], plan["input"], source,
-                        target.with_suffix(".stage"), metadata, native, input_args, digest)
+                if stage:
+                    result = workflow.run(stage, plan["input"], source, target.with_suffix(".stage"), metadata, native,
+                        lambda jid, stages, p=row["project"]: self.stage_ref(p, jid, stages), NATIVE_CONTEXT.deadline, input_args)
                 else:
                     result = render(source, target, plan)
                     result["review"] = review_artifacts(source, target, plan, metadata, native, input_args, digest)
@@ -473,7 +500,7 @@ class Store:
                 with self.connect() as c:
                     c.execute("UPDATE jobs SET state='needs_review',result=? WHERE id=?", (json_bytes(result).decode(), row["id"]))
             except Exception as exc:
-                for partial in target.parent.glob(row["id"] + "*"):
+                for partial in [*target.parent.glob(row["id"] + ".*"), *target.parent.glob(row["id"] + "-*")]:
                     if partial.is_dir():
                         __import__("shutil").rmtree(partial)
                     else:
@@ -556,19 +583,25 @@ class Handler(BaseHTTPRequestHandler):
         store = cast(VideoServer, self.server).store
         if method == "GET" and self.path == "/v1/capabilities":
             return self.send(200, {"version": VERSION, "upstream_commit": UPSTREAM,
-                "operations": ["upload_mp4", "submit_edit_plan_preview", "persist_transcript_decisions", "burn_timed_captions", "fixed_protected_crop", "cut_edge_review_artifacts", "poll_job", "download_preview", "delete_project"],
-                "limits": {"upload_bytes": MAX_UPLOAD, "duration_s": MAX_DURATION, "projects": MAX_PROJECTS, "jobs": MAX_JOBS, "workers": 1, "decisions_per_project": 16, "json_bytes": 65536, "job_wall_seconds": 180},
+                "operations": ["upload_mp4", "workflow_stages", "read_workflow_docs", "submit_edit_plan_preview", "persist_transcript_decisions", "burn_timed_captions", "fixed_protected_crop", "cut_edge_review_artifacts", "poll_job", "download_preview", "delete_project"],
+                "limits": {"upload_bytes": MAX_UPLOAD, "duration_s": MAX_DURATION, "projects": MAX_PROJECTS, "jobs": MAX_JOBS, "workers": 1, "decisions_per_project": 16, "json_bytes": MAX_STAGE_JSON, "preview_job_wall_seconds": 180},
                 "workflow": workflow.capabilities(),
                 "ai_calls": False, "delivery_approval": False, "missing_delivery_gates": GATES})
         if method == "POST" and len(parts) == 6 and parts[1:3] == ["v1", "projects"] and parts[4] == "stages":
             if self.headers.get("Content-Type") != "application/json":
                 raise Rejected("Content-Type must be application/json")
-            n = self.length(65536)
+            n = self.length(MAX_STAGE_JSON)
             data = self.rfile.read(n)
             if len(data) != n:
                 raise Rejected("truncated JSON")
             value = parse_json(data)
             return self.send(202, store.submit_stage(parts[3], parts[5], value))
+        if method == "GET" and self.path == "/v1/workflow/docs":
+            return self.send(200, {"docs": sorted(workflow.DOCS)})
+        if method == "GET" and len(parts) == 5 and parts[1:4] == ["v1", "workflow", "docs"]:
+            path = workflow.doc(parts[4])
+            kind = "application/json" if path.suffix == ".json" else "text/markdown; charset=utf-8" if path.suffix == ".md" else "text/plain; charset=utf-8"
+            return self.send(200, path.read_bytes(), kind)
         if method == "GET" and len(parts) == 6 and parts[1:3] == ["v1", "jobs"] and parts[4] == "stage-artifacts":
             job = store.job(parts[3])
             if job["state"] != "needs_review" or not job["result"] or "stage" not in job["result"]:

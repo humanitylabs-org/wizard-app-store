@@ -1,59 +1,59 @@
-# Hermes connection and operator instructions
+# Operator guide for Hermes (piece 1: audio/edit workflow)
 
-**Original-workflow integration is incomplete.** Read WORKFLOW-PARITY.md before claiming capability. Hermes is the intended creative/operator client, not an extra autonomous service.
+Hermes is the editor. It makes every editorial decision: what to cut, which fillers go, and whether an edge sounds clean. This app never calls an LLM. It runs James DeFleur's original helper scripts on files it owns and returns evidence bound to SHA-256 hashes. Never invent transcripts, timings, reviews or receipts. If a stage fails, report the error and stop.
 
-Hermes is only an HTTP **client** here. Do not install the recovered plugin, change Hermes configuration, mount Hermes state, or add an agent runtime to the video app. The same commands work from a plain Python 3 shell.
+## Before you start
 
-## Connection
+1. Read James' skills exactly as shipped. They are the spec you follow:
+   ```sh
+   python3 client.py docs                    # list available docs
+   python3 client.py docs defleur-edit       # SKILL.md
+   python3 client.py docs defleur-audio
+   python3 client.py docs defleur-audio-contract
+   python3 client.py docs defleur-edit-contract
+   ```
+2. Set `VIDEO_API_URL` (e.g. `http://<tailscale-host>:8787`). Only if the admin set one, put `VIDEO_API_TOKEN` in the process environment. Never put it in chat, URLs or files.
+3. Run `python3 client.py capabilities` and check that `workflow.transcriber.reachable` and `model_installed` are both true. If not, the **Transcriber** app must be installed on the same Runtipi server (the video app reaches it at `http://transcriber:8000`) and its model downloaded. Tell the user; do not work around it.
 
-The user must authorize the source file, target service and editing scope. Supply `VIDEO_API_URL` (an http(s) origin, e.g. `http://<tailscale-host>:8787`). The default install needs no token; only if the administrator set one, also supply `VIDEO_API_TOKEN` through the invoking process's private environment. Do not put the token in chat, URLs, plan JSON, command arguments or review HTML. Default URL is loopback; for a separate host use the private reachable app URL, preferably HTTPS. A container's localhost is not another container's localhost. Copy `client.py` to the client's machine; it uses Python's standard library only. Use a dedicated credential for this video service, never an agent/provider credential. Current authorization is service-wide single-owner: it permits reading/mutating/deleting all this service's projects, not per-project or read-only scopes. Do not share it with untrusted clients. Configure its environment using your existing private credential mechanism; no Hermes core/plugin modification or global model switch is needed.
+`client.py` uses only Python's standard library; copy it from this directory. Every stage command below accepts `--wait` (block until done) and `--bundle DIR` (download every artifact and verify its hash). Each prints the job id. Pass job ids to later stages, never file paths.
 
-Ask the service for its actual contract before acting (from the directory containing `client.py`):
+## Step by step (`$P` = project id)
 
-```sh
-python3 -c 'import os; from client import Client; print(Client(os.environ["VIDEO_API_URL"], os.environ.get("VIDEO_API_TOKEN", "")).request("GET", "/v1/capabilities"))'
-python3 client.py upload /authorized/path/source.mp4
+| # | Command | James' helper | What you decide |
+|---|---|---|---|
+| 1 | `upload source.mp4` | — | the user authorized this file |
+| 2 | `source-audio $P --wait --bundle b/src` | `probe_source.py` + 48 kHz PCM | nothing; check `constant_frame_rate` (VFR stops piece 1) |
+| 3 | `preset $P preset.json --wait` | `preset.py` | owner/project preset JSON (optional) |
+| 4 | `preflight $P --language en --wait` | `preflight.py` | `piece_1_blockers` must be `[]` |
+| 5 | `asr $P $SRC_JOB --language en --wait --bundle b/asr` | `asr.py` schema via the Transcriber | read `asr.json`; ASR can miss fillers |
+| 6 | `align $P $ASR_JOB --language en --wait --bundle b/align` | `align.py` (stable-ts, default model `base`) | word timings are navigation seeds |
+| 7 | `assemble $P $SRC_JOB plan.json --wait --bundle b/edit` | `assemble_pcm.py` | **your cut list**: `{"segments":[{start_s,end_s,reason}]}` |
+| 8 | `cut-audit $P $ASM_JOB regions.json --wait --bundle b/audit` | `speech_cut_audit.py` | keep/drop regions for every word and filler near a cut |
+| 9 | `scan $P $ASM_JOB --wait --bundle b/scan` | window scan (written for this app) | inspect every edited-window PNG |
+| 10 | `asr $P $ASM_JOB --language en --wait` | Transcriber on `edited.wav` | confirm removed fillers are gone and nothing else was lost |
+| 11 | `dialogue-gate $P gate.json --wait --bundle b/gate` | `audio_gate.py --stage dialogue` | your written reviews (format below) |
+| 12 | `validate-project $P project.json --wait` | `validate_project.py` | locked timeline, visual plan, crop ledger (planning only) |
+
+Optional: `ctc` runs `acoustic_ctc_window.py`, but only if the admin supplied a CTC model bundle (`VIDEO_CTC_MODEL_DIR`). Otherwise the app reports it as unavailable.
+
+### Cutting (step 7)
+Follow the defleur-edit SKILL.md: cut on thought boundaries, keep clauses whole, and remove fillers only after review (preset `remove_fillers_only_after_review`). Use the aligned word `end`/`start` times to place each cut in silence, a little after the last kept word and before the next one. All times are **source** seconds. Segments must be in order, must not overlap, and must each be at least 10 ms. Give each segment a real reason.
+
+### Regions (step 8)
+Regions are a JSON list of `{"mode":"keep"|"drop","start_s","end_s","word"?,"reason"?}`. Mark every kept word near each cut as `keep` and every removed filler as `drop`. The helper fails the audit if a kept word is clipped or a dropped region survives. It also renders `N-start/end-waveform.png` and `-spectrogram.png` for every retained edge. Open and look at each one.
+
+### Gate file (step 11)
+```json
+{"assemble_job":"…","audit_job":"…","scan_job":"…","edited_asr_job":"…",
+ "filler_review":{"full_pass_reviewed":true,"candidates":[{"word":"um","source_start_s":2.84,"source_end_s":3.16,"action":"removed","reason":"…"}]},
+ "acoustic_review":[{"window":0,"findings":"what you saw in window 0"}, "…one row per scan window…"],
+ "reviewed_edges":[{"segment":0,"edge":"start","decision":"keep","findings":"…"}, "…every segment start and end…"]}
 ```
+The app attaches each edge's waveform and spectrogram with their hashes, then builds `audio-gate.json` exactly as `audio_gate.py` expects. The gate fails if any edge or window lacks evidence or if the cut audit did not pass. `pass:true` means the evidence is complete and the hashes match. It is **not** proof that anyone listened. Say so.
 
-## Actual stage operations
-
-Capture the returned project ID. For the source stage create `empty.json` containing `{}`; author `edit-plan.json` only after reviewing the actual source. Preset input is `{ "owner": { ... }, "project": { ... } }` with the intended explicitly supplied preset JSON, not a filesystem path.
-
-```sh
-python3 client.py stage "$PROJECT_ID" source-audio empty.json
-python3 client.py status "$JOB_ID" --wait
-python3 client.py stage-bundle "$JOB_ID" ./private-source-bundle
-# The following require the authorized private helper snapshot:
-python3 client.py stage "$PROJECT_ID" pcm-assemble edit-plan.json
-python3 client.py stage "$PROJECT_ID" resolve-preset preset-input.json
-# Capture each returned job ID, wait and download its stage-bundle separately.
-```
-
-The client streams source upload and hash-verifies JSON/WAV artifacts. Source and edited PCM are real decoded/assembled audio, but no stage declares dialogue lock. The administrator may mount the authorized snapshot read-only at `/opt/workflow` and set `VIDEO_HELPER_ROOT=/opt/workflow`; the standard recipe intentionally does not mount it. Only two hash-pinned helpers are executable, using server-owned paths. This is not an arbitrary shell or a workaround for redistribution permission. Missing helpers fail closed. Do not expose their upstream scripts as a generic command endpoint.
-
-For the original workflow, privately authorized skill instructions can remain client-side editorial guidance. They are not needed for basic HTTP operation and are not bundled here. Do not mount Hermes home/state into the app or read existing owner presets without explicit authorization. ASR/alignment and subsequent parity-map stages remain unavailable; stop rather than synthesize their receipts.
-
-## Retained preview review mechanics
-
-Capture the returned project ID. Review the actual source before authoring a decision; never manufacture a transcript, timestamps, face rectangle, source-specific cut reason or completed quality receipt. If those inputs cannot be obtained, ask for them. The API does not transcribe or decide edits. See [EDITING.md](EDITING.md) for the strict decision schema and source-vs-output time coordinates.
-
-```sh
-# Set these IDs to actual returned values, not fabricated examples.
-python3 client.py decision "$PROJECT_ID" decision.json
-python3 client.py decisions "$PROJECT_ID"
-python3 client.py render "$PROJECT_ID" --decision "$DECISION_ID"
-python3 client.py status "$JOB_ID" --wait
-python3 client.py review "$JOB_ID" ./private-review-bundle
-```
-
-The client reads back mutations and verifies SHA-256 before saving downloads. Open the local `index.html`; listen to the full preview and every edge, inspect waveform/spectrogram, caption timing and framing. Describe generated evidence as **unreviewed** until someone actually reviews it. Persisted text and valid geometry are caller assertions, not ASR/alignment/face-detection proof. Never report `needs_review` as approved. There is no delivery-approval route and no autonomous creative selection or semantic animation.
-
-A failed job is terminal. Inspect its error and explicitly submit a new job only when justified; do not blindly retry media failures or ignore budgets. On restart, interrupted work fails instead of replaying. For revisions save a new decision and new job. Keep downloaded bundles private: they contain original-context audio and rendered media.
-
-Delete only when the user has authorized removal and needed files are safely retained:
-
-```sh
-python3 client.py delete "$PROJECT_ID"
-```
-
-This removes the app's original, decisions, jobs and artifacts, not just a preview. The client verifies deletion by reading back the target. No paid provider calls are made by the service or client; an external agent's own model use is separate.
+## Rules
+- A failed job is final. Read the error, fix the cause, then submit a new job. Don't retry blindly.
+- `delivery_approved` is always false. Pieces 2–3 (face/crop audit, captions, 1080×1920 encode, motion graphics, delivery gate) are not built yet. Don't claim a finished video.
+- Keep downloaded bundles private; they contain the source audio.
+- `delete $P` removes the project's source, jobs and artifacts. Only run it when the user says so.
+- The older 9:16 preview commands (`decision`, `render`, `review`) still work; see EDITING.md.

@@ -1,6 +1,6 @@
 """Opt-in capacity test, not creative or original-footage acceptance.
 
-Use VIDEO_RUN_SCALE=1 and VIDEO_HELPER_ROOT with the private snapshot.
+Use VIDEO_RUN_SCALE=1 inside the image (bundled helpers at /opt/defleur).
 Generates 184 seconds of tiny synthetic frames/tone and pads an ISO free box to
 270 MiB. Exercises real HTTP streaming admission, decode and original PCM helper.
 """
@@ -44,8 +44,10 @@ class ScaleTests(unittest.TestCase):
                 client = Client(f'http://127.0.0.1:{server.server_port}', token)
                 project = client.upload(source)
                 self.assertAlmostEqual(project['duration'], 184, places=1)
+                src = client.wait(client.request('POST', f"/v1/projects/{project['id']}/stages/source-audio", '{}')['id'], True)
+                self.assertEqual(src['state'], 'needs_review', src.get('error'))
                 job = client.request('POST', f"/v1/projects/{project['id']}/stages/pcm-assemble",
-                    json.dumps({'segments': [{'start_s': 0, 'end_s': 184, 'reason': 'Capacity fixture, not a creative edit'}]}))
+                    json.dumps({'audio_job': src['id'], 'segments': [{'start_s': 0, 'end_s': 184, 'reason': 'Capacity fixture, not a creative edit'}]}))
                 job = client.wait(job['id'], True)
                 self.assertEqual(job['state'], 'needs_review', job.get('error'))
                 folder = server.store.path(project['id']) / (job['id'] + '.stage')
@@ -60,7 +62,7 @@ class ScaleTests(unittest.TestCase):
                     'frames': ledger['frames'], 'samples': ledger['samples'], 'channels': ledger['channels'],
                     'stage_wall_seconds': job['result']['elapsed_s'], 'total_wall_seconds': round(time.monotonic() - started, 3),
                     'python_peak_rss_kib': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-                    'helper_sha256': job['result']['helper_sha256'], 'delivery_approved': False}
+                    'helpers': job['result']['helpers'], 'delivery_approved': False}
                 for name in ('memory.peak', 'memory.max', 'memory.swap.max', 'cpu.max'):
                     file = Path('/sys/fs/cgroup') / name
                     if file.is_file():

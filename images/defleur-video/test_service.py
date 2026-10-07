@@ -108,18 +108,27 @@ class MediaTests(unittest.TestCase):
         import workflow
         with tempfile.TemporaryDirectory(dir=self.root) as temp:
             root = Path(temp)
-            rel, _ = workflow.HELPERS['pcm-assemble']
+            rel, _ = workflow.HELPERS['assemble_pcm']
             file = root / rel
             file.parent.mkdir(parents=True)
             file.write_text('raise RuntimeError("must never execute")')
-            with patch.dict(os.environ, {'VIDEO_HELPER_ROOT': str(root)}):
+            with patch.object(workflow, 'UPSTREAM_ROOT', root):
                 with self.assertRaisesRegex(service.Rejected, 'hash mismatch'):
-                    workflow.helper('pcm-assemble')
-                self.assertFalse(workflow.capabilities()['helpers']['pcm-assemble']['available'])
+                    workflow.helper('assemble_pcm')
+                self.assertFalse(workflow.capabilities(False)['helpers']['assemble_pcm']['available'])
                 file.unlink()
                 file.symlink_to(self.source)
                 with self.assertRaisesRegex(service.Rejected, 'missing'):
-                    workflow.helper('pcm-assemble')
+                    workflow.helper('assemble_pcm')
+
+    def test_bundled_helpers_match_upstream_hashes(self):
+        import workflow
+        for name in workflow.HELPERS:
+            workflow.helper(name)
+        self.assertEqual(workflow.sha(workflow.UPSTREAM_ROOT / workflow.DEFAULTS[0]), workflow.DEFAULTS[1])
+        caps = workflow.capabilities(False)
+        self.assertTrue(all(h['available'] for h in caps['helpers'].values()))
+        self.assertFalse(caps['acoustic_ctc']['available'])
 
     def test_actual_vfr_requires_picture_ledger(self):
         import workflow
@@ -131,71 +140,169 @@ class MediaTests(unittest.TestCase):
                 '-threads', '1', '-c:a', 'copy', str(source)], check=True, timeout=30)
             metadata = service.probe(source)
             result = workflow.run('source-audio', {}, source, root / 'probe', metadata,
-                service.native, service.input_args, service.digest)
+                service.native, None, time.monotonic() + 60, service.input_args)
             receipt = json.loads((root / 'probe/source-probe.json').read_text())
-            self.assertFalse(receipt['constant_frame_rate'])
+            self.assertFalse(receipt['fps']['constant_frame_rate'])
             self.assertEqual(receipt['mapping_support'], 'requires-pts-picture-ledger')
-            with self.assertRaisesRegex(service.Rejected, 'requires verified CFR'):
-                workflow.run('pcm-assemble', {'segments': [{'start_s': 0, 'end_s': 1, 'reason': 'VFR rejection regression'}]},
-                    source, root / 'assemble', metadata, service.native, service.input_args, service.digest)
+            self.assertFalse(result['summary']['constant_frame_rate'])
+            fake = {'result': result}
+            with self.assertRaisesRegex(service.Rejected, 'CFR'):
+                workflow.validate('pcm-assemble', {'audio_job': 'a' * 32, 'segments': [{'start_s': 0, 'end_s': 1, 'reason': 'VFR rejection'}]},
+                                  metadata, lambda jid, stages: (fake, root / 'probe'))
 
-    def test_workflow_source_and_private_helpers(self):
+    def fake_transcriber(self, words, models=("Systran/faster-whisper-small",)):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        seen = []
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+            def reply(self, value):
+                data = json.dumps(value).encode()
+                self.send_response(200); self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+            def do_GET(self):
+                self.reply({"data": [{"id": m} for m in models]})
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                seen.append(body)
+                self.reply({"language": "en", "duration": 2.0, "text": " ".join(w["word"] for w in words),
+                            "segments": [{"id": 0, "start": 0.0, "end": 2.0, "text": "x"}], "words": words})
+        server = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}", seen
+
+    def stage(self, pid, name, value, ok=True):
         from client import Client
         client = Client(f"http://127.0.0.1:{self.server.server_port}", self.token)
-        project = client.upload(self.source)
-        pid = project["id"]
-        job = client.request("POST", f"/v1/projects/{pid}/stages/source-audio", "{}")
+        status, job = self.request("POST", f"/v1/projects/{pid}/stages/{name}", json.dumps(value))
+        self.assertEqual(status, 202, job)
         job = client.wait(job["id"], True)
-        self.assertEqual(job["state"], "needs_review", job.get("error"))
-        self.assertFalse(job["delivery_approved"])
-        bundle = self.root / "source-stage-bundle"
-        client.stage_bundle(job["id"], bundle)
-        probe = json.loads((bundle / "source-probe.json").read_text())
-        self.assertTrue(probe["constant_frame_rate"])
-        self.assertEqual(probe["frames"], 48)
-        self.assertEqual(probe["fps"], "24")
-        self.assertEqual(self.request("GET", f"/v1/jobs/{job['id']}/stage-artifacts/request.json", auth=False)[0], 401)
-        self.assertEqual(self.request("GET", f"/v1/jobs/{job['id']}/stage-artifacts/secrets.json")[0], 404)
-        self.assertEqual(self.request("GET", f"/v1/jobs/{job['id']}/preview")[0], 409)
-        for stage, value in [("shell", {}), ("source-audio", {"command": "id"})]:
-            self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/{stage}", json.dumps(value))[0], 422)
-        with patch.dict(os.environ, {"VIDEO_HELPER_ROOT": ""}):
-            self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/pcm-assemble", json.dumps({"segments": [{"start_s": 0, "end_s": 1, "reason": "synthetic"}]}))[0], 422)
-        self.assertEqual(self.request("DELETE", f"/v1/projects/{pid}")[0], 200)
+        if ok:
+            self.assertEqual(job["state"], "needs_review", job.get("error"))
+            self.assertFalse(job["delivery_approved"])
+        return job
 
-    @unittest.skipUnless(os.environ.get("VIDEO_HELPER_ROOT"), "private upstream snapshot not mounted; no false helper parity claim")
-    def test_actual_pinned_pcm_and_preset_helpers(self):
+    def test_piece1_stages_over_http(self):
+        import workflow
         from client import Client
         client = Client(f"http://127.0.0.1:{self.server.server_port}", self.token)
         pid = client.upload(self.source)["id"]
-        value = {"segments": [{"start_s": .25, "end_s": 1.25, "reason": "synthetic sample-lock regression"}]}
-        job = client.request("POST", f"/v1/projects/{pid}/stages/pcm-assemble", json.dumps(value))
-        job = client.wait(job["id"], True)
-        self.assertEqual(job["state"], "needs_review", job.get("error"))
-        self.assertEqual(job["result"]["helper_sha256"], service.workflow.HELPERS['pcm-assemble'][1])
-        bundle = self.root / "pcm-stage-bundle"
-        client.stage_bundle(job["id"], bundle)
-        ledger = json.loads((bundle / "edit-map.json").read_text())
-        self.assertEqual(ledger["samples"], 48000)
-        self.assertEqual(ledger["source_frame_indices"], list(range(6, 30)))
-        with wave.open(str(bundle / "source.wav")) as source:
-            source.setpos(12000)
-            expected = source.readframes(48000)
-        with wave.open(str(bundle / "edited.wav")) as edited:
-            self.assertEqual(edited.readframes(48000), expected)
-        value = {"owner": {"caption": {"max_words": 4}}, "project": {"caption": {"max_words": 3}}}
-        job = client.request("POST", f"/v1/projects/{pid}/stages/resolve-preset", json.dumps(value))
-        job = client.wait(job["id"], True)
-        self.assertEqual(job["state"], "needs_review", job.get("error"))
+        other = client.upload(self.source)["id"]
+        src = self.stage(pid, "source-audio", {})
+        self.assertEqual(src["result"]["summary"]["frames"], 48)
+        self.assertTrue(src["result"]["summary"]["constant_frame_rate"])
+        self.assertEqual(src["result"]["helpers"]["probe_source"], workflow.HELPERS["probe_source"][1])
+        bundle = self.root / "source-stage-bundle"
+        client.stage_bundle(src["id"], bundle)
+        self.assertEqual(json.loads((bundle / "source-probe.json").read_text())["fps"]["r_frame_rate"], "24")
+        self.assertEqual(self.request("GET", f"/v1/jobs/{src['id']}/stage-artifacts/source.wav", auth=False)[0], 401)
+        self.assertEqual(self.request("GET", f"/v1/jobs/{src['id']}/stage-artifacts/secrets.json")[0], 404)
+        self.assertEqual(self.request("GET", f"/v1/jobs/{src['id']}/preview")[0], 409)
+        # Never paths, shell, unknown stages or cross-project references.
+        for stage, value in [("shell", {}), ("source-audio", {"command": "id"}),
+                             ("pcm-assemble", {"audio_job": src["id"], "segments": [{"start_s": 0, "end_s": 1, "reason": "x"}], "path": "/etc"}),
+                             ("asr", {"audio_job": "../../etc/passwd", "language": "en"}),
+                             ("resolve-preset", {"owner": {"caption": {"font_path": "/etc/passwd"}}}),
+                             ("pcm-assemble", {"audio_job": src["id"], "segments": [{"start_s": 0, "end_s": 9, "reason": "beyond source"}]})]:
+            self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/{stage}", json.dumps(value))[0], 422, (stage, value))
+        self.assertEqual(self.request("POST", f"/v1/projects/{other}/stages/pcm-assemble",
+            json.dumps({"audio_job": src["id"], "segments": [{"start_s": 0, "end_s": 1, "reason": "x"}]}))[0], 422)
+
+        preset = self.stage(pid, "resolve-preset", {"owner": {"caption": {"max_words": 4}}, "project": {"caption": {"max_words": 3}}})
         bundle = self.root / "preset-stage-bundle"
-        client.stage_bundle(job["id"], bundle)
+        client.stage_bundle(preset["id"], bundle)
         resolved = json.loads((bundle / "preset-resolution.json").read_text())
         self.assertEqual(resolved["preset"]["caption"]["max_words"], 3)
         self.assertEqual(len(resolved["sources"]), 3)
-        self.assertTrue(resolved["font_sha256"])
-        value = {"owner": {"caption": {"font_path": "/etc/passwd"}}}
-        self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/resolve-preset", json.dumps(value))[0], 422)
+        self.assertTrue(resolved["preset"]["caption"]["font_path"].startswith("/usr/share/fonts/"))
+
+        pre = self.stage(pid, "preflight", {"language": "en"})
+        self.assertEqual(pre["result"]["summary"]["piece_1_blockers"], [], pre["result"]["summary"])
+
+        words = [{"word": " Hello", "start": 0.1, "end": 0.4, "probability": 0.9}, {"word": " um", "start": 0.6, "end": 0.9, "probability": 0.5},
+                 {"word": " world.", "start": 1.2, "end": 1.6, "probability": 0.9}]
+        url, seen = self.fake_transcriber(words)
+        with patch.dict(os.environ, {"TRANSCRIBER_URL": url}):
+            asr = self.stage(pid, "asr", {"audio_job": src["id"], "language": "en"})
+        bundle = self.root / "asr-stage-bundle"
+        client.stage_bundle(asr["id"], bundle)
+        receipt = json.loads((bundle / "asr.json").read_text())
+        for key in ("model_requested", "model_resolved", "device", "compute_type", "language_requested", "language_detected",
+                    "language_probability", "duration", "words", "segments", "seconds", "limitation"):
+            self.assertIn(key, receipt)
+        self.assertEqual([w["word"] for w in receipt["words"]], ["Hello", "um", "world."])
+        self.assertEqual([w["id"] for w in receipt["words"]], [0, 1, 2])
+        self.assertEqual(receipt["segments"][0]["words"][1]["word"], "um")
+        self.assertEqual(receipt["provenance"]["audio_sha256"], hashlib.sha256((bundle / "asr-input.wav").read_bytes()).hexdigest())
+        self.assertIn(b'name="timestamp_granularities[]"\r\n\r\nword', seen[0])
+        with wave.open(str(bundle / "asr-input.wav")) as w:
+            self.assertEqual((w.getframerate(), w.getnchannels()), (16000, 1))
+        # Transcriber absent or model missing: clear failure, no fake transcript.
+        with patch.dict(os.environ, {"TRANSCRIBER_URL": "http://127.0.0.1:9"}):
+            failed = self.stage(pid, "asr", {"audio_job": src["id"], "language": "en"}, ok=False)
+        self.assertEqual(failed["state"], "failed")
+        self.assertIn("Install the Transcriber app", failed["error"])
+        url2, _ = self.fake_transcriber(words, models=("other/model",))
+        with patch.dict(os.environ, {"TRANSCRIBER_URL": url2}):
+            failed = self.stage(pid, "asr", {"audio_job": src["id"], "language": "en"}, ok=False)
+        self.assertIn("not installed", failed["error"])
+        self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/align", json.dumps({"asr_job": asr["id"], "language": "de"}))[0], 422)
+        self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/align", json.dumps({"asr_job": asr["id"], "language": "en", "model": "../x"}))[0], 422)
+        self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/acoustic-ctc",
+            json.dumps({"asr_job": asr["id"], "language": "en", "start_s": 0, "end_s": 1}))[0], 422)
+
+        # Cut the filler "um" (0.5-1.1 s).
+        segments = [{"start_s": 0, "end_s": .5, "reason": "Hello"}, {"start_s": 1.1, "end_s": 2, "reason": "world, filler removed"}]
+        asm = self.stage(pid, "pcm-assemble", {"audio_job": src["id"], "segments": segments})
+        self.assertAlmostEqual(asm["result"]["summary"]["duration_s"], 1.4, places=6)
+        bundle = self.root / "pcm-stage-bundle"
+        client.stage_bundle(asm["id"], bundle)
+        ledger = json.loads((bundle / "edit-map.json").read_text())
+        self.assertEqual(ledger["samples"], int(1.4 * 48000))
+        with wave.open(str(bundle / "source.wav")) as s, wave.open(str(bundle / "edited.wav")) as e:
+            s.setpos(int(1.1 * 48000)); tail = s.readframes(int(.9 * 48000))
+            e.setpos(int(.5 * 48000)); self.assertEqual(e.readframes(int(.9 * 48000)), tail)
+        regions = [{"mode": "keep", "start_s": .1, "end_s": .4, "word": "Hello"}, {"mode": "drop", "start_s": .6, "end_s": .9, "word": "um"},
+                   {"mode": "keep", "start_s": 1.2, "end_s": 1.6, "word": "world"}]
+        audit = self.stage(pid, "speech-cut-audit", {"assemble_job": asm["id"], "regions": regions})
+        self.assertTrue(audit["result"]["summary"]["pass"])
+        self.assertEqual(audit["result"]["summary"]["edges"], 4)
+        names = {a["name"] for a in audit["result"]["artifacts"]}
+        self.assertTrue({"0-start-waveform.png", "1-end-spectrogram.png", "cut-regression.json"} <= names)
+        bad = self.stage(pid, "speech-cut-audit", {"assemble_job": asm["id"], "regions": [{"mode": "keep", "start_s": .6, "end_s": .9}]})
+        self.assertFalse(bad["result"]["summary"]["pass"])
+        scan = self.stage(pid, "acoustic-scan", {"assemble_job": asm["id"], "window_s": 1.0})
+        windows = scan["result"]["summary"]["windows"]
+        self.assertEqual(windows, 2)
+        gate = {"assemble_job": asm["id"], "audit_job": audit["id"], "scan_job": scan["id"],
+                "filler_review": {"full_pass_reviewed": True, "candidates": [{"word": "um", "source_start_s": .6, "source_end_s": .9, "action": "removed", "reason": "hesitation filler"}]},
+                "acoustic_review": [{"window": i, "findings": "synthetic tone; no clicks visible"} for i in range(windows)],
+                "reviewed_edges": [{"segment": s, "edge": e, "decision": "keep", "findings": "synthetic tone edge"} for s in (0, 1) for e in ("start", "end")]}
+        self.assertEqual(self.request("POST", f"/v1/projects/{pid}/stages/dialogue-gate", json.dumps({**gate, "acoustic_review": gate["acoustic_review"][:1]}))[0], 422)
+        result = self.stage(pid, "dialogue-gate", gate)
+        self.assertTrue(result["result"]["summary"]["dialogue_gate_pass"], result["result"]["summary"])
+        self.assertEqual(result["result"]["helpers"]["audio_gate"], workflow.HELPERS["audio_gate"][1])
+        missing = self.stage(pid, "dialogue-gate", {**gate, "reviewed_edges": gate["reviewed_edges"][:3]})
+        self.assertFalse(missing["result"]["summary"]["dialogue_gate_pass"])
+        self.assertIn("every segment edge", missing["result"]["summary"]["error"])
+        failing = self.stage(pid, "dialogue-gate", {**gate, "audit_job": bad["id"]})
+        self.assertIn("phonetic checks did not pass", failing["result"]["summary"]["error"])
+
+        project = {"locked_timeline": {"fps": "24", "frames": 34, "duration": 1.4},
+                   "visual_plan": {"beats": [{"start": 0, "end": 1.4, **{k: "x" for k in ("spoken_anchor", "viewer_inference", "visual_family", "state_before", "state_after", "causal_action", "caption_treatment", "speaker_return")}}]},
+                   "crop_ledger": {"source_mode": "cfr", "ranges": [{"start": 0, "end": 1.4}]}}
+        self.assertTrue(self.stage(pid, "validate-project", project)["result"]["summary"]["pass"])
+        self.assertFalse(self.stage(pid, "validate-project", {**project, "crop_ledger": {"ranges": []}})["result"]["summary"]["pass"])
+        status, docs = self.request("GET", "/v1/workflow/docs")
+        self.assertIn("defleur-audio", docs["docs"])
+        status, text = self.request("GET", "/v1/workflow/docs/defleur-audio")
+        self.assertEqual(text, (workflow.UPSTREAM_ROOT / "skills/defleur-audio/SKILL.md").read_bytes())
+        self.assertIn(b"30768288eb1308b18216a5df5eb4648fbce3e55b", self.request("GET", "/v1/workflow/docs/notice")[1])
+        self.assertEqual(self.request("GET", "/v1/workflow/docs/..%2Fplugin.json")[0], 404)
         self.assertEqual(self.request("DELETE", f"/v1/projects/{pid}")[0], 200)
+        self.assertEqual(self.request("DELETE", f"/v1/projects/{other}")[0], 200)
 
     def test_open_mode_without_token(self):
         from client import Client

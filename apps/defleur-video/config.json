@@ -2,15 +2,15 @@
   "name": "DeFleur Video (Testing)",
   "id": "defleur-video",
   "available": true,
-  "short_desc": "Testing build: Hermes-operated video edit API (upload, cut, captions, portrait preview).",
+  "short_desc": "Testing build: Hermes-operated video edit API with James DeFleur's audio/edit workflow (ASR via Transcriber, alignment, cut evidence, dialogue gate).",
   "author": "Humanity Labs; workflow contract informed by Wizard Modules",
   "port": 8787,
   "categories": [
     "media"
   ],
-  "description": "Testing release for hands-on feedback. API that Hermes (or any HTTP client) drives: upload an MP4, save edit decisions, render a 9:16 preview with cuts, burned captions and a fixed portrait crop, then download review artifacts. No browser UI. Transcription/alignment, audio lock, semantic motion and final delivery are not built yet. No token needed: keep it reachable only on your private network (e.g. Tailscale). See HERMES.md for connection steps.",
-  "tipi_version": 3,
-  "version": "0.2.1-testing",
+  "description": "Testing release. HTTP API that Hermes (or any client) drives; no browser UI and no LLM calls. Bundles James DeFleur's original DeFleur Video workflow helpers and runs the audio/edit half: source probe and 48 kHz PCM, preset, preflight, speech-to-text via the separate Transcriber app (install it first), local stable-ts word alignment, sample-exact PCM assembly, per-edge waveform/spectrogram cut evidence and the dialogue audio gate. The older 9:16 preview endpoint still works. Face/crop audit, captions, final 1080x1920 encode, motion graphics and the delivery gate are not built yet. No token needed: keep it on your private network (e.g. Tailscale).",
+  "tipi_version": 4,
+  "version": "0.3.0-testing",
   "source": "https://github.com/humanitylabs-org/wizard-app-store",
   "exposable": false,
   "no_gui": true,
@@ -20,5 +20,23 @@
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,
-  "gid": 1000
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Transcriber URL",
+      "env_variable": "TRANSCRIBER_URL",
+      "required": false,
+      "default": "http://transcriber:8000",
+      "hint": "Where the Transcriber app answers inside Runtipi. Leave the default if the Transcriber app is installed on this same server."
+    },
+    {
+      "type": "text",
+      "label": "Transcriber model",
+      "env_variable": "TRANSCRIBER_MODEL",
+      "required": false,
+      "default": "Systran/faster-whisper-small",
+      "hint": "Must already be downloaded in the Transcriber app (its startup model)."
+    }
+  ]
 }

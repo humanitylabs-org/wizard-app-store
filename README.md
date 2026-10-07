@@ -26,7 +26,7 @@ Keep it on a trusted private network. Disabling Runtipi domain exposure is not a
 
 ## Agent-operated video workflow (testing)
 
-**DeFleur Video (Testing)** — a private, no-GUI API that Hermes drives to edit short videos: upload an MP4, save edit decisions, render a 9:16 preview with cuts, burned captions and a fixed portrait crop, and download review artifacts. Transcription/alignment, audio lock, semantic motion and final delivery are not built yet. Published for hands-on testing and iteration. [Hermes connection instructions](images/defleur-video/HERMES.md) · [Parity status](images/defleur-video/WORKFLOW-PARITY.md).
+**DeFleur Video (Testing)**: a private, no-GUI API that Hermes drives to run James DeFleur's video workflow, with his original helper scripts bundled. 0.3.0 covers the audio/edit half: transcription via the **Transcriber** app (install it first), local word alignment, sample-exact audio cuts, per-edge waveform/spectrogram evidence and the dialogue audio gate. The older 9:16 preview still works. Face/crop audit, captions, final encode, motion graphics and delivery are not built yet. [Hermes operator guide](images/defleur-video/HERMES.md) · [Parity status](images/defleur-video/WORKFLOW-PARITY.md).
 
 ## Validation
 

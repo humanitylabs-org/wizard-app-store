@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "Optional deterministic browser capture dependency for defleur-video projects.",
+  "dependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}

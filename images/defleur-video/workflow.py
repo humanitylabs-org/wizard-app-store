@@ -1,147 +1,602 @@
-"""Original API adapters for the privately supplied, pinned upstream mechanics.
+"""API stages over James DeFleur's bundled workflow helpers (piece 1: audio/edit).
 
-No helper is vendored in the public image. Admin must supply a read-only copy via
-VIDEO_HELPER_ROOT; client requests cannot choose executables, paths or models.
+James' original scripts ship unchanged under /opt/defleur (see NOTICE). Every
+stage runs them with server-owned paths in a fresh per-job directory; clients
+send JSON decisions and job references only, never paths, shell, filters or
+executables. Each output file is listed with its SHA-256 in the job result and
+re-verified whenever a later stage consumes it.
 """
-from fractions import Fraction
-import hashlib
+from __future__ import annotations
+
 import json
+import math
 import os
 from pathlib import Path
+import re
+import shutil
+import sys
+import time
 import wave
-from editing import Rejected
 
+from editing import Rejected
+import transcriber
+
+UPSTREAM_ROOT = Path(os.environ.get("DEFLEUR_ROOT") or ("/opt/defleur" if Path("/opt/defleur").is_dir() else Path(__file__).with_name("defleur")))
+APP_ROOT = Path(__file__).resolve().parent
+HELPER_PYTHON = os.environ.get("VIDEO_HELPER_PYTHON") or ("/opt/venv/bin/python" if Path("/opt/venv/bin/python").exists() else sys.executable)
+MODELS_DIR = Path(os.environ.get("VIDEO_MODELS_DIR", "/data/models"))
+FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
+
+# Exact upstream bytes (commit 30768288eb1308b18216a5df5eb4648fbce3e55b). Verified before every run.
 HELPERS = {
-    'pcm-assemble': ('skills/defleur-audio/scripts/assemble_pcm.py', '96731e90aac18c4209e4408e0469751e5e8029fe7cb62a4f6795d1e51bde7c1e'),
-    'resolve-preset': ('skills/defleur-edit/scripts/preset.py', '5260b709e71a694756e2a9da4088ffb0323f6f4fc02ab4c3ff3c11516b7b75ce'),
+    "probe_source": ("skills/defleur-edit/scripts/probe_source.py", "ce1874c4b81547b56d60de129a235ad97857c560abf69b091f7a821454ed7cf0"),
+    "preset": ("skills/defleur-edit/scripts/preset.py", "5260b709e71a694756e2a9da4088ffb0323f6f4fc02ab4c3ff3c11516b7b75ce"),
+    "validate_project": ("skills/defleur-edit/scripts/validate_project.py", "4cfb6a9e7c3a633eb37920ae6e2b343c46df05740f4e7ca97ea8108d07d7dd05"),
+    "preflight": ("skills/defleur-audio/scripts/preflight.py", "ab4aa87761859c43b91841fe899e203ba54491705abd6684722e554ccaecca14"),
+    "asr": ("skills/defleur-audio/scripts/asr.py", "e007fc22e31822aa0b1b46fccdf1a295b4b813e4230d391f7bbbc24285935a96"),
+    "align": ("skills/defleur-audio/scripts/align.py", "620bc9eae9dbb54531672284b766a1fd72d816ec8ab65b4f81322c055bb76f36"),
+    "acoustic_ctc_window": ("skills/defleur-audio/scripts/acoustic_ctc_window.py", "5cd9525d60ce8ec61cef544442962666f4a00070e262c8b494bcdf9d158ab7cf"),
+    "speech_cut_audit": ("skills/defleur-audio/scripts/speech_cut_audit.py", "b0762b7bf53abe16f2664887a0b06446481840eae99317b800850a63b9bbfcd4"),
+    "assemble_pcm": ("skills/defleur-audio/scripts/assemble_pcm.py", "96731e90aac18c4209e4408e0469751e5e8029fe7cb62a4f6795d1e51bde7c1e"),
+    "audio_gate": ("skills/defleur-audio/scripts/audio_gate.py", "aa2d5965b0cc8f19103f42899cfe3be09c6b9760c3e16a2717bf4441a81431ce"),
+    "test_audio_gate": ("skills/defleur-audio/scripts/test_audio_gate.py", "09bba3c7ed527149aba5d9d034e8d8fe210ce230eacf9c961302c01b2707b177"),
 }
-DEFAULTS_HASH = 'd4992d28e6b0219778e377d696bd6a8db8d5db90bce64f87784d2a4e38f47072'
-FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'
+DEFAULTS = ("defaults/neutral-preset.json", "d4992d28e6b0219778e377d696bd6a8db8d5db90bce64f87784d2a4e38f47072")
+
+DOCS = {
+    "notice": "NOTICE", "readme": "README.md", "setup": "SETUP.md", "neutral-preset": "defaults/neutral-preset.json",
+    "defleur-edit": "skills/defleur-edit/SKILL.md", "defleur-edit-contract": "skills/defleur-edit/references/project-contract.md",
+    "defleur-audio": "skills/defleur-audio/SKILL.md", "defleur-audio-contract": "skills/defleur-audio/references/audio-contract.md",
+    "defleur-motion": "skills/defleur-motion/SKILL.md", "defleur-motion-contract": "skills/defleur-motion/references/motion-contract.md",
+}
+
+# Whisper checkpoints openai-whisper/stable-ts can load for align(); downloaded on first use into /data/models.
+ALIGN_MODELS = {"tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large-v3-turbo", "turbo", "large-v3"}
+DEFAULT_ALIGN_MODEL = "base"
+LANG = re.compile(r"^[a-z]{2,3}$")
+ID = re.compile(r"^[a-f0-9]{32}$")
+
+# stage -> (wall seconds, description)
+STAGES = {
+    "source-audio": (300, "probe_source.py + 48 kHz PCM s16 source.wav decode"),
+    "resolve-preset": (60, "preset.py over neutral defaults + client owner/project JSON"),
+    "preflight": (60, "preflight.py dependency/language check"),
+    "asr": (1800, "Transcriber app -> asr.py receipt schema"),
+    "align": (1800, "align.py (stable-ts, local CPU)"),
+    "acoustic-ctc": (300, "acoustic_ctc_window.py (needs VIDEO_CTC_MODEL_DIR)"),
+    "pcm-assemble": (300, "assemble_pcm.py -> edited.wav + edit-map.json"),
+    "speech-cut-audit": (600, "speech_cut_audit.py per-edge waveform + spectrogram + keep/drop coverage"),
+    "acoustic-scan": (600, "scan_windows.py full-coverage edited windows (app-original)"),
+    "dialogue-gate": (300, "audio-gate.json receipt + audio_gate.py --stage dialogue"),
+    "validate-project": (60, "validate_project.py on client planning records"),
+}
+
+
+def deadline_for(stage):
+    return STAGES.get(stage, (180, ""))[0]
+
+
+def sha(path):
+    import hashlib
+    with Path(path).open("rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
 
 
 def helper(name):
-    root = os.environ.get('VIDEO_HELPER_ROOT')
-    if not root:
-        raise Rejected('Original helper unavailable: administrator must supply the authorized read-only upstream snapshot')
-    path, expected = HELPERS[name]
-    root = Path(root).resolve()
-    file = root / path
+    rel, expected = HELPERS[name]
+    root = UPSTREAM_ROOT.resolve()
+    file = root / rel
     if not file.is_file() or file.is_symlink() or not file.resolve().is_relative_to(root):
-        raise Rejected('Pinned upstream helper missing')
-    if hashlib.sha256(file.read_bytes()).hexdigest() != expected:
-        raise Rejected('Pinned upstream helper hash mismatch')
+        raise Rejected(f"Bundled helper missing: {rel}")
+    if sha(file) != expected:
+        raise Rejected(f"Bundled helper hash mismatch: {rel}")
     return file
 
 
-def capabilities():
+def doc(name):
+    rel = DOCS.get(name)
+    if rel is None:
+        raise FileNotFoundError(name)
+    path = UPSTREAM_ROOT / rel
+    if name == "notice" and not path.is_file():
+        path = APP_ROOT / "NOTICE"  # source checkout; the image copies NOTICE into /opt/defleur
+    if not path.is_file() or path.is_symlink():
+        raise FileNotFoundError(name)
+    return path
+
+
+def ctc_dir():
+    value = os.environ.get("VIDEO_CTC_MODEL_DIR", "").strip()
+    if not value:
+        return None
+    path = Path(value)
+    return path if all((path / n).is_file() for n in ("model.onnx", "vocab.json", "capabilities.json")) else None
+
+
+def align_model(requested=None):
+    model = requested or os.environ.get("VIDEO_ALIGN_MODEL", "").strip() or DEFAULT_ALIGN_MODEL
+    if model not in ALIGN_MODELS:
+        raise Rejected(f"alignment model must be one of {sorted(ALIGN_MODELS)}")
+    return model
+
+
+def capabilities(probe_transcriber=True):
     helpers = {}
     for name in HELPERS:
         try:
+            helpers[name] = {"available": True, "sha256": HELPERS[name][1]}
+        except Rejected as e:  # pragma: no cover
+            helpers[name] = {"available": False, "reason": str(e)}
+        try:
             helper(name)
-            helpers[name] = {'available': True, 'dependency': 'authorized private upstream snapshot'}
         except Rejected as e:
-            helpers[name] = {'available': False, 'reason': str(e)}
-    return {'operator': 'Hermes or any authenticated client; no autonomous director required',
-            'implemented_stages': ['source-audio', *HELPERS], 'helpers': helpers,
-            'parity_complete': False, 'unimplemented_api_stages': [
-                'asr', 'alignment', 'speech-cut-audit', 'dialogue-lock', 'portrait-face-audit',
-                'semantic-browser-capture', 'upstream-caption-encode', 'delivery-gate'],
-            'model_downloads': False, 'provider_calls': False}
+            helpers[name] = {"available": False, "reason": str(e)}
+    model = align_model()
+    cached = MODELS_DIR / "whisper" / (("large-v3-turbo" if model == "turbo" else model) + ".pt")
+    return {
+        "operator": "Hermes (or any HTTP client) makes every editorial decision; the app never calls an LLM",
+        "bundle": {"root": str(UPSTREAM_ROOT), "upstream_commit": "30768288eb1308b18216a5df5eb4648fbce3e55b", "license": "MIT (declared in plugin.json)",
+                   "docs": sorted(DOCS)},
+        "stages": {k: v[1] for k, v in STAGES.items()}, "stage_wall_seconds": {k: v[0] for k, v in STAGES.items()},
+        "helpers": helpers,
+        "transcriber": transcriber.status() if probe_transcriber else {"probe": "skipped"},
+        "alignment": {"engine": "stable-ts 2.19.1 + openai-whisper on CPU torch", "model": model, "configurable": "VIDEO_ALIGN_MODEL or request 'model'",
+                      "allowed_models": sorted(ALIGN_MODELS), "cache": str(MODELS_DIR / "whisper"), "cached": cached.is_file()},
+        "acoustic_ctc": {"available": ctc_dir() is not None,
+                         "reason": None if ctc_dir() else "No CTC model bundle supplied (set VIDEO_CTC_MODEL_DIR to a directory with model.onnx, vocab.json, capabilities.json)"},
+        "piece_1_complete": True,
+        "not_built_yet": ["portrait-face-audit/crop", "caption_layer", "1080x1920 encode", "Chromium/GSAP motion capture", "delivery gate"],
+        "provider_calls": False,
+    }
 
 
-def validate(stage, value, metadata, validate_plan):
-    if stage not in {'source-audio', *HELPERS} or not isinstance(value, dict):
-        raise Rejected('Unknown workflow stage or invalid stage body')
-    if stage == 'source-audio':
-        if value:
-            raise Rejected('source-audio takes an empty object')
-    elif stage == 'pcm-assemble':
-        helper(stage)
-        if set(value) != {'segments'}:
-            raise Rejected('PCM stage requires only caller-reviewed segments')
-        validate_plan(value, metadata['duration'], metadata)
-    else:
-        helper(stage)
-        if set(value) - {'owner', 'project'}:
-            raise Rejected('preset stage accepts owner/project JSON objects, not file paths')
-        for label, preset in value.items():
-            if not isinstance(preset, dict) or preset.get('version', 1) != 1:
-                raise Rejected('Unsupported preset JSON')
-            caption = preset.get('caption', {})
-            if not isinstance(caption, dict) or caption.get('font_path', '') not in {'', FONT}:
-                raise Rejected('Only the installed allowlisted font path is accepted')
+# ---------- validation ----------
+
+def _obj(value, keys, optional=()):
+    if not isinstance(value, dict) or not set(keys) <= set(value) or set(value) - set(keys) - set(optional):
+        raise Rejected(f"expected object with {sorted(keys)}" + (f" and optional {sorted(optional)}" if optional else ""))
     return value
 
 
-def run(stage, value, source, root, metadata, native, input_args, digest):
-    root.mkdir(mode=0o700)
-    def write(name, obj):
-        (root / name).write_text(json.dumps(obj, allow_nan=False, indent=2))
-    write('request.json', {'stage': stage, 'input': value, 'source_sha256': metadata['source_sha256']})
-    helper_hash = None
-    if stage in {'source-audio', 'pcm-assemble'}:
-        raw = json.loads(native(['/usr/bin/ffprobe', '-v', 'error', *input_args(),
-            '-show_streams', '-show_format', '-of', 'json'], source))
-        video = next(s for s in raw['streams'] if s['codec_type'] == 'video')
-        fps = Fraction(video['r_frame_rate'])
-        if not 0 < fps <= 60:
-            raise Rejected('Native workflow supports a positive source cadence up to 60 fps')
-        stamps = native(['/usr/bin/ffprobe', '-v', 'error', *input_args(), '-select_streams', 'v:0',
-            '-show_frames', '-show_entries', 'frame=best_effort_timestamp_time', '-of', 'csv=p=0'], source, timeout=90).decode()
-        pts = []
-        for row in stamps.splitlines():
-            if not row.strip():
-                continue
+def _num(v, label):
+    if type(v) not in (int, float) or not math.isfinite(v):
+        raise Rejected(f"{label} must be a finite number")
+    return float(v)
+
+
+def _text(v, label, limit=2000, required=True):
+    if not isinstance(v, str) or (required and not v.strip()) or len(v) > limit:
+        raise Rejected(f"{label} must be a nonempty string up to {limit} chars")
+    return v
+
+
+def _lang(v, allow_auto=False):
+    if allow_auto and v == "auto":
+        return v
+    if not isinstance(v, str) or not LANG.fullmatch(v):
+        raise Rejected("language must be a lowercase ISO 639 code like 'en'" + (" or 'auto'" if allow_auto else ""))
+    return v
+
+
+def _segments(rows, duration):
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 400:
+        raise Rejected("segments must be a list of 1..400 retained spans")
+    end = 0.0
+    for row in rows:
+        _obj(row, {"start_s", "end_s", "reason"})
+        start, stop = _num(row["start_s"], "start_s"), _num(row["end_s"], "end_s")
+        if not end <= start < stop <= duration + 1e-6 or stop - start < 0.01:
+            raise Rejected("segments must be ordered, non-overlapping, inside the source and at least 10 ms")
+        _text(row["reason"], "segment reason", 1000)
+        end = stop
+    return rows
+
+
+def validate(stage, value, metadata, lookup):
+    """Fast 422 checks at submit time. lookup(jid, stages) -> (job, dir) or raises."""
+    if stage not in STAGES or not isinstance(value, dict):
+        raise Rejected(f"Unknown workflow stage or invalid body; stages: {sorted(STAGES)}")
+    if stage == "source-audio":
+        if value:
+            raise Rejected("source-audio takes an empty object")
+    elif stage == "resolve-preset":
+        if set(value) - {"owner", "project"}:
+            raise Rejected("preset stage accepts owner/project JSON objects, not file paths")
+        for preset in value.values():
+            if not isinstance(preset, dict) or preset.get("version", 1) != 1:
+                raise Rejected("Unsupported preset JSON")
+            caption = preset.get("caption", {})
+            font = caption.get("font_path", "") if isinstance(caption, dict) else None
+            if not isinstance(font, str) or (font and (not font.startswith(FONT_DIR) or ".." in font or not Path(font).is_file())):
+                raise Rejected(f"caption.font_path must be empty (auto) or an installed font under {FONT_DIR}")
+    elif stage == "preflight":
+        _obj(value, {"language"})
+        _lang(value["language"])
+    elif stage == "asr":
+        _obj(value, {"audio_job", "language"})
+        _lang(value["language"], allow_auto=True)
+        lookup(value["audio_job"], {"source-audio", "pcm-assemble"})
+    elif stage == "align":
+        _obj(value, {"asr_job", "language"}, {"model"})
+        _lang(value["language"])
+        align_model(value.get("model"))
+        job, _ = lookup(value["asr_job"], {"asr"})
+        detected = job["result"].get("summary", {}).get("language_detected")
+        if detected and detected != value["language"]:
+            raise Rejected(f"ASR detected {detected!r}; align.py refuses a different language {value['language']!r}")
+    elif stage == "acoustic-ctc":
+        _obj(value, {"asr_job", "start_s", "end_s", "language"})
+        if ctc_dir() is None:
+            raise Rejected("acoustic_ctc_window unavailable: no CTC model bundle supplied (VIDEO_CTC_MODEL_DIR)")
+        _lang(value["language"])
+        start, end = _num(value["start_s"], "start_s"), _num(value["end_s"], "end_s")
+        if not 0 <= start < end or end - start > 20:
+            raise Rejected("CTC window must be 0 <= start < end and at most 20 s")
+        lookup(value["asr_job"], {"asr"})
+    elif stage == "pcm-assemble":
+        _obj(value, {"audio_job", "segments"})
+        job, _ = lookup(value["audio_job"], {"source-audio"})
+        _segments(value["segments"], job["result"]["summary"]["duration_s"])
+        if not job["result"]["summary"]["constant_frame_rate"]:
+            raise Rejected("assemble_pcm.py needs a CFR source; this source requires a PTS picture ledger (not built)")
+    elif stage == "speech-cut-audit":
+        _obj(value, {"assemble_job", "regions"}, {"baseline_job"})
+        lookup(value["assemble_job"], {"pcm-assemble"})
+        if "baseline_job" in value:
+            lookup(value["baseline_job"], {"pcm-assemble"})
+        rows = value["regions"]
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 2000:
+            raise Rejected("regions must be a list of 1..2000 keep/drop regions")
+        for row in rows:
+            _obj(row, {"mode", "start_s", "end_s"}, {"name", "word", "reason"})
+            if row["mode"] not in ("keep", "drop"):
+                raise Rejected("region mode must be keep or drop")
+            if _num(row["start_s"], "start_s") >= _num(row["end_s"], "end_s"):
+                raise Rejected("region start must precede end")
+            for k in ("name", "word", "reason"):
+                if k in row:
+                    _text(row[k], k, 500)
+    elif stage == "acoustic-scan":
+        _obj(value, {"assemble_job"}, {"window_s"})
+        lookup(value["assemble_job"], {"pcm-assemble"})
+        if "window_s" in value and not 1 <= _num(value["window_s"], "window_s") <= 20:
+            raise Rejected("window_s must be 1..20")
+    elif stage == "dialogue-gate":
+        _obj(value, {"assemble_job", "audit_job", "scan_job", "filler_review", "acoustic_review", "reviewed_edges"}, {"edited_asr_job", "repair_of"})
+        assemble, _ = lookup(value["assemble_job"], {"pcm-assemble"})
+        audit, _ = lookup(value["audit_job"], {"speech-cut-audit"})
+        scan, _ = lookup(value["scan_job"], {"acoustic-scan"})
+        if audit["result"]["summary"]["assemble_job"] != value["assemble_job"] or scan["result"]["summary"]["assemble_job"] != value["assemble_job"]:
+            raise Rejected("audit_job and scan_job must both come from assemble_job")
+        if "edited_asr_job" in value:
+            asr, _ = lookup(value["edited_asr_job"], {"asr"})
+            if asr["result"]["summary"]["audio_job"] != value["assemble_job"]:
+                raise Rejected("edited_asr_job must transcribe assemble_job's edited.wav")
+        if "repair_of" in value:
+            _text(value["repair_of"], "repair_of", 200)
+        filler = value["filler_review"]
+        if not isinstance(filler, dict) or len(json.dumps(filler)) > 200000:
+            raise Rejected("filler_review must be an object")
+        rows = value["acoustic_review"]
+        windows = scan["result"]["summary"]["windows"]
+        if not isinstance(rows, list) or not all(isinstance(r, dict) and type(r.get("window")) is int for r in rows) \
+                or sorted(r["window"] for r in rows) != list(range(windows)):
+            raise Rejected(f"acoustic_review needs exactly one {{window, findings}} row for each of the {windows} scan windows")
+        for row in rows:
+            _obj(row, {"window", "findings"})
+            _text(row["findings"], "window findings", 2000)
+        edges = value["reviewed_edges"]
+        if not isinstance(edges, list) or len(edges) > 2000:
+            raise Rejected("reviewed_edges must be a list")
+        for edge in edges:
+            _obj(edge, {"segment", "edge", "decision", "findings"})
+            if type(edge["segment"]) is not int or edge["edge"] not in ("start", "end") or not isinstance(edge["decision"], str):
+                raise Rejected("reviewed edge needs integer segment, edge start|end, decision")
+            _text(edge["findings"], "edge findings", 2000, required=False)
+    elif stage == "validate-project":
+        _obj(value, {"locked_timeline", "visual_plan", "crop_ledger"}, {"pts_picture_ledger"})
+        if not all(isinstance(v, dict) for v in value.values()):
+            raise Rejected("planning records must be JSON objects")
+    return value
+
+
+# ---------- execution ----------
+
+class Ctx:
+    def __init__(self, root, native, lookup, deadline):
+        self.root, self.native, self.lookup, self.deadline = root, native, lookup, deadline
+        self.scratch = root.with_suffix(".tmp")
+        self.used = {}
+
+    def env(self):
+        self.scratch.mkdir(mode=0o700, exist_ok=True)
+        return {"HOME": str(self.scratch), "MPLCONFIGDIR": str(self.scratch / "mpl"), "TMPDIR": str(self.scratch),
+                "XDG_CACHE_HOME": str(MODELS_DIR), "TORCH_HOME": str(MODELS_DIR / "torch"),
+                "NUMBA_CACHE_DIR": str(self.scratch / "numba"), "PYTHONUNBUFFERED": "1"}
+
+    def run(self, name, args, timeout, check=True, **kw):
+        script = helper(name)
+        self.used[name] = HELPERS[name][1]
+        return self.native([HELPER_PYTHON, "-I", script, *args], timeout=timeout, cwd=self.root,
+                           env_extra=self.env(), check=check, explain=True, **kw)
+
+    def write(self, name, obj):
+        (self.root / name).write_text(json.dumps(obj, allow_nan=False, indent=2))
+
+    def ref(self, jid, stages, name, dest=None):
+        """Verified consumption of an earlier stage's artifact (hash re-checked)."""
+        job, folder = self.lookup(jid, stages)
+        item = next((a for a in job["result"]["artifacts"] if a["name"] == name), None)
+        path = folder / name
+        if item is None or not path.is_file() or path.is_symlink() or sha(path) != item["sha256"]:
+            raise Rejected(f"artifact {name} of job {jid} is missing or changed")
+        if dest:
+            target = self.root / dest
             try:
-                pts.append(Fraction(row.split(',')[0]))
-            except (ValueError, ZeroDivisionError):
-                raise Rejected('Source has incomplete frame timestamps')
-        tick = Fraction(video['time_base'])
-        tolerance = max(float(tick) * 1.1, .000002)
-        cfr = len(pts) >= 2 and abs(float(pts[0])) <= tolerance and all(
-            abs(float(t - pts[0] - Fraction(i, 1) / fps)) <= tolerance for i, t in enumerate(pts))
-        write('source-probe.json', {'source_sha256': metadata['source_sha256'], 'video': video,
-            'audio': next(s for s in raw['streams'] if s['codec_type'] == 'audio'),
-            'fps': str(fps), 'frames': len(pts), 'constant_frame_rate': cfr,
-            'mapping_support': 'cfr-frame-map' if cfr else 'requires-pts-picture-ledger'})
-        native(['/usr/bin/ffmpeg', '-v', 'error', '-xerror', '-n', *input_args(),
-            '-map', '0:a:0', '-vn', '-c:a', 'pcm_s16le', '-ar', '48000', '-threads', '1',
-            root / 'source.wav'], source, timeout=90, file_limit=128 * 1024 * 1024)
-        with wave.open(str(root / 'source.wav')) as pcm:
-            pcm_info = {'samples': pcm.getnframes(), 'rate': pcm.getframerate(), 'channels': pcm.getnchannels()}
-            if pcm.getsampwidth() != 2 or not pcm.getnframes():
-                raise Rejected('PCM decode produced no s16 samples')
-        write('pcm-source.json', {**pcm_info, 'sha256': digest(root / 'source.wav')})
-        if stage == 'pcm-assemble':
-            if not cfr:
-                raise Rejected('Upstream PCM picture map requires verified CFR; VFR needs a PTS ledger')
-            write('edit-plan.json', value)
-            script = helper(stage)
-            helper_hash = digest(script)
-            native(['/usr/bin/python3', '-I', script, root, '--fps', str(fps), '--source-frames', str(len(pts))],
-                   timeout=90, file_limit=128 * 1024 * 1024)
-            mapped = json.loads((root / 'edit-map.json').read_text())
-            with wave.open(str(root / 'edited.wav')) as edited:
-                if edited.getnframes() != mapped['samples']:
-                    raise Rejected('Assembled PCM does not match sample ledger')
-    else:
-        script = helper(stage)
-        helper_hash = digest(script)
-        defaults = script.parents[3] / 'defaults/neutral-preset.json'
-        if defaults.is_symlink() or digest(defaults) != DEFAULTS_HASH:
-            raise Rejected('Pinned preset defaults mismatch')
-        command = ['/usr/bin/python3', '-I', script, root / 'preset-resolution.json', '--defaults', defaults]
-        # Never read an owner Hermes home; caller explicitly supplies the intended JSON.
-        for label in ('owner', 'project'):
-            if label in value:
-                write(label + '-preset.json', value[label])
-                command += ['--' + label, root / (label + '-preset.json')]
-        native(command, timeout=15)
+                os.link(path, target)
+            except OSError:
+                shutil.copyfile(path, target)
+            return target, job
+        return path, job
+
+
+def _tail(data):
+    text = data.decode(errors="replace").strip() if isinstance(data, bytes) else str(data)
+    return text[-1500:]
+
+
+def run(stage, value, source, root, metadata, native, lookup, deadline, input_args):
+    root.mkdir(mode=0o700)
+    ctx = Ctx(root, native, lookup, deadline)
+    ctx.input_args = input_args
+    try:
+        summary = STAGE_RUNNERS[stage](ctx, value, source, metadata)
+    finally:
+        shutil.rmtree(ctx.scratch, ignore_errors=True)
     artifacts = []
     for path in sorted(root.iterdir()):
-        if path.suffix not in {'.json', '.wav'} or not path.is_file() or path.is_symlink():
-            raise Rejected('Unexpected helper output')
-        artifacts.append({'name': path.name, 'sha256': digest(path), 'bytes': path.stat().st_size,
-            'content_type': 'audio/wav' if path.suffix == '.wav' else 'application/json'})
-    return {'stage': stage, 'helper_sha256': helper_hash, 'artifacts': artifacts,
-            'scope': 'Real mechanics and hash-bound artifacts; not dialogue lock or final delivery approval'}
+        if path.suffix not in {".json", ".wav", ".png"} or not path.is_file() or path.is_symlink():
+            raise Rejected(f"Unexpected helper output: {path.name}")
+        artifacts.append({"name": path.name, "sha256": sha(path), "bytes": path.stat().st_size,
+                          "content_type": {".wav": "audio/wav", ".png": "image/png"}.get(path.suffix, "application/json")})
+    return {"stage": stage, "helpers": ctx.used, "helper_sha256": next(iter(ctx.used.values()), None),
+            "summary": summary, "artifacts": artifacts,
+            "scope": "Real mechanics with hash-bound artifacts. Evidence for operator review; not human listening, not delivery approval."}
+
+
+def _source_audio(ctx, value, source, metadata):
+    ctx.write("request.json", {"stage": "source-audio", "source_sha256": metadata["source_sha256"]})
+    link = ctx.root / "source.mp4"
+    # probe_source.py takes a path; give it the server-owned upload (already structure-checked at upload).
+    os.symlink(source, link)
+    try:
+        ctx.run("probe_source", [link, ctx.root / "source-probe.json"], timeout=280, cpu=600, file_limit=64 * 1024 * 1024)
+    finally:
+        link.unlink()
+    probe = json.loads((ctx.root / "source-probe.json").read_text())
+    ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", *ctx.input_args(), "-map", "0:a:0", "-vn",
+                "-c:a", "pcm_s16le", "-ar", "48000", "-threads", "1", ctx.root / "source.wav"], source,
+               timeout=200, file_limit=512 * 1024 * 1024, cpu=300)
+    with wave.open(str(ctx.root / "source.wav")) as pcm:
+        info = {"samples": pcm.getnframes(), "rate": pcm.getframerate(), "channels": pcm.getnchannels(), "sample_width": pcm.getsampwidth()}
+    if info["sample_width"] != 2 or not info["samples"]:
+        raise Rejected("PCM decode produced no s16 samples")
+    ctx.write("pcm-source.json", {**info, "sha256": sha(ctx.root / "source.wav"), "codec": "pcm_s16le", "lossy_intermediate": False})
+    frames = probe["video"].get("nb_read_frames")
+    return {"duration_s": info["samples"] / info["rate"], "sample_rate": info["rate"], "channels": info["channels"],
+            "fps": probe["fps"]["r_frame_rate"], "frames": int(frames) if frames else None,
+            "constant_frame_rate": bool(probe["fps"]["constant_frame_rate"]), "mapping_support": probe["mapping_support"]}
+
+
+def _resolve_preset(ctx, value, source, metadata):
+    script = helper("preset")
+    defaults = UPSTREAM_ROOT / DEFAULTS[0]
+    if defaults.is_symlink() or sha(defaults) != DEFAULTS[1]:
+        raise Rejected("Bundled preset defaults mismatch")
+    args = [ctx.root / "preset-resolution.json", "--defaults", defaults]
+    for label in ("owner", "project"):
+        if label in value:
+            ctx.write(label + "-preset.json", value[label])
+            args += ["--" + label, ctx.root / (label + "-preset.json")]
+    del script
+    ctx.run("preset", args, timeout=30)
+    resolved = json.loads((ctx.root / "preset-resolution.json").read_text())
+    return {"font_path": resolved["preset"]["caption"]["font_path"], "sources": len(resolved["sources"])}
+
+
+EXPLAIN_MISSING = {
+    "faster_whisper": "Replaced by the shared Transcriber app (asr stage); not bundled by design.",
+    "node": "Needed only for motion capture (pieces 2-3, not built yet).",
+}
+
+
+def _preflight(ctx, value, source, metadata):
+    args = ["--source", source, "--language", value["language"]]
+    if ctx_dir := ctc_dir():
+        args += ["--acoustic-model-dir", ctx_dir]
+    code, out, err = ctx.run("preflight", args, timeout=30, check=False)
+    try:
+        report = json.loads(out)
+    except ValueError:
+        raise Rejected("preflight.py failed: " + _tail(err))
+    ctx.write("preflight.json", report)
+    t = transcriber.status()
+    missing = report.get("missing", [])
+    notes = {m: EXPLAIN_MISSING.get(m, "Required for piece 1; this is a real gap.") for m in missing}
+    piece1_missing = [m for m in missing if m not in EXPLAIN_MISSING]
+    ctx.write("preflight-app-notes.json", {"helper_exit_code": code, "explanations": notes, "transcriber": t,
+                                            "piece_1_blockers": piece1_missing + ([] if t.get("model_installed") else ["transcriber model"])})
+    return {"helper_passed": report.get("passed"), "missing": missing, "piece_1_blockers": piece1_missing,
+            "transcriber_ready": bool(t.get("model_installed"))}
+
+
+def _asr(ctx, value, source, metadata):
+    job, _ = ctx.lookup(value["audio_job"], {"source-audio", "pcm-assemble"})
+    name = "source.wav" if job["result"]["stage"] == "source-audio" else "edited.wav"
+    wav, _ = ctx.ref(value["audio_job"], {"source-audio", "pcm-assemble"}, name)
+    ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", "-i", wav, "-ac", "1", "-ar", "16000",
+                "-c:a", "pcm_s16le", "-threads", "1", ctx.root / "asr-input.wav"], timeout=120, file_limit=256 * 1024 * 1024, cpu=200)
+    receipt, raw = transcriber.transcribe(ctx.root / "asr-input.wav", value["language"], ctx.deadline)
+    receipt["provenance"]["input_artifact"] = {"job": value["audio_job"], "name": name, "sha256": sha(wav)}
+    ctx.write("asr.json", receipt)
+    ctx.write("transcriber-response.json", raw)
+    ctx.used["asr.py (schema only; local faster-whisper replaced by Transcriber)"] = HELPERS["asr"][1]
+    return {"audio_job": value["audio_job"], "audio": name, "words": len(receipt["words"]), "language_detected": receipt["language_detected"],
+            "transcriber_model": receipt["model_resolved"], "seconds": receipt["seconds"], "text": raw.get("text", "")[:2000]}
+
+
+def _align(ctx, value, source, metadata):
+    model = align_model(value.get("model"))
+    audio, _ = ctx.ref(value["asr_job"], {"asr"}, "asr-input.wav", "align-input.wav")
+    asr, _ = ctx.ref(value["asr_job"], {"asr"}, "asr.json", "asr.json")
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    checkpoint = MODELS_DIR / "whisper" / (("large-v3-turbo" if model == "turbo" else model) + ".pt")
+    cached = checkpoint.is_file()
+    started = time.monotonic()
+    threads = os.environ.get("VIDEO_ALIGN_THREADS", "2")
+    ctx.run("align", [audio, asr, ctx.root / "aligned.json", "--language", value["language"], "--model", model, "--device", "cpu"],
+            timeout=1780, cpu=3600, as_limit=16 * 1024**3, file_limit=4 * 1024**3, nofile=512, max_log=4 * 1024 * 1024,
+            threads=threads)
+    aligned = json.loads((ctx.root / "aligned.json").read_text())
+    words = [w for s in aligned.get("segments", []) for w in s.get("words", [])]
+    receipt = {"engine": "stable-ts (stable_whisper) via align.py", "model": model, "checkpoint": str(checkpoint),
+               "checkpoint_sha256": sha(checkpoint) if checkpoint.is_file() else None,
+               "checkpoint_downloaded_this_job": not cached, "device": "cpu", "torch_threads": threads,
+               "language": value["language"], "aligned_words": len(words), "seconds": round(time.monotonic() - started, 3),
+               "asr_job": value["asr_job"], "limitation": "Word timings are navigation seeds, not cut instructions."}
+    ctx.write("align-receipt.json", receipt)
+    return {k: receipt[k] for k in ("model", "aligned_words", "seconds", "checkpoint_downloaded_this_job", "language")}
+
+
+def _ctc(ctx, value, source, metadata):
+    audio, _ = ctx.ref(value["asr_job"], {"asr"}, "asr-input.wav", "ctc-input.wav")
+    ctx.run("acoustic_ctc_window", ["--wav", audio, "--start", str(value["start_s"]), "--end", str(value["end_s"]),
+            "--language", value["language"], "--model-dir", ctc_dir(), "--out", ctx.root / "ctc-window.json"],
+            timeout=280, cpu=600, as_limit=8 * 1024**3, nofile=256)
+    data = json.loads((ctx.root / "ctc-window.json").read_text())
+    return {"characters": len(data.get("characters", [])), "greedy_text": data.get("greedy_text", "")[:500]}
+
+
+def _pcm_assemble(ctx, value, source, metadata):
+    job, _ = ctx.lookup(value["audio_job"], {"source-audio"})
+    s = job["result"]["summary"]
+    if not s["constant_frame_rate"] or not s["frames"]:
+        raise Rejected("assemble_pcm.py needs a CFR source with a probed frame count")
+    ctx.ref(value["audio_job"], {"source-audio"}, "source.wav", "source.wav")
+    ctx.write("edit-plan.json", {"segments": value["segments"]})
+    ctx.run("assemble_pcm", [ctx.root, "--fps", s["fps"], "--source-frames", str(s["frames"])],
+            timeout=280, cpu=600, file_limit=1024 * 1024 * 1024, as_limit=4 * 1024**3)
+    mapped = json.loads((ctx.root / "edit-map.json").read_text())
+    with wave.open(str(ctx.root / "edited.wav")) as edited:
+        if edited.getnframes() != mapped["samples"]:
+            raise Rejected("Assembled PCM does not match sample ledger")
+    blocks = [{"id": f"segment-{i}", "source_start_s": seg["start_s"], "source_end_s": seg["end_s"]} for i, seg in enumerate(mapped["segments"])]
+    ctx.write("blocks.json", {"blocks": blocks, "derived_from": "edit-map.json segments (sample-exact)"})
+    return {"audio_job": value["audio_job"], "duration_s": mapped["duration"], "frames": mapped["frames"], "fps": mapped["fps"],
+            "segments": len(mapped["segments"]),
+            "removed_s": round(s["duration_s"] - mapped["duration"], 6)}
+
+
+def _speech_cut_audit(ctx, value, source, metadata):
+    wav, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "source.wav", "source.wav")
+    blocks, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "blocks.json", "blocks.json")
+    ctx.write("regions.json", value["regions"])
+    args = ["--source-wav", wav, "--manifest", blocks, "--regions", ctx.root / "regions.json", "--output-dir", ctx.root]
+    if "baseline_job" in value:
+        base, _ = ctx.ref(value["baseline_job"], {"pcm-assemble"}, "blocks.json")
+        target = ctx.root / "baseline-blocks.json"
+        shutil.copyfile(base, target)
+        args += ["--baseline", target]
+    code, out, err = ctx.run("speech_cut_audit", args, timeout=580, cpu=1200, as_limit=4 * 1024**3, nofile=256,
+                             max_log=8 * 1024 * 1024, check=False)
+    if not (ctx.root / "cut-regression.json").is_file():
+        raise Rejected("speech_cut_audit.py failed: " + _tail(err))
+    receipt = json.loads((ctx.root / "cut-regression.json").read_text())
+    return {"assemble_job": value["assemble_job"], "pass": receipt.get("pass") is True, "helper_exit_code": code,
+            "edges": len(receipt.get("edges", [])), "failed_regions": [r for r in receipt.get("candidate", []) if not r.get("pass")][:50]}
+
+
+def _acoustic_scan(ctx, value, source, metadata):
+    wav, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edited.wav", "edited.wav")
+    script = APP_ROOT / "scan_windows.py"
+    ctx.used["scan_windows.py (app-original)"] = sha(script)
+    ctx.native([HELPER_PYTHON, "-I", script, wav, ctx.root, "--window", str(value.get("window_s", 5.0))],
+               timeout=580, cwd=ctx.root, env_extra=ctx.env(), cpu=1200, as_limit=4 * 1024**3, nofile=256, explain=True)
+    edited_sha = sha(wav)
+    (ctx.root / "edited.wav").unlink()  # already bound in the assemble job; keep the scan bundle small
+    data = json.loads((ctx.root / "acoustic-windows.json").read_text())
+    return {"assemble_job": value["assemble_job"], "windows": len(data["windows"]), "duration_s": data["duration"],
+            "edited_wav_sha256": edited_sha}
+
+
+def _dialogue_gate(ctx, value, source, metadata):
+    root = ctx.root
+    a = value["assemble_job"]
+    ctx.ref(a, {"pcm-assemble"}, "source.wav", "source.wav")
+    ctx.ref(a, {"pcm-assemble"}, "edited.wav", "edited.wav")
+    ctx.ref(a, {"pcm-assemble"}, "edit-map.json", "edit-map.json")
+    ctx.ref(value["audit_job"], {"speech-cut-audit"}, "regions.json", "phonetic-regions.json")
+    ctx.ref(value["audit_job"], {"speech-cut-audit"}, "cut-regression.json", "cut-regression.json")
+    windows, _ = ctx.ref(value["scan_job"], {"acoustic-scan"}, "acoustic-windows.json")
+    scan_rows = json.loads(windows.read_text())["windows"]
+    review = {r["window"]: r["findings"] for r in value["acoustic_review"]}
+    rows = []
+    for w in scan_rows:
+        wave_path, _ = ctx.ref(value["scan_job"], {"acoustic-scan"}, w["waveform"])
+        spec_path, _ = ctx.ref(value["scan_job"], {"acoustic-scan"}, w["spectrogram"])
+        rows.append({"start": w["start"], "end": w["end"], "window": w["index"], "findings": review[w["index"]],
+                     "rms_dbfs": w["rms_dbfs"], "waveform_sha256": sha(wave_path), "spectrogram_sha256": sha(spec_path)})
+    ctx.write("edited-acoustic-scan.json", rows)
+    filler = dict(value["filler_review"])
+    if "edited_asr_job" in value:
+        ctx.ref(value["edited_asr_job"], {"asr"}, "asr.json", "edited-asr.json")
+        filler.setdefault("edited_asr", {"job": value["edited_asr_job"], "sha256": sha(root / "edited-asr.json")})
+    ctx.write("filler-review.json", filler)
+    edges = []
+    for edge in value["reviewed_edges"]:
+        item = dict(edge)
+        if type(edge["segment"]) is int and edge["edge"] in ("start", "end") and edge["segment"] >= 0:
+            for kind in ("waveform", "spectrogram"):
+                name = f"{edge['segment']}-{edge['edge']}-{kind}.png"
+                try:
+                    ctx.ref(value["audit_job"], {"speech-cut-audit"}, name, "edge-" + name)
+                    item[f"{kind}_path"] = "edge-" + name
+                    item[f"{kind}_sha256"] = sha(root / ("edge-" + name))
+                except Rejected:
+                    pass  # gate fails closed on the missing image
+        edges.append(item)
+    receipt: dict = {"version": 3}
+    for key, name in [("source", "source.wav"), ("edited", "edited.wav"), ("edit_map", "edit-map.json"),
+                      ("phonetic_regions", "phonetic-regions.json"), ("cut_regression", "cut-regression.json"),
+                      ("filler_review", "filler-review.json"), ("edited_acoustic_scan", "edited-acoustic-scan.json")]:
+        receipt[key] = {"path": name, "sha256": sha(root / name)}
+    receipt["reviewed_edges"] = edges
+    if "repair_of" in value:
+        receipt["repair_of"] = value["repair_of"]
+    ctx.write("audio-gate.json", receipt)
+    code, out, err = ctx.run("audio_gate", [root, "--stage", "dialogue"], timeout=120, check=False, as_limit=2 * 1024**3)
+    result = {"pass": code == 0, "exit_code": code, "stage": "dialogue",
+              "output": json.loads(out) if code == 0 else None, "error": None if code == 0 else _tail(err),
+              "receipt_sha256": sha(root / "audio-gate.json"),
+              "scope": "Evidence completeness and custody per audio_gate.py; not human listening approval."}
+    ctx.write("dialogue-gate-result.json", result)
+    return {"dialogue_gate_pass": result["pass"], "error": result["error"], "reviewed_edges": len(edges), "scan_windows": len(rows)}
+
+
+def _validate_project(ctx, value, source, metadata):
+    for key, name in [("locked_timeline", "locked-timeline.json"), ("visual_plan", "visual-plan.json"),
+                      ("crop_ledger", "crop-ledger.json"), ("pts_picture_ledger", "pts-picture-ledger.json")]:
+        if key in value:
+            ctx.write(name, value[key])
+    code, out, err = ctx.run("validate_project", [ctx.root], timeout=30, check=False)
+    result = {"pass": code == 0, "exit_code": code, "output": json.loads(out) if code == 0 else None,
+              "error": None if code == 0 else _tail(err).splitlines()[-1] if _tail(err) else "failed"}
+    ctx.write("validate-result.json", result)
+    return result
+
+
+STAGE_RUNNERS = {
+    "source-audio": _source_audio, "resolve-preset": _resolve_preset, "preflight": _preflight, "asr": _asr,
+    "align": _align, "acoustic-ctc": _ctc, "pcm-assemble": _pcm_assemble, "speech-cut-audit": _speech_cut_audit,
+    "acoustic-scan": _acoustic_scan, "dialogue-gate": _dialogue_gate, "validate-project": _validate_project,
+}

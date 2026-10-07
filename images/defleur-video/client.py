@@ -83,7 +83,7 @@ class Client:
         return {"job": jid, "directory": str(out), "stage": job["result"]["stage"], "delivery_approved": False}
 
     def wait(self, jid, wait):
-        deadline = time.monotonic() + 400
+        deadline = time.monotonic() + float(os.environ.get("VIDEO_WAIT_SECONDS", "2400"))
         while True:
             job = self.request("GET", f"/v1/jobs/{jid}")
             if not wait or job["state"] not in ("queued", "running"):
@@ -150,6 +150,30 @@ def read_bounded(path, maximum):
     return data
 
 
+STAGES = ["source-audio", "resolve-preset", "preflight", "asr", "align", "acoustic-ctc", "pcm-assemble",
+          "speech-cut-audit", "acoustic-scan", "dialogue-gate", "validate-project"]
+
+
+def load_json(path):
+    return json.loads(read_bounded(path, 1048576))
+
+
+SHORTCUTS = {
+    "source-audio": lambda a: ("source-audio", {}),
+    "preset": lambda a: ("resolve-preset", load_json(a.file) if a.file else {}),
+    "preflight": lambda a: ("preflight", {"language": a.language}),
+    "asr": lambda a: ("asr", {"audio_job": a.audio_job, "language": a.language}),
+    "align": lambda a: ("align", {"asr_job": a.asr_job, "language": a.language, **({"model": a.model} if a.model else {})}),
+    "ctc": lambda a: ("acoustic-ctc", {"asr_job": a.asr_job, "start_s": a.start, "end_s": a.end, "language": a.language}),
+    "assemble": lambda a: ("pcm-assemble", {"audio_job": a.audio_job, "segments": load_json(a.file)["segments"]}),
+    "cut-audit": lambda a: ("speech-cut-audit", {"assemble_job": a.assemble_job, "regions": load_json(a.file),
+                                                 **({"baseline_job": a.baseline} if a.baseline else {})}),
+    "scan": lambda a: ("acoustic-scan", {"assemble_job": a.assemble_job, **({"window_s": a.window} if a.window else {})}),
+    "dialogue-gate": lambda a: ("dialogue-gate", load_json(a.file)),
+    "validate-project": lambda a: ("validate-project", load_json(a.file)),
+}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=os.environ.get("VIDEO_API_URL", "http://127.0.0.1:8787"))
@@ -162,15 +186,58 @@ def main():
     choice.add_argument("--decision", type=identifier); choice.add_argument("--plan")
     status = commands.add_parser("status"); status.add_argument("job", type=identifier); status.add_argument("--wait", action="store_true")
     review = commands.add_parser("review"); review.add_argument("job", type=identifier); review.add_argument("directory", type=Path)
-    stage = commands.add_parser("stage"); stage.add_argument("project", type=identifier); stage.add_argument("operation", choices=["source-audio", "pcm-assemble", "resolve-preset"]); stage.add_argument("file")
+    stage = commands.add_parser("stage", help="submit any workflow stage with a raw JSON body file")
+    stage.add_argument("project", type=identifier); stage.add_argument("operation", choices=STAGES); stage.add_argument("file")
     bundle = commands.add_parser("stage-bundle"); bundle.add_argument("job", type=identifier); bundle.add_argument("directory", type=Path)
+    commands.add_parser("capabilities")
+    docs = commands.add_parser("docs", help="list or print James' bundled SKILL.md/reference docs"); docs.add_argument("name", nargs="?")
+    # One convenience command per piece-1 stage. Each prints the job; add --wait to block until it finishes.
+    def staged(name, help_text):
+        sp = commands.add_parser(name, help=help_text); sp.add_argument("project", type=identifier)
+        sp.add_argument("--wait", action="store_true"); sp.add_argument("--bundle", type=Path, help="download artifacts here after --wait")
+        return sp
+    staged("source-audio", "probe_source.py + 48 kHz source.wav")
+    sp = staged("preset", "preset.py; FILE is {owner:{...}, project:{...}}"); sp.add_argument("file", nargs="?")
+    sp = staged("preflight", "preflight.py"); sp.add_argument("--language", required=True)
+    sp = staged("asr", "Transcriber -> asr.json"); sp.add_argument("audio_job", type=identifier); sp.add_argument("--language", default="auto")
+    sp = staged("align", "align.py (stable-ts)"); sp.add_argument("asr_job", type=identifier); sp.add_argument("--language", required=True); sp.add_argument("--model")
+    sp = staged("ctc", "acoustic_ctc_window.py"); sp.add_argument("asr_job", type=identifier)
+    sp.add_argument("--start", type=float, required=True); sp.add_argument("--end", type=float, required=True); sp.add_argument("--language", required=True)
+    sp = staged("assemble", "assemble_pcm.py; FILE is {segments:[...]}"); sp.add_argument("audio_job", type=identifier); sp.add_argument("file")
+    sp = staged("cut-audit", "speech_cut_audit.py; FILE is the keep/drop regions list"); sp.add_argument("assemble_job", type=identifier); sp.add_argument("file")
+    sp.add_argument("--baseline", type=identifier)
+    sp = staged("scan", "full-coverage edited waveform/spectrogram windows"); sp.add_argument("assemble_job", type=identifier); sp.add_argument("--window", type=float)
+    sp = staged("dialogue-gate", "audio_gate.py --stage dialogue; FILE holds job ids and reviews"); sp.add_argument("file")
+    sp = staged("validate-project", "validate_project.py; FILE is {locked_timeline, visual_plan, crop_ledger}"); sp.add_argument("file")
     delete = commands.add_parser("delete"); delete.add_argument("project", type=identifier)
     args = parser.parse_args()
     client = Client(args.url, os.environ.get("VIDEO_API_TOKEN", ""))
-    if args.command == "upload":
+    if args.command in SHORTCUTS:
+        operation, body = SHORTCUTS[args.command](args)
+        value = client.request("POST", f"/v1/projects/{args.project}/stages/{operation}", json.dumps(body).encode())
+        if args.wait or args.bundle:
+            value = client.wait(value["id"], True)
+            if value["state"] == "failed":
+                raise ValueError(f"job {value['id']} failed: {value.get('error')}")
+            if args.bundle:
+                client.stage_bundle(value["id"], args.bundle)
+            value = {"id": value["id"], "state": value["state"], "stage": value["result"]["stage"],
+                     "summary": value["result"]["summary"], "artifacts": len(value["result"]["artifacts"]),
+                     **({"bundle": str(args.bundle)} if args.bundle else {})}
+    elif args.command == "capabilities":
+        value = client.request("GET", "/v1/capabilities")
+    elif args.command == "docs":
+        if not args.name:
+            value = client.request("GET", "/v1/workflow/docs")
+        else:
+            if not re.fullmatch(r"[a-z-]+", args.name):
+                raise ValueError("doc name must be one of the listed names")
+            sys.stdout.write(client.request("GET", f"/v1/workflow/docs/{args.name}", raw=True).decode())
+            return
+    elif args.command == "upload":
         value = client.upload(args.file)
     elif args.command == "stage":
-        value = client.request("POST", f"/v1/projects/{args.project}/stages/{args.operation}", read_bounded(args.file, 65536))
+        value = client.request("POST", f"/v1/projects/{args.project}/stages/{args.operation}", read_bounded(args.file, 1048576))
         value = client.wait(value["id"], False)
     elif args.command == "stage-bundle":
         value = client.stage_bundle(args.job, args.directory)

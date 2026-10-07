@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "caption": {
+    "font_path": "",
+    "font_size_px": 54,
+    "max_words": 5,
+    "max_chars": 28,
+    "text_color": "#FFFFFF",
+    "active_color": "#FFFFFF",
+    "outline_color": "#111111",
+    "outline_width_px": 3,
+    "safe_rect": [120, 1240, 840, 1430]
+  },
+  "video": {
+    "canvas": [1080, 1920],
+    "essential_text_rect": [120, 220, 960, 1180],
+    "live_crop_policy": "fixed-per-setup",
+    "allow_fullscreen_insert_ranges": true
+  },
+  "editorial": {
+    "remove_fillers_only_after_review": true,
+    "restore_clause_when_cut_is_fragile": true,
+    "visual_media_families": ["documentary", "diagram", "photographic-metaphor", "typographic-explanation", "illustration"]
+  }
+}

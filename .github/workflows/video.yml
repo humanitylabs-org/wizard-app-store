@@ -2,7 +2,7 @@ name: Build video editing review API
 on:
   push:
     branches: [main]
-    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'scripts/smoke-video.py', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
+    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'apps/transcriber/**', 'scripts/smoke-video.py', 'scripts/e2e-video-audio.py', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,7 +10,7 @@ permissions:
 jobs:
   video-image:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,12 +18,17 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci && npm test && npx tsc --noEmit
-      - name: Build and test original standalone service in bounded container
+      - name: Build image; unit tests and James' test_audio_gate.py in bounded container
         shell: bash
         run: TMPDIR="$RUNNER_TEMP" sh images/defleur-video/test-container.sh 2>&1 | tee "$RUNNER_TEMP/video-container.log"
       - name: Actual Runtipi translation, fresh bind permissions and HTTP lifecycle
         shell: bash
         run: TMPDIR="$RUNNER_TEMP" python3 scripts/smoke-video.py | tee "$RUNNER_TEMP/video-lifecycle.json"
+      - name: Two-app e2e with pinned Speaches (Transcriber) on a shared network, real speech
+        shell: bash
+        run: |
+          set -o pipefail
+          E2E_OUT="$RUNNER_TEMP/e2e" E2E_CACHE="$RUNNER_TEMP/e2e-cache" TMPDIR="$RUNNER_TEMP" python3 scripts/e2e-video-audio.py | tee "$RUNNER_TEMP/video-e2e.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -31,13 +36,16 @@ jobs:
           path: |
             ${{ runner.temp }}/video-container.log
             ${{ runner.temp }}/video-lifecycle.json
+            ${{ runner.temp }}/video-e2e.json
+            ${{ runner.temp }}/e2e/report.json
+            ${{ runner.temp }}/e2e/*.log
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish the exact tested standalone image (amd64)
+      - name: Publish the exact tested image (amd64)
         run: |
-          docker tag wizard-defleur-video:0.2.1-testing ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing
-          docker push ghcr.io/humanitylabs-org/defleur-video:0.2.1-testing
-# Publishes only after unit, container and Runtipi lifecycle smoke pass.
+          docker tag wizard-defleur-video:0.3.0-testing ghcr.io/humanitylabs-org/defleur-video:0.3.0-testing
+          docker push ghcr.io/humanitylabs-org/defleur-video:0.3.0-testing
+# Publishes only after unit, container, Runtipi lifecycle smoke and two-app e2e pass.

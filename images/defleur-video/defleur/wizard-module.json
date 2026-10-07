@@ -1,0 +1,7 @@
+{
+  "format": 1,
+  "id": "defleur-video",
+  "version": "0.1.0",
+  "capabilities": ["video-editing"],
+  "title": "DeFleur’s video editing pipeline"
+}
