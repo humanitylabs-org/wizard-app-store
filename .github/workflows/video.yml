@@ -60,6 +60,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish the exact tested image (amd64)
         run: |
-          docker tag wizard-defleur-video:0.5.0-testing ghcr.io/humanitylabs-org/defleur-video:0.5.0-testing
-          docker push ghcr.io/humanitylabs-org/defleur-video:0.5.0-testing
+          docker tag wizard-defleur-video:0.6.0-testing ghcr.io/humanitylabs-org/defleur-video:0.6.0-testing
+          docker push ghcr.io/humanitylabs-org/defleur-video:0.6.0-testing
 # Publishes only after unit, container, Runtipi lifecycle smoke, two-app e2e and the MCP-only e2e pass.
