@@ -4,7 +4,7 @@ HTTP service that runs the audio/edit half (piece 1 of 3) of James DeFleur's DeF
 
 - Operator guide: [HERMES.md](HERMES.md). Stage map and measurements: [WORKFLOW-PARITY.md](WORKFLOW-PARITY.md). Release record: [RELEASE.md](RELEASE.md). The older 9:16 preview: [EDITING.md](EDITING.md).
 - James' SKILL.md files and references are served read-only at `GET /v1/workflow/docs` and `GET /v1/workflow/docs/{name}` (`client.py docs`).
-- Stages: `POST /v1/projects/{id}/stages/{source-audio|resolve-preset|preflight|asr|align|acoustic-ctc|pcm-assemble|speech-cut-audit|acoustic-scan|dialogue-gate|validate-project}`. Inputs are JSON and job ids only, never paths, shell commands or filters. Each job lists its artifacts with SHA-256; later stages re-check those hashes before they read anything.
+- Stages: `POST /v1/projects/{id}/stages/{source-audio|resolve-preset|preflight|asr|align|acoustic-ctc|pcm-assemble|speech-cut-audit|acoustic-scan|dialogue-gate|validate-project|face-crop|final-render|delivery-gate}`. `face-crop`, `final-render` and `delivery-gate` (0.5.0) produce the fixed crop ledger, the 1080×1920 captioned final.mp4 via James' caption_layer.py and encode.py, and the `audio_gate.py --stage delivery` result; `asr` and `acoustic-scan` also accept a `final-render` job. Inputs are JSON and job ids only, never paths, shell commands or filters. Each job lists its artifacts with SHA-256; later stages re-check those hashes before they read anything.
 
 ## Run locally
 
@@ -43,7 +43,7 @@ All routes except `GET /healthz`, `GET /upload` and the one-time `POST /v1/uploa
 | `POST /v1/projects` | Raw `video/mp4`, one Content-Length | `201` project ID, hash, metadata, unmet gates |
 | `GET /v1/projects/{id}` | Bearer | Persisted source metadata |
 | `POST /v1/projects/{id}/previews` | `application/json` edit plan, Content-Length | `202` persistent job |
-| `POST /v1/projects/{id}/stages/{operation}` | Stage JSON (≤1 MiB) | Durable piece-1 stage job (see HERMES.md) |
+| `POST /v1/projects/{id}/stages/{operation}` | Stage JSON (≤1 MiB) | Durable workflow stage job (pieces 1–2) (see HERMES.md) |
 | `GET /v1/jobs/{id}/stage-artifacts/{name}` | Manifest-allowlisted name | Exact hashed stage JSON/WAV/PNG |
 | `GET /v1/workflow/docs[/{name}]` | Allowlisted name | James' SKILL.md / references / NOTICE, read-only |
 | `GET /v1/jobs/{id}` | Bearer | State, submitted plan, result checksum/evidence or error |

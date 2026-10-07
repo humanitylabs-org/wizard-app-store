@@ -37,9 +37,20 @@ Setup: two translated Runtipi recipes on one shared network, with 7.7 s of real 
 - **Dialogue gate** passed. An incomplete gate (one edge missing) was rejected.
 - **Cost:** 33 s wall time with cached models. Video container cgroup memory peak was 896 MB of 1536 MB, during alignment.
 
+### Piece 2 through MCP only (2026-10-07, `scripts/e2e-video-mcp.py`)
+Fixture: a 1920×1080, 30 fps talking head built from a public-domain NASA portrait (slowly panned and scaled) muxed with the same Kokoro speech. Hermes-style calls: `create_upload` → curl → `start_edit` → `apply_cuts` (the proposed cuts) → `render_final` → `get_status`.
+- **Final:** 1080×1920, H.264 + AAC 48 kHz, 184 frames / 6.12 s. An independent ffprobe and an `ffmpeg -xerror` full decode both pass.
+- **Crop:** 1 setup, crop `[653, 0, 606, 1080]` at full height, face detected in 15/15 samples, no flags. In the decoded pixels the ledger crop beats ±4 px and ±w/8 shifted crops. An independent YuNet pass on 8 frames of the final MP4 found the face in all 8, inside the canvas and above the caption band (y ≤ 1240).
+- **Captions:** 21 words in 5 cues, shown on 169 of 184 frames, DejaVu Sans Bold. The caption band changes only while a cue is drawn.
+- **Delivery gate** (`audio_gate.py --stage delivery`) passed. Final ASR lost and added no words compared with the edited audio. The minimum source-region correlation was 0.99998.
+- **Cost:** `render_final` took 35 s wall time (face-crop, final-render, final ASR, final scan, delivery-gate). The whole MCP flow took 98 s, including a second HEVC project. The video container's cgroup memory peak was 1.23 GB of the 1.5 GiB limit.
+
 See RELEASE.md for the full verification record.
 
 ## Known limits
+- Motion graphics (piece 3) are not built: no Chromium, GSAP, inserts or B-roll. A setup is one fixed crop, so two speakers in one setup can't be reframed between.
+- `final-render` writes one JPEG per output frame before encoding (about 0.3 MB each at 1080×1920; a 5-minute 30 fps video needs about 3 GB of free disk at peak) and deletes them after the encode.
+- The face audit is sampled (about 2 frames per second), and a face the detector misses isn't audited.
 - Alignment memory grows with model size. `base` fits the 1.5 GB limit (896 MB peak measured). `small` is untested. `medium` and `large-v3-turbo` would need a higher memory limit; also untested.
 - The Transcriber runs ASR at about real time on CPU, so a long source takes about as long as it plays. ASR and alignment stages each have a 30-minute limit.
 - VFR is handled by re-encoding to CFR on upload (0.4.0). Frame-exact editing of the original VFR timeline would need the PTS picture ledger from piece 2.

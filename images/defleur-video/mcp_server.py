@@ -542,7 +542,7 @@ def _result(fn, *a, **kw):
 @mcp.tool(description=(
     "Call this FIRST when the user wants to edit a video. Explains what DeFleur Video does on this server, the exact order of "
     "tools to call (capabilities -> create_upload -> start_edit -> get_status -> owner approval -> apply_cuts -> get_status), "
-    "and what is NOT built yet (face crop, captions, 1080x1920 encode, motion, delivery). No arguments."))
+    "and what is NOT built yet (motion graphics). No arguments."))
 def workflow_guide() -> dict:
     return GUIDE
 

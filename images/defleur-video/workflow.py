@@ -153,7 +153,9 @@ def capabilities(probe_transcriber=True):
         "acoustic_ctc": {"available": ctc_dir() is not None,
                          "reason": None if ctc_dir() else "No CTC model bundle supplied (set VIDEO_CTC_MODEL_DIR to a directory with model.onnx, vocab.json, capabilities.json)"},
         "piece_1_complete": True,
-        "not_built_yet": ["portrait-face-audit/crop", "caption_layer", "1080x1920 encode", "Chromium/GSAP motion capture", "delivery gate"],
+        "piece_2_complete": True,
+        "face_model": {"path": str(FACE_MODEL), "sha256": FACE_MODEL_SHA256, "present": FACE_MODEL.is_file()},
+        "not_built_yet": ["Chromium/GSAP motion capture (capture.cjs)", "fullscreen inserts / B-roll"],
         "provider_calls": False,
     }
 
@@ -449,7 +451,7 @@ def _resolve_preset(ctx, value, source, metadata):
 
 EXPLAIN_MISSING = {
     "faster_whisper": "Replaced by the shared Transcriber app (asr stage); not bundled by design.",
-    "node": "Needed only for motion capture (pieces 2-3, not built yet).",
+    "node": "Needed only for motion capture (capture.cjs, piece 3, not built yet).",
 }
 
 
