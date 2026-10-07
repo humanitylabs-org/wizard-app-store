@@ -2,7 +2,7 @@ name: Build video editing review API
 on:
   push:
     branches: [main]
-    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'apps/transcriber/**', 'scripts/smoke-video.py', 'scripts/e2e-video-audio.py', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
+    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'apps/transcriber/**', 'scripts/smoke-video.py', 'scripts/e2e-video-audio.py', 'scripts/e2e-video-mcp.py', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -29,6 +29,11 @@ jobs:
         run: |
           set -o pipefail
           E2E_OUT="$RUNNER_TEMP/e2e" E2E_CACHE="$RUNNER_TEMP/e2e-cache" TMPDIR="$RUNNER_TEMP" python3 scripts/e2e-video-audio.py | tee "$RUNNER_TEMP/video-e2e.json"
+      - name: Agent flow through MCP only (create_upload, curl, start_edit, apply_cuts, get_status) plus HEVC normalization
+        shell: bash
+        run: |
+          set -o pipefail
+          E2E_OUT="$RUNNER_TEMP/e2e" E2E_CACHE="$RUNNER_TEMP/e2e-cache" TMPDIR="$RUNNER_TEMP" python3 scripts/e2e-video-mcp.py | tee "$RUNNER_TEMP/video-mcp.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -38,6 +43,8 @@ jobs:
             ${{ runner.temp }}/video-lifecycle.json
             ${{ runner.temp }}/video-e2e.json
             ${{ runner.temp }}/e2e/report.json
+            ${{ runner.temp }}/video-mcp.json
+            ${{ runner.temp }}/e2e/mcp-report.json
             ${{ runner.temp }}/e2e/*.log
       - uses: docker/login-action@v3
         with:
@@ -48,4 +55,4 @@ jobs:
         run: |
           docker tag wizard-defleur-video:0.4.0-testing ghcr.io/humanitylabs-org/defleur-video:0.4.0-testing
           docker push ghcr.io/humanitylabs-org/defleur-video:0.4.0-testing
-# Publishes only after unit, container, Runtipi lifecycle smoke and two-app e2e pass.
+# Publishes only after unit, container, Runtipi lifecycle smoke, two-app e2e and the MCP-only e2e pass.

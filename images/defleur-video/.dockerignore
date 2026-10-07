@@ -1,12 +1,12 @@
 *
 !Dockerfile
 !service.py
-!mcp_server.py
 !editing.py
 !client.py
 !workflow.py
 !transcriber.py
 !scan_windows.py
+!mcp_server.py
 !NOTICE
 !requirements.lock
 !defleur

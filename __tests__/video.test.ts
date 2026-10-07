@@ -23,12 +23,13 @@ test("publication allowlist excludes recovered vendor, history, evidence and loc
   expect(files).toContain(".github/workflows/video.yml");
   expect(files).toContain("scripts/smoke-video.py");
   expect(files).toContain("scripts/translate-video-recipe.mjs");
+  expect(files).toContain("scripts/e2e-video-mcp.py");
 });
 
 test("image bundles James' helpers byte-for-byte with NOTICE, no faster-whisper", () => {
   expect(readFileSync("images/defleur-video/.dockerignore", "utf8").trim().split("\n"))
     .toEqual(["*", "!Dockerfile", "!service.py", "!editing.py", "!client.py", "!workflow.py", "!transcriber.py",
-              "!scan_windows.py", "!NOTICE", "!requirements.lock", "!defleur", "!defleur/**", "defleur/.gitignore"]);
+              "!scan_windows.py", "!mcp_server.py", "!NOTICE", "!requirements.lock", "!defleur", "!defleur/**", "defleur/.gitignore"]);
   const dockerfile = readFileSync("images/defleur-video/Dockerfile", "utf8");
   expect(dockerfile).toContain("COPY defleur/ /opt/defleur/");
   expect(dockerfile).toContain("COPY NOTICE /opt/defleur/NOTICE");
@@ -57,7 +58,7 @@ test("release workflow tests, runs the two-app e2e, then publishes", () => {
   const workflow = parse(readFileSync(".github/workflows/video.yml", "utf8"));
   const steps = workflow.jobs["video-image"].steps;
   const firstPublish = steps.findIndex((step: {uses?: string; run?: string}) => step.uses === "docker/login-action@v3" || step.run?.includes("docker push"));
-  const lastTest = Math.max(...["scripts/smoke-video.py", "scripts/e2e-video-audio.py"].map(s => steps.findIndex((step: {run?: string}) => step.run?.includes(s))));
+  const lastTest = Math.max(...["scripts/smoke-video.py", "scripts/e2e-video-audio.py", "scripts/e2e-video-mcp.py"].map(s => steps.findIndex((step: {run?: string}) => step.run?.includes(s))));
   expect(steps.findIndex((step: {run?: string}) => step.run?.includes("scripts/e2e-video-audio.py"))).toBeGreaterThan(-1);
   expect(firstPublish).toBeGreaterThan(lastTest);
   const commands = steps.map((step: {run?: string}) => step.run || "").join("\n");
@@ -97,4 +98,15 @@ test("video has independent state, no agent volumes, bounded unprivileged servic
   for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "depends_on"]) {
     expect(service[key]).toBeUndefined();
   }
+});
+
+test("MCP endpoint ships in the image and is exercised before publish", () => {
+  expect(readFileSync("images/defleur-video/Dockerfile", "utf8")).toMatch(/COPY [^\n]*mcp_server\.py \/app\//);
+  expect(readFileSync("images/defleur-video/requirements.in", "utf8")).toContain("mcp==2.0.0");
+  expect(readFileSync("images/defleur-video/requirements.lock", "utf8")).toMatch(/^mcp==2\.0\.0 \\$/m);
+  const mcp = readFileSync("images/defleur-video/mcp_server.py", "utf8");
+  for (const tool of ["workflow_guide", "capabilities", "create_upload", "start_edit", "apply_cuts", "get_status", "list_projects", "delete_project"])
+    expect(mcp).toContain(`def ${tool}(`);
+  expect(mcp).not.toMatch(/openai|anthropic|api\.openai/i);
+  expect(readFileSync("images/defleur-video/HERMES.md", "utf8")).toContain("hermes mcp add defleur-video --url http://defleur-video:8787/mcp");
 });
