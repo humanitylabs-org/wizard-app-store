@@ -20,11 +20,14 @@ import subprocess
 import threading
 import time
 import uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import base64
+import http.client
+import secrets
 from typing import cast
 from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.3.0-testing"
+VERSION = "0.4.0-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_PROJECTS = 8
@@ -32,6 +35,12 @@ MAX_JOBS = 256
 MAX_DURATION = 300
 MAX_NATIVE_LOG = 256 * 1024
 MAX_STAGE_JSON = 1024 * 1024
+MAX_MCP_BODY = 4 * 1024 * 1024
+MCP_PORT = int(os.environ.get("MCP_INTERNAL_PORT", "8788"))
+UPLOAD_TTL = 1800
+UPLOAD_SECONDS = 900
+UPLOAD_TYPES = ("video/mp4", "video/quicktime", "application/octet-stream")
+COMMON_FPS = ["24000/1001", "24/1", "25/1", "30000/1001", "30/1", "50/1", "60000/1001", "60/1"]
 ID = re.compile(r"^[a-f0-9]{32}$")
 # Delivery is never approved by this app. Piece 1 supplies the audio/edit
 # stages (ASR, alignment, per-edge evidence, dialogue gate) as operator tools.
@@ -42,6 +51,34 @@ GATES = ["coherent-thought/editorial-review (operator)", "audio-dialogue-lock (d
 
 
 NATIVE_CONTEXT = threading.local()
+
+UPLOAD_SCRIPT = """
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const file = document.getElementById('file').files[0];
+  const token = document.getElementById('token').value.trim();
+  const out = document.getElementById('out');
+  if (!file) { out.textContent = 'Choose a video file first.'; return; }
+  out.textContent = 'Uploading and checking ' + file.name + ' (' + Math.round(file.size / 1048576) + ' MiB)...';
+  const headers = {'Content-Type': 'video/mp4'};
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  try {
+    const r = await fetch('/v1/projects', {method: 'POST', headers, body: file});
+    const j = await r.json();
+    out.textContent = r.ok ? 'Done. Project id: ' + j.id + '\\nTell Hermes: edit project ' + j.id : 'Upload failed (HTTP ' + r.status + '): ' + (j.error || '');
+  } catch (err) { out.textContent = 'Upload failed: ' + err; }
+});
+"""
+UPLOAD_PAGE = ("""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DeFleur Video upload</title><style>body{font:16px system-ui,sans-serif;max-width:36rem;margin:2rem auto;padding:0 1rem}
+input,button{font:inherit;margin:.4rem 0}pre{white-space:pre-wrap;background:#f3f3f3;padding:.6rem}</style></head><body>
+<h1>Upload a video</h1><p>MP4 or MOV, up to 300 s and 512 MiB. HEVC or variable-frame-rate phone video is converted to H.264.</p>
+<form id="f"><input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov"><br>
+<input type="password" id="token" placeholder="API token (only if this app has one)" autocomplete="off" size="40"><br>
+<button type="submit">Upload</button></form><pre id="out" aria-live="polite"></pre>
+<script>""" + UPLOAD_SCRIPT + """</script></body></html>""").encode()
+UPLOAD_CSP = ("default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; form-action 'none'; "
+              "script-src 'sha256-" + base64.b64encode(hashlib.sha256(UPLOAD_SCRIPT.encode()).digest()).decode() + "'")
 
 
 def digest(path):
@@ -271,6 +308,112 @@ def render(source, target, plan):
             "scope": "Externally authored review edit; caption timing and protected region are unverified assertions. Not audio-locked, animated, or delivery-approved."}
 
 
+def loose_input_args():
+    """Like input_args but admits phone-size (up to 4096x2304) frames for normalization only."""
+    args = input_args()
+    args[args.index("-max_pixels") + 1] = str(4096 * 2304)
+    return args
+
+
+def frame_rate_mode(source, stream):
+    """CFR iff every video packet PTS sits on the nominal frame grid (packets only; no decode)."""
+    rate = stream.get("r_frame_rate", "0/1")
+    try:
+        num, den = (int(x) for x in rate.split("/"))
+        step = den / num
+    except (ValueError, ZeroDivisionError):
+        return "unknown", rate
+    raw = parse_json(native(["/usr/bin/ffprobe", "-v", "error", *loose_input_args(),
+                             "-select_streams", "v:0", "-show_entries", "packet=pts_time", "-of", "json"], source,
+                            timeout=120, cpu=120, max_log=64 * 1024 * 1024))
+    pts = sorted(float(p["pts_time"]) for p in raw.get("packets", []) if p.get("pts_time") not in (None, "N/A"))
+    if len(pts) < 2:
+        return "unknown", rate
+    tick = 0.5 * step
+    for i, t in enumerate(pts):
+        if abs((t - pts[0]) - i * step) > tick:
+            return "variable", rate
+    if stream.get("avg_frame_rate") not in (rate, None, "0/0"):
+        try:
+            a, b = (int(x) for x in stream["avg_frame_rate"].split("/"))
+            if abs(a / b - num / den) > 0.01:
+                return "variable", rate
+        except (ValueError, ZeroDivisionError):
+            pass
+    return "constant", rate
+
+
+def target_fps(stream):
+    """Nearest common rate to the average (VFR phones hover around 30/60)."""
+    try:
+        a, b = (int(x) for x in stream.get("avg_frame_rate", "30/1").split("/"))
+        avg = a / b
+    except (ValueError, ZeroDivisionError):
+        avg = 30.0
+    return min(COMMON_FPS, key=lambda r: abs(int(r.split("/")[0]) / int(r.split("/")[1]) - avg))
+
+
+NORMALIZE_LOCK = threading.Semaphore(1)
+
+
+def normalize_if_needed(path):
+    """HEVC / VFR / extra-track phone footage -> H.264 CFR + AAC. Returns provenance or None."""
+    mp4_structure(path)
+    value = parse_json(native(["/usr/bin/ffprobe", "-v", "error", *loose_input_args(), "-show_streams", "-show_format", "-of", "json"], path))
+    streams = value.get("streams", [])
+    videos = [s for s in streams if s.get("codec_type") == "video" and not s.get("disposition", {}).get("attached_pic")]
+    audios = [s for s in streams if s.get("codec_type") == "audio"]
+    if len(videos) != 1 or len(audios) < 1 or videos[0].get("codec_name") not in ("h264", "hevc"):
+        return None  # probe() rejects it with the usual message
+    v, a = videos[0], audios[0]
+    try:
+        duration = float(value["format"]["duration"])
+    except (KeyError, ValueError, TypeError) as exc:
+        raise Rejected("invalid source metadata") from exc
+    if not math.isfinite(duration) or not 0 < duration <= MAX_DURATION:
+        raise Rejected(f"source duration must be at most {MAX_DURATION} seconds")
+    mode, rate = frame_rate_mode(path, v)
+    reasons = []
+    if v["codec_name"] == "hevc":
+        reasons.append("HEVC video")
+    if mode != "constant":
+        reasons.append(f"{mode} frame rate")
+    if not reasons:
+        return None  # H.264 CFR: keep the original bytes untouched
+    if a.get("codec_name") != "aac" or a.get("channels", 9) > 2:
+        reasons.append(f"audio {a.get('codec_name')} x{a.get('channels')}")
+    if len(streams) != 2:
+        reasons.append(f"{len(streams)} streams (keeping one video and one audio)")
+    if int(v.get("width", 0)) * int(v.get("height", 0)) > 2073600 or max(int(v.get("width", 0)), int(v.get("height", 0))) > 1920:
+        reasons.append("larger than 1920 px / 1080p (scaled down)")
+    if not NORMALIZE_LOCK.acquire(blocking=False):
+        raise Rejected("another upload is being converted; retry in a few minutes")
+    try:
+        fps = target_fps(v)
+        out = path.with_name(path.name + ".norm.mp4")
+        started = time.monotonic()
+        # Fit inside 1920x1920 and 2073600 px, even dimensions; ffmpeg applies display rotation itself.
+        scale = ("scale='trunc(min(1,min(1920/iw,1920/ih,sqrt(2073600/(iw*ih))))*iw/2)*2':"
+                 "'trunc(min(1,min(1920/iw,1920/ih,sqrt(2073600/(iw*ih))))*ih/2)*2',setsar=1")
+        native(["/usr/bin/ffmpeg", "-v", "error", "-nostdin", *loose_input_args(), "-map", "0:v:0", "-map", "0:a:0",
+                "-vf", scale, "-fps_mode", "cfr", "-r", fps, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", str(min(2, int(a.get("channels") or 2))),
+                "-map_metadata", "-1", "-movflags", "+faststart", "-threads", "2", "-filter_threads", "1", "-y", out],
+               path, timeout=1200, cpu=2400, file_limit=MAX_UPLOAD * 2, as_limit=3 * 1024**3, explain=True, threads="2")
+        original = {"sha256": digest(path), "bytes": path.stat().st_size, "video_codec": v["codec_name"],
+                    "width": int(v.get("width", 0)), "height": int(v.get("height", 0)),
+                    "frame_rate_mode": mode, "r_frame_rate": rate, "avg_frame_rate": v.get("avg_frame_rate"),
+                    "audio_codec": a.get("codec_name"), "streams": len(streams), "duration": duration}
+        out.replace(path)
+        return {"original": original, "normalization": {
+            "reasons": reasons, "tool": "ffmpeg libx264 veryfast crf 18 + AAC 192k 48 kHz", "fps": fps, "frame_rate_mode": "constant",
+            "seconds": round(time.monotonic() - started, 2),
+            "note": "The normalized H.264 CFR file is the edit source; the original bytes are not kept, only their SHA-256."}}
+    finally:
+        path.with_name(path.name + ".norm.mp4").unlink(missing_ok=True)
+        NORMALIZE_LOCK.release()
+
+
 class Store:
     def __init__(self, root):
         self.root = Path(root).resolve()
@@ -346,7 +489,7 @@ class Store:
         try:
             with tmp.open("xb") as f:
                 remaining = length
-                deadline = time.monotonic() + 60
+                deadline = time.monotonic() + UPLOAD_SECONDS
                 while remaining:
                     if time.monotonic() > deadline:
                         raise Rejected("upload wall-time limit")
@@ -355,7 +498,10 @@ class Store:
                         raise Rejected("truncated upload")
                     f.write(data)
                     remaining -= len(data)
+            converted = normalize_if_needed(tmp)
             metadata = probe(tmp)
+            if converted:
+                metadata.update(converted)
             metadata.update({"id": identifier, "upstream_commit": UPSTREAM, "created": time.time(), "missing_delivery_gates": GATES})
             dest = self.path(identifier)
             dest.mkdir(mode=0o700)
@@ -365,6 +511,16 @@ class Store:
             return metadata
         finally:
             tmp.unlink(missing_ok=True)
+
+    def projects(self):
+        with self.connect() as c:
+            rows = c.execute("SELECT metadata FROM projects").fetchall()
+        out = []
+        for row in rows:
+            m = parse_json(row[0])
+            out.append({"id": m["id"], "duration": m["duration"], "width": m["width"], "height": m["height"],
+                        "created": m.get("created"), "normalized": "normalization" in m})
+        return sorted(out, key=lambda m: m["created"] or 0)
 
     def decisions(self, identifier):
         self.project(identifier)
@@ -513,9 +669,12 @@ class Store:
                 del NATIVE_CONTEXT.deadline
 
 
-class VideoServer(HTTPServer):
+class VideoServer(ThreadingHTTPServer):
+    daemon_threads = True
     token: str
     store: Store
+    uploads: dict
+    uploads_lock: threading.Lock
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -574,13 +733,78 @@ class Handler(BaseHTTPRequestHandler):
             raise Rejected("request body exceeds limit or is empty")
         return n
 
+    def proxy_mcp(self, method):
+        """Forward /mcp to the loopback MCP server (official SDK, Streamable HTTP)."""
+        n = int(self.headers.get("Content-Length") or 0) if method == "POST" else 0
+        if not 0 <= n <= MAX_MCP_BODY:
+            raise Rejected("MCP request too large")
+        body = self.rfile.read(n) if n else None
+        headers = {k: v for k, v in self.headers.items() if k.lower() in (
+            "content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id", "host")}
+        c = http.client.HTTPConnection("127.0.0.1", MCP_PORT, timeout=150)
+        try:
+            try:
+                c.request(method, self.path, body=body, headers=headers)
+                r = c.getresponse()
+            except OSError:
+                return self.send(503, {"error": "MCP server is starting or unavailable; retry in a few seconds"})
+            self.send_response(r.status)
+            for k, v in r.getheaders():
+                if k.lower() in ("content-type", "mcp-session-id", "cache-control", "content-length", "allow", "www-authenticate"):
+                    self.send_header(k, v)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            while chunk := r.read1(65536):
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        finally:
+            c.close()
+
     def route(self, method):
         if self.path == "/healthz" and method == "GET":
             return self.send(200, {"status": "ok", "version": VERSION})
+        server = cast(VideoServer, self.server)
+        parts = self.path.split("/")
+        if method == "GET" and self.path == "/upload":
+            self.send_response(200)
+            for k, v in (("Content-Type", "text/html; charset=utf-8"), ("Content-Length", str(len(UPLOAD_PAGE))),
+                         ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
+                         ("Content-Security-Policy", UPLOAD_CSP), ("Referrer-Policy", "no-referrer")):
+                self.send_header(k, v)
+            self.end_headers()
+            return self.wfile.write(UPLOAD_PAGE)
+        if method == "POST" and len(parts) == 4 and parts[1:3] == ["v1", "uploads"]:
+            # One-time capability URL from create_upload: the token in the path is the credential.
+            with server.uploads_lock:
+                now = time.time()
+                for k in [k for k, exp in server.uploads.items() if exp < now]:
+                    del server.uploads[k]
+                ok = any(hmac.compare_digest(parts[3], k) for k in server.uploads) and server.uploads.pop(parts[3], 0) >= now
+            if not ok:
+                return self.send(403, {"error": "upload URL unknown, used or expired; ask for a new one (create_upload)"})
+            if self.headers.get("Content-Type", "").split(";")[0].strip() not in UPLOAD_TYPES:
+                raise Rejected("Content-Type must be video/mp4 (curl: -H 'Content-Type: video/mp4')")
+            return self.send(201, server.store.create(self.rfile, self.length(MAX_UPLOAD)))
         if not self.authorize():
             return
-        parts = self.path.split("/")
-        store = cast(VideoServer, self.server).store
+        if self.path == "/mcp" or self.path.startswith("/mcp?"):
+            if method not in ("GET", "POST", "DELETE"):
+                return self.send(405, {"error": "method not allowed"})
+            return self.proxy_mcp(method)
+        if method == "POST" and self.path == "/v1/uploads":
+            n = int(self.headers.get("Content-Length") or "0") if (self.headers.get("Content-Length") or "0").isdigit() else -1
+            if not 0 <= n <= 4096 or self.headers.get("Transfer-Encoding"):
+                raise Rejected("upload request body must be empty or a small JSON object")
+            self.rfile.read(n)
+            token = secrets.token_urlsafe(32)
+            with server.uploads_lock:
+                if len(server.uploads) >= 64:
+                    server.uploads.pop(min(server.uploads, key=server.uploads.get))
+                server.uploads[token] = time.time() + UPLOAD_TTL
+            return self.send(201, {"path": "/v1/uploads/" + token, "expires_in_s": UPLOAD_TTL, "one_time": True})
+        if method == "GET" and self.path == "/v1/projects":
+            return self.send(200, {"projects": server.store.projects()})
+        store = server.store
         if method == "GET" and self.path == "/v1/capabilities":
             return self.send(200, {"version": VERSION, "upstream_commit": UPSTREAM,
                 "operations": ["upload_mp4", "workflow_stages", "read_workflow_docs", "submit_edit_plan_preview", "persist_transcript_decisions", "burn_timed_captions", "fixed_protected_crop", "cut_edge_review_artifacts", "poll_job", "download_preview", "delete_project"],
@@ -676,14 +900,36 @@ def make_server(root, token, host="127.0.0.1", port=8787):
         raise ValueError("VIDEO_API_TOKEN, when set, must be at least 32 non-whitespace ASCII characters")
     server = VideoServer((host, port), Handler)
     server.token = token
+    server.uploads, server.uploads_lock = {}, threading.Lock()
     server.store = Store(root)
     return server
+
+
+def supervise_mcp(port, token):
+    """Run mcp_server.py (needs /opt/venv's mcp SDK) on loopback; restart it if it dies."""
+    python = os.environ.get("VIDEO_MCP_PYTHON", "/opt/venv/bin/python")
+    script = Path(__file__).with_name("mcp_server.py")
+    if not Path(python).is_file() or not script.is_file():
+        return None
+    env = {k: v for k, v in os.environ.items() if k in ("PATH", "LANG", "VIDEO_DATA_DIR", "VIDEO_PUBLIC_URL", "TMPDIR", "HOME")}
+    env.update({"VIDEO_INTERNAL_API": f"http://127.0.0.1:{port}", "VIDEO_API_TOKEN": token, "VIDEO_VERSION": VERSION,
+                "MCP_INTERNAL_PORT": str(MCP_PORT), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"})
+
+    def loop():
+        while True:
+            started = time.monotonic()
+            subprocess.run([python, "-I", str(script)], env=env, stdin=subprocess.DEVNULL)
+            time.sleep(1 if time.monotonic() - started > 30 else 10)
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    return thread
 
 
 if __name__ == "__main__":
     os.umask(0o077)
     server = make_server(os.environ.get("VIDEO_DATA_DIR", "/data"), os.environ.get("VIDEO_API_TOKEN", ""),
                          os.environ.get("VIDEO_BIND", "127.0.0.1"), int(os.environ.get("VIDEO_PORT", "8787")))
+    supervise_mcp(server.server_address[1], server.token)
     try:
         server.serve_forever()
     finally:

@@ -1,6 +1,7 @@
 *
 !Dockerfile
 !service.py
+!mcp_server.py
 !editing.py
 !client.py
 !workflow.py

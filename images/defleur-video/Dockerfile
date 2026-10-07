@@ -13,7 +13,7 @@ RUN uv venv --python /usr/bin/python3 /opt/venv \
        --index-strategy unsafe-best-match -r /tmp/requirements.lock \
     && rm -rf /opt/venv/lib/python3.12/site-packages/torch/include /opt/venv/lib/python3.12/site-packages/torch/test \
     && find /opt/venv -name '__pycache__' -prune -exec rm -rf {} + \
-    && /opt/venv/bin/python -c "import torch, stable_whisper, numpy, matplotlib, PIL, onnxruntime; print(torch.__version__)"
+    && /opt/venv/bin/python -c "import torch, stable_whisper, numpy, matplotlib, PIL, onnxruntime, uvicorn; import mcp.server.mcpserver; print(torch.__version__)"
 
 FROM ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 VIDEO_BIND=0.0.0.0 VIDEO_DATA_DIR=/data \
@@ -23,12 +23,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ffmpeg 
     && mkdir /app /data && chown 1000:1000 /data
 RUN test -f /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf && fc-match -f '%{file}' 'sans-serif:style=Bold' | grep -q '^/usr/share/fonts/truetype/dejavu/'
 COPY --from=venv /opt/venv /opt/venv
-LABEL org.opencontainers.image.source="https://github.com/humanitylabs-org/wizard-app-store" org.opencontainers.image.description="DeFleur Video testing API (audio/edit workflow)"
+LABEL org.opencontainers.image.source="https://github.com/humanitylabs-org/wizard-app-store" org.opencontainers.image.description="DeFleur Video testing API + MCP endpoint (audio/edit workflow)"
 # James' plugin files, byte-for-byte (upstream commit 30768288eb1308b18216a5df5eb4648fbce3e55b, MIT per plugin.json).
 COPY defleur/ /opt/defleur/
 COPY NOTICE /opt/defleur/NOTICE
 WORKDIR /app
-COPY service.py editing.py client.py workflow.py transcriber.py scan_windows.py /app/
+COPY service.py editing.py client.py workflow.py transcriber.py scan_windows.py mcp_server.py /app/
 RUN /opt/venv/bin/python -I /opt/defleur/skills/defleur-audio/scripts/test_audio_gate.py
 USER 1000:1000
 EXPOSE 8787
