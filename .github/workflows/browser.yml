@@ -1,0 +1,31 @@
+name: Validate Browser
+on:
+  push:
+    branches: [main]
+    paths: ['apps/browser/**', 'scripts/smoke-browser.py', 'images/defleur-video/capture/package*.json', 'scripts/translate-video-recipe.mjs', '.github/workflows/browser.yml']
+  pull_request:
+    branches: [main]
+    paths: ['apps/browser/**', 'scripts/smoke-browser.py', '.github/workflows/browser.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci && npm test && npx tsc --noEmit
+      - name: Real Runtipi translation, permission step, puppeteer-core render + screenshot over the app network, recreate and restart
+        shell: bash
+        run: TMPDIR="$RUNNER_TEMP" python3 scripts/smoke-browser.py | tee "$RUNNER_TEMP/browser-lifecycle.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-verification
+          path: ${{ runner.temp }}/browser-lifecycle.json
+# The image is the unmodified upstream chromedp/headless-shell pinned by digest; nothing is published here.

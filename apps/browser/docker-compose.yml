@@ -1,0 +1,24 @@
+services:
+  browser:
+    # Unmodified chromedp/headless-shell (MIT packaging; Chromium BSD-3-Clause), pinned by digest.
+    image: chromedp/headless-shell:155.0.8059.40@sha256:0dc9356ce1428962cddcf938dab712a8c56de79adc326f9138298f13df440071
+    user: "1000:1000"
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    shm_size: 2g
+    pids_limit: 4096
+    mem_limit: 6g
+    memswap_limit: 6g
+    tmpfs: ["/tmp:rw,nosuid,size=2g"]
+    environment:
+      HOME: /tmp
+    # DevTools has no authentication: never publish it on the LAN. Other Runtipi apps use
+    # http://browser:9222 on the Runtipi network; the host itself gets loopback only.
+    ports: ["127.0.0.1:${APP_PORT}:9222"]
+    x-runtipi:
+      is_main: true
+x-runtipi:
+  schema_version: 2
+  overrides: []

@@ -19,7 +19,7 @@ Every Wizard app is exactly one of four types. The type is shown at the start of
 | Type | What it is | Example |
 |---|---|---|
 | **Agent** | An AI agent backend | Hermes Agent |
-| **Service** | Backend with no web page of its own, used by agents and other apps | Transcriber, Secret Drop, DeFleur Video |
+| **Service** | Backend with no web page of its own, used by agents and other apps | Transcriber, Browser, Secret Drop, DeFleur Video |
 | **View** | Frontend only; connects to a backend that runs elsewhere | Hermes Frontend 3 |
 | **External** | Holds the key for an outside service so other apps can use it | none yet |
 
@@ -34,6 +34,8 @@ Keep it on a trusted private network. Disabling Runtipi domain exposure is not a
 ## Services
 
 **Transcriber**: shared local speech-to-text with word timings, using the unmodified [Speaches](https://github.com/speaches-ai/speaches) CPU server pinned by digest, with its optional web UI turned off. Other apps and Hermes call its OpenAI-compatible API at `http://transcriber:8000/v1` (inside Runtipi) or `http://<server>:8791/v1`. Verified by `scripts/smoke-transcriber.py`.
+
+**Browser**: one shared headless Chromium for apps that need a real browser (DeFleur Video uses it to capture motion graphics). It is the unmodified [chromedp/headless-shell](https://github.com/chromedp/docker-headless-shell) image (MIT packaging, Chromium BSD-3-Clause), pinned by digest; no UI, no settings, stop the app to turn it off. Other apps connect with Puppeteer or the DevTools Protocol at `http://browser:9222` inside Runtipi; the host port 8793 is bound to loopback only because DevTools has no password. Chosen over browserless/chromium, which is SSPL-1.0 or a paid commercial license. Verified by `scripts/smoke-browser.py`.
 
 **Secret Drop**: a one-time, write-only way to give any agent an API key or password without pasting it into chat. The agent sends you a link. Your browser encrypts the value to that agent's own public key (HPKE: X25519 + AES-256-GCM, pure-JS so it works over plain `http://` on Tailscale), and the agent picks it up once and decrypts it locally. The app relays ciphertext only and keeps nothing long-term. Agents fetch instructions and a single-file client from `http://<server>:8792/SKILL.md` and `/client.py`. Verified by `scripts/smoke-secret-drop.py`, which runs a real Chromium in an insecure context. [Design and trust model](images/secret-drop/README.md).
 

@@ -79,6 +79,29 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
         expect(config.uid).toBe(1000);
       });
     }
+    if (id === "browser") {
+      test("vanilla pinned headless Chromium, private, generous limits", () => {
+        const s = compose.services[id];
+        expect(Object.keys(compose.services)).toEqual([id]);
+        expect(s.image).toMatch(new RegExp(`^chromedp/headless-shell:${config.version.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`));
+        for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "command", "entrypoint", "volumes"]) expect(s[key]).toBeUndefined();
+        expect(s.user).toBe("1000:1000");
+        expect(s.read_only).toBe(true);
+        expect(s.cap_drop).toEqual(["ALL"]);
+        expect(s.security_opt).toEqual(["no-new-privileges:true"]);
+        expect(s.init).toBe(true);
+        // Unauthenticated DevTools: loopback-only on the host, Runtipi network for other apps.
+        expect(s.ports).toEqual(["127.0.0.1:${APP_PORT}:9222"]);
+        expect(s["x-runtipi"]).toEqual({is_main: true});
+        expect(parseInt(s.mem_limit)).toBeGreaterThanOrEqual(4);
+        expect(s.memswap_limit).toBe(s.mem_limit);
+        expect(s.pids_limit).toBeGreaterThanOrEqual(1024);
+        expect(s.shm_size).toBe("2g");
+        expect(config.exposable).toBe(false);
+        expect(config.form_fields).toEqual([]);
+        expect([8787, 8791, 8792, 9119, 9120]).not.toContain(config.port);
+      });
+    }
     if (id === "hermes-frontend-3") {
       test("separate unprivileged frontend with no agent state or secrets", () => {
         const s = compose.services[id];
