@@ -237,7 +237,7 @@ def resources():
 
 
 def ensure_resources(frames, label, memory_bytes=1536 * 1024**2):
-    need = frames * FRAME_BYTES * 2 + 1024**3
+    need = frames * FRAME_BYTES * 2 + int(os.environ.get("VIDEO_DISK_RESERVE_MB", "1024")) * 1024**2
     free = shutil.disk_usage(Path(os.environ.get("VIDEO_DATA_DIR", "/data")) if Path(os.environ.get("VIDEO_DATA_DIR", "/data")).is_dir() else "/").free
     if free < need:
         raise Rejected(f"{label} needs about {need // 1024**2} MiB free disk for {frames} frames; {free // 1024**2} MiB free. Delete old projects (delete_project) or free disk.")

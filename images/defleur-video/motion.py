@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import re
+import os
 import shutil
 from pathlib import Path
 
@@ -235,8 +236,8 @@ def store_asset(project: Path, rel: str, stream, length: int) -> dict:
         raise Rejected(f"{ext} assets are limited to {MAX_ASSET[ext] >> 20} MiB")
     if sum(r["bytes"] for r in tree(project)) + length > MAX_TREE:
         raise Rejected("motion folder would exceed 4 GiB; delete unused assets by resubmitting")
-    if shutil.disk_usage(project).free < length + (1 << 30):
-        raise Rejected("not enough free disk for this asset plus a 1 GiB reserve")
+    if shutil.disk_usage(project).free < length + int(os.environ.get("VIDEO_DISK_RESERVE_MB", "1024")) * 1024 * 1024:
+        raise Rejected("not enough free disk for this asset plus the disk reserve (VIDEO_DISK_RESERVE_MB, default 1 GiB)")
     target = src_dir(project) / rel
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = target.with_name(target.name + ".part")

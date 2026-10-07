@@ -9,7 +9,7 @@ IMAGE=${VIDEO_IMAGE:-wizard-defleur-video:0.6.0-testing}
 docker run --rm --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges --memory 8g --memory-swap 8g \
   --pids-limit 2048 --tmpfs /scratch:rw,noexec,nosuid,size=1024m,mode=1777 \
-  -e TMPDIR=/scratch \
+  -e TMPDIR=/scratch -e VIDEO_DISK_RESERVE_MB=64 \
   --mount "type=bind,source=$ROOT/test_service.py,target=/app/test_service.py,readonly" \
   --entrypoint /usr/bin/python3 "$IMAGE" -c '
 import unittest, pathlib, json, os, subprocess

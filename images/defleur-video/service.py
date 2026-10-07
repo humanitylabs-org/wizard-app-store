@@ -41,6 +41,7 @@ MAX_MCP_BODY = 8 * 1024 * 1024
 MAX_MOTION_JSON = 6 * 1024 * 1024
 MCP_PORT = int(os.environ.get("MCP_INTERNAL_PORT", "8788"))
 UPLOAD_TTL = 1800
+DISK_RESERVE = int(os.environ.get("VIDEO_DISK_RESERVE_MB", "1024")) * 1024 * 1024
 NORMALIZE_THREADS = max(2, min(8, os.cpu_count() or 2))
 UPLOAD_SECONDS = 3600
 UPLOAD_TYPES = ("video/mp4", "video/quicktime", "application/octet-stream")
@@ -391,7 +392,7 @@ def normalize_if_needed(path):
         reasons.append(f"audio {a.get('codec_name')} x{a.get('channels')}")
     if len(streams) != 2:
         reasons.append(f"{len(streams)} streams (keeping one video and one audio)")
-    if __import__("shutil").disk_usage(path.parent).free < path.stat().st_size * 2 + 1024**3:
+    if __import__("shutil").disk_usage(path.parent).free < path.stat().st_size * 2 + DISK_RESERVE:
         raise Rejected("not enough free disk to convert this upload (needs about 2x its size plus 1 GiB)")
     if not NORMALIZE_LOCK.acquire(blocking=False):
         raise Rejected("another upload is being converted; retry in a few minutes")
