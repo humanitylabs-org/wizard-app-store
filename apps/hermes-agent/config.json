@@ -9,8 +9,8 @@
   "categories": [
     "ai"
   ],
-  "description": "Vanilla Hermes Agent with its official dashboard and persistent data, plus a small sync that connects installed Wizard apps.",
-  "tipi_version": 2,
+  "description": "Vanilla Hermes Agent with its official dashboard and persistent data.",
+  "tipi_version": 3,
   "version": "v2026.9.24",
   "source": "https://github.com/NousResearch/hermes-agent",
   "website": "https://hermes-agent.nousresearch.com",
@@ -46,14 +46,6 @@
       "label": "Dashboard session signing secret",
       "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_SECRET",
       "min": 64
-    },
-    {
-      "type": "boolean",
-      "label": "Connect Wizard apps",
-      "env_variable": "WIZARD_APPS_SYNC",
-      "required": false,
-      "default": true,
-      "hint": "Connects installed Wizard apps to Hermes and keeps a wizard-apps skill up to date. Never edits your own settings. Turn off to remove only what it added."
     }
   ]
 }

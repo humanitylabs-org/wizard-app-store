@@ -20,25 +20,5 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npx tsc --noEmit
-      - name: Wizard apps sync unit tests (deterministic core, idempotent Hermes adapter)
-        run: python3 -m unittest discover -s sidecars/wizard-apps -v
-      - name: Official image startup, authentication, persistence, and wizard-apps sidecar
+      - name: Official image startup, authentication, and persistence
         run: python3 scripts/smoke.py
-  wizard-apps-e2e:
-    # Real Runtipi 4.8.0 recipes: Hermes Agent + wizard-apps sync + DeFleur Video on one shared network.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm ci
-      - name: Free disk for the Hermes and DeFleur Video images
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-      - name: Auto-connect, owner settings untouched, stop/start, update, off switch
-        env:
-          VIDEO_TEST_IMAGE: ghcr.io/humanitylabs-org/defleur-video:0.6.0-testing
-          WIZARD_APPS_STORE_REF: ${{ github.sha }}
-        run: python3 scripts/e2e-wizard-apps.py
