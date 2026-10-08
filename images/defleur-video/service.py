@@ -107,12 +107,15 @@ def mp4_structure(path, allow_mov=False):
 
     The edit source is always ordinary self-contained MP4. With allow_mov (upload
     conversion only) a self-contained QuickTime .mov is also accepted: brand qt,
-    up to 8 tracks (iPhone metadata tracks) and self-reference alis/url drefs; it is
-    then converted to MP4. Fragmented, reference or compressed movies stay rejected.
+    up to 16 tracks (real iPhone clips carry several mebx metadata tracks, a timecode
+    track and, with spatial audio, a second APAC audio track; some tracks have no
+    dref) and self-reference alis/url drefs; it is then converted to MP4.
+    Fragmented, reference or compressed movies stay rejected. Every rejection names
+    the failing rule and the counts so a phone screenshot is enough to diagnose it.
     Native demuxing additionally has fd-only protocol access. Returns the major brand.
     """
     brands = {b"isom", b"iso2", b"mp41", b"mp42", b"avc1"} | ({b"qt  "} if allow_mov else set())
-    max_traks = 8 if allow_mov else 4
+    max_traks = 16 if allow_mov else 4
     self_refs = {(12, b"url ", 1)} | ({(12, b"alis", 1)} if allow_mov else set())
     major = b""
     count = 0
@@ -160,17 +163,34 @@ def mp4_structure(path, allow_mov=False):
                         raise Rejected("invalid dref")
                     version_flags, entries = struct.unpack(">II", f.read(8))
                     if version_flags != 0 or entries != 1 or length != header + 20:
-                        raise Rejected("only one self-contained dref supported")
+                        raise Rejected(f"only one self-contained data reference per track supported (track {seen[b'trak']}: "
+                                       f"{entries} entries, version/flags {version_flags:#x}, dref {length} bytes)")
                     entry_size, entry_type, flags = struct.unpack(">I4sI", f.read(12))
                     if (entry_size, entry_type, flags) not in self_refs:
-                        raise Rejected("external data references forbidden")
+                        raise Rejected(f"external data references forbidden (track {seen[b'trak']}: "
+                                       f"{entry_type.decode('latin-1')!r} flags {flags}, {entry_size} bytes)")
                 if kind in containers:
                     walk(pos + header, pos + length, depth + 1)
                 pos += length
         walk(0, size)
-    if seen[b"ftyp"] != 1 or seen[b"moov"] != 1 or not seen[b"mdat"] or not 1 <= seen[b"trak"] <= max_traks or \
-            (seen[b"dref"] != seen[b"trak"] if not allow_mov else not 1 <= seen[b"dref"] <= seen[b"trak"]):
-        raise Rejected("incomplete or unsupported MP4 structure")
+    traks, drefs = seen[b"trak"], seen[b"dref"]
+    problems = []
+    if seen[b"ftyp"] != 1:
+        problems.append("needs exactly one ftyp")
+    if seen[b"moov"] != 1:
+        problems.append("needs exactly one moov")
+    if not seen[b"mdat"]:
+        problems.append("no mdat (media data)")
+    if not 1 <= traks <= max_traks:
+        problems.append(f"{traks} tracks (allowed 1..{max_traks})")
+    if allow_mov and not 1 <= drefs <= traks:
+        problems.append(f"{drefs} data references for {traks} tracks (need 1..{traks})")
+    if not allow_mov and drefs != traks:
+        problems.append(f"{drefs} data references for {traks} tracks (need one per track)")
+    if problems:
+        kind = "movie" if allow_mov else "MP4"
+        raise Rejected(f"unsupported {kind} structure: {'; '.join(problems)} [{traks} tracks (max {max_traks}), "
+                       f"{drefs} data references, ftyp={seen[b'ftyp']} moov={seen[b'moov']} mdat={seen[b'mdat']}]")
     return major
 
 
@@ -326,7 +346,7 @@ def loose_input_args():
     """Like input_args but admits phone-size (up to 4096x2304) frames for normalization only."""
     args = input_args()
     args[args.index("-max_pixels") + 1] = str(4096 * 2304)
-    args[args.index("-max_streams") + 1] = "8"
+    args[args.index("-max_streams") + 1] = "16"
     return args
 
 

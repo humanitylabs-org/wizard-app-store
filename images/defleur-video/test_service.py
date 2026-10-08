@@ -762,6 +762,95 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(info[0].get("color_transfer"), "bt709")
         self.request("DELETE", f"/v1/projects/{project['id']}")
 
+    @staticmethod
+    def _boxes(data, start, end, path=()):
+        """(path, offset, kind) for every box, descending into the containers the service walks."""
+        containers = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"dinf", b"edts"}
+        pos = start
+        while pos + 8 <= end:
+            size, kind = int.from_bytes(data[pos:pos + 4], "big"), bytes(data[pos + 4:pos + 8])
+            header = 8
+            if size == 1:
+                size, header = int.from_bytes(data[pos + 8:pos + 16], "big"), 16
+            size = size or end - pos
+            yield path + (kind,), pos, kind
+            if kind in containers:
+                yield from MediaTests._boxes(data, pos + header, pos + size, path + (kind,))
+            pos += size
+
+    def iphone_layout_mov(self, name, text_tracks, strip_dref=0):
+        """Real-iPhone-like .mov: qt brand, HEVC 10-bit HLG video, AAC + a second (ALAC 4-channel, standing in for
+        spatial APAC) audio track, a timecode track and several non-A/V metadata-style tracks; `strip_dref` of them
+        lose their dinf/dref (renamed to a same-size 'free' box), like real iPhone metadata tracks without one."""
+        srt = self.root / "meta.srt"
+        srt.write_text("1\n00:00:00,000 --> 00:00:01,500\nmeta\n")
+        mov = self.root / name
+        cmd = ["/usr/bin/ffmpeg", "-v", "error", "-y", "-i", str(self.source),
+               "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000:duration=2"]
+        for _ in range(text_tracks):
+            cmd += ["-i", str(srt)]
+        cmd += ["-map", "0:v", "-map", "1:a", "-map", "0:a"] + [x for i in range(text_tracks) for x in ("-map", f"{i + 2}:s")]
+        cmd += ["-t", "2", "-c:v", "libx265",
+                "-x265-params", "log-level=error:pools=1:frame-threads=1:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc",
+                "-pix_fmt", "yuv420p10le", "-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc",
+                "-tag:v", "hvc1", "-c:a:0", "alac", "-ac:a:0", "4", "-c:a:1", "aac", "-c:s", "mov_text",
+                "-timecode", "01:00:00:00", "-f", "mov", str(mov)]
+        subprocess.run(cmd, check=True, timeout=180)
+        data = bytearray(mov.read_bytes())
+        self.assertEqual(bytes(data[8:12]), b"qt  ")
+        dinfs = [off for p, off, kind in self._boxes(data, 0, len(data)) if kind == b"dinf"]
+        for off in dinfs[len(dinfs) - strip_dref:] if strip_dref else []:
+            data[off + 4:off + 8] = b"free"  # same size: the track keeps its samples but has no dref
+        mov.write_bytes(bytes(data))
+        traks = sum(1 for p, _, kind in self._boxes(data, 0, len(data)) if kind == b"trak")
+        drefs = sum(1 for p, _, kind in self._boxes(data, 0, len(data)) if kind == b"dref")
+        return mov, traks, drefs
+
+    def test_real_iphone_layout_many_tracks_imports(self):
+        # 1 HEVC HLG video + 2 audio + timecode + 7 text/metadata tracks = 11 tracks (the old limit of 8 rejected this).
+        mov, traks, drefs = self.iphone_layout_mov("IMG_5644-like.mov", text_tracks=7, strip_dref=3)
+        self.assertEqual(traks, 11)
+        self.assertEqual(drefs, 8)  # three metadata tracks without a data reference
+        with self.assertRaisesRegex(service.Rejected, "ISO MP4"):
+            service.mp4_structure(mov)  # strict MP4 check (the edit source) still rejects the original
+        self.assertEqual(service.mp4_structure(mov, allow_mov=True), b"qt  ")
+        status, project = self.request("POST", "/v1/projects", mov.read_bytes(), "video/quicktime")
+        self.assertEqual(status, 201, project)
+        reasons = " | ".join(project["normalization"]["reasons"])
+        for want in ("QuickTime MOV container", "HDR (arib-std-b67)", "HEVC video", "streams (keeping one video and one audio)"):
+            self.assertIn(want, reasons)
+        self.assertEqual(project["original"]["streams"], 11)
+        src = self.server.store.path(project["id"]) / "source.mp4"
+        self.assertIn(src.read_bytes()[8:12], (b"isom", b"mp42"))
+        self.assertEqual(service.mp4_structure(src), src.read_bytes()[8:12])  # converted source passes the strict check
+        info = json.loads(subprocess.run(["/usr/bin/ffprobe", "-v", "error", "-show_entries",
+                                          "stream=codec_type,codec_name,color_transfer,channels", "-of", "json", str(src)],
+                                         capture_output=True, text=True, check=True).stdout)["streams"]
+        self.assertEqual([(s["codec_type"], s["codec_name"]) for s in info], [("video", "h264"), ("audio", "aac")])
+        self.assertEqual(info[0].get("color_transfer"), "bt709")
+        self.request("DELETE", f"/v1/projects/{project['id']}")
+
+    def test_movie_structure_rejection_names_rule_and_counts(self):
+        mov, traks, drefs = self.iphone_layout_mov("too-many.mov", text_tracks=14)
+        self.assertEqual(traks, 18)
+        with self.assertRaises(service.Rejected) as caught:
+            service.mp4_structure(mov, allow_mov=True)
+        msg = str(caught.exception)
+        self.assertIn("unsupported movie structure: 18 tracks (allowed 1..16)", msg)
+        self.assertIn(f"18 tracks (max 16), {drefs} data references, ftyp=1 moov=1 mdat=1", msg)
+        status, body = self.request("POST", "/v1/projects", mov.read_bytes(), "video/quicktime")
+        self.assertEqual(status, 422)
+        self.assertIn("18 tracks (allowed 1..16)", body["error"])
+        # Every track losing its dref is named too.
+        data = bytearray(mov.read_bytes())
+        for _, off, kind in list(self._boxes(data, 0, len(data))):
+            if kind == b"dinf":
+                data[off + 4:off + 8] = b"free"
+        nodref = self.root / "no-dref.mov"
+        nodref.write_bytes(bytes(data))
+        with self.assertRaisesRegex(service.Rejected, r"0 data references for 18 tracks \(need 1\.\.18\)"):
+            service.mp4_structure(nodref, allow_mov=True)
+
     def test_motion_submission_paths_plan_and_asset_upload(self):
         import motion
         import workflow
