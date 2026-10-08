@@ -161,7 +161,7 @@ def main():
         os.chmod(Path(CACHE) / "models", 0o777)  # rootless Docker: container uid 1000 is not the host uid
         vs["volumes"].append(f"{Path(CACHE) / 'models'}:/data/models")
     model = json.loads((ROOT / "apps/transcriber/config.json").read_text())["form_fields"][0]["default"]
-    venv = {**os.environ, "APP_DATA_DIR": str(vdata), "TRANSCRIBER_URL": "http://transcriber:8000", "TRANSCRIBER_MODEL": model}
+    venv = {**os.environ, "APP_DATA_DIR": str(vdata), "ROOT_FOLDER_HOST": str(work), "TRANSCRIBER_URL": "http://transcriber:8000", "TRANSCRIBER_MODEL": model}
     tenv = {**os.environ, "APP_DATA_DIR": str(tdata), "TRANSCRIBER_MODEL": model}
     (work / "t.json").write_text(json.dumps(tc))
     (work / "v.json").write_text(json.dumps(vc))

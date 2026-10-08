@@ -509,7 +509,7 @@ def main():
     model = json.loads((e2e.ROOT / "apps/transcriber/config.json").read_text())["form_fields"][0]["default"]
     browser_default = next(f["default"] for f in json.loads((e2e.ROOT / "apps/defleur-video/config.json").read_text())["form_fields"]
                            if f["env_variable"] == "BROWSER_URL")
-    venv = {**os.environ, "APP_DATA_DIR": str(vdata), "TRANSCRIBER_URL": "http://transcriber:8000", "TRANSCRIBER_MODEL": model,
+    venv = {**os.environ, "APP_DATA_DIR": str(vdata), "ROOT_FOLDER_HOST": str(work), "TRANSCRIBER_URL": "http://transcriber:8000", "TRANSCRIBER_MODEL": model,
             "BROWSER_URL": browser_default}
     tenv = {**os.environ, "APP_DATA_DIR": str(tdata), "TRANSCRIBER_MODEL": model}
     benv = {**os.environ, "APP_DATA_DIR": str(bdata)}

@@ -49,7 +49,8 @@ def main():
         app.mkdir()
         # Runtipi writes form-field defaults into the app env file.
         fields = {f["env_variable"]: f["default"] for f in json.loads((ROOT / "apps/defleur-video/config.json").read_text())["form_fields"]}
-        env = {**os.environ, "APP_DATA_DIR": str(app), **fields}
+        # No media/ under the fake root: Docker creates the bind source root-owned 0755, i.e. not writable by uid 1000.
+        env = {**os.environ, "APP_DATA_DIR": str(app), "ROOT_FOLDER_HOST": str(tmp), **fields}
         recipe = tmp / "compose.json"
         recipe.write_text(json.dumps(compose))
         cmd = ["docker", "compose", "-p", name, "-f", str(recipe)]
@@ -88,6 +89,9 @@ def main():
             assert Client("http://127.0.0.1:" + run(*cmd, "port", "defleur-video", "8787", env=env).rsplit(":", 1)[1], "").request("GET", "/v1/capabilities")["operations"]
             assert health["version"] == "0.6.2-testing"
             report["health"] = health
+            media = client.request("GET", "/v1/capabilities")["media"]
+            report["media_without_files_app"] = media
+            assert media["present"] and media["readable"] and not media["writable"] and "cannot write" in media["fix"], media
             inspect = json.loads(run("docker", "inspect", cid))[0]
             assert inspect["Config"]["User"] == "1000:1000"
             assert inspect["HostConfig"]["ReadonlyRootfs"]

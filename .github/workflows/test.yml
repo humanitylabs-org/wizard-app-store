@@ -22,3 +22,5 @@ jobs:
       - run: npx tsc --noEmit
       - name: Official image startup, authentication, and persistence
         run: python3 scripts/smoke.py
+      - name: Files app - Runtipi media folder permissions, starter folders, 300 MB tus upload/download, optional login
+        run: python3 scripts/smoke-files.py

@@ -76,7 +76,7 @@ test("release workflow tests, runs the two-app e2e, then publishes", () => {
   const workflow = parse(readFileSync(".github/workflows/video.yml", "utf8"));
   const steps = workflow.jobs["video-image"].steps;
   const firstPublish = steps.findIndex((step: {uses?: string; run?: string}) => step.uses === "docker/login-action@v3" || step.run?.includes("docker push"));
-  const lastTest = Math.max(...["scripts/smoke-video.py", "scripts/e2e-video-audio.py", "scripts/e2e-video-mcp.py", "scripts/e2e-video-motion.py"].map(s => steps.findIndex((step: {run?: string}) => step.run?.includes(s))));
+  const lastTest = Math.max(...["scripts/smoke-video.py", "scripts/e2e-video-audio.py", "scripts/e2e-video-mcp.py", "scripts/e2e-video-motion.py", "scripts/e2e-files-video.py"].map(s => steps.findIndex((step: {run?: string}) => step.run?.includes(s))));
   for (const script of ["scripts/e2e-video-audio.py", "scripts/e2e-video-mcp.py", "scripts/e2e-video-motion.py"])
     expect(steps.findIndex((step: {run?: string}) => step.run?.includes(script))).toBeGreaterThan(-1);
   expect(firstPublish).toBeGreaterThan(lastTest);

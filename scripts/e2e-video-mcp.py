@@ -142,7 +142,7 @@ async def flow(url, fixture, truth, report):
             report["server"] = {"name": init.server_info.name, "version": init.server_info.version, "tools": sorted(tools)}
             assert set(tools) == {"workflow_guide", "capabilities", "create_upload", "start_edit", "apply_cuts", "render_final",
                                   "get_status", "list_projects", "delete_project", "preview_framing", "submit_motion",
-                                  "create_asset_upload", "capture_motion"}, tools
+                                  "create_asset_upload", "capture_motion", "list_files", "import_file"}, tools
             assert "motion" in tools["render_final"].lower() and "1080x1920" in tools["render_final"]
             assert "approval" in tools["start_edit"] and "get_status" in tools["start_edit"]
             guide = await tool(s, "workflow_guide")
@@ -287,7 +287,7 @@ def main():
         os.chmod(Path(cache) / "models", 0o777)
         vs["volumes"].append(f"{Path(cache) / 'models'}:/data/models")
     model = json.loads((e2e.ROOT / "apps/transcriber/config.json").read_text())["form_fields"][0]["default"]
-    venv = {**os.environ, "APP_DATA_DIR": str(vdata), "TRANSCRIBER_URL": "http://transcriber:8000", "TRANSCRIBER_MODEL": model}
+    venv = {**os.environ, "APP_DATA_DIR": str(vdata), "ROOT_FOLDER_HOST": str(work), "TRANSCRIBER_URL": "http://transcriber:8000", "TRANSCRIBER_MODEL": model}
     tenv = {**os.environ, "APP_DATA_DIR": str(tdata), "TRANSCRIBER_MODEL": model}
     (work / "t.json").write_text(json.dumps(tc))
     (work / "v.json").write_text(json.dumps(vc))

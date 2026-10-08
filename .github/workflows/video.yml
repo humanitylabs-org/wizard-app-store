@@ -39,6 +39,11 @@ jobs:
         run: |
           set -o pipefail
           E2E_OUT="$RUNNER_TEMP/e2e" E2E_CACHE="$RUNNER_TEMP/e2e-cache" TMPDIR="$RUNNER_TEMP" python3 scripts/e2e-video-motion.py | tee "$RUNNER_TEMP/video-motion.json"
+      - name: Files app + Transcriber + video on one Runtipi-style media folder - iPhone multi-track .mov via Files, import_file, render_final to Videos/Edited, path safety, read-only media
+        shell: bash
+        run: |
+          set -o pipefail
+          E2E_OUT="$RUNNER_TEMP/e2e" E2E_CACHE="$RUNNER_TEMP/e2e-cache" TMPDIR="$RUNNER_TEMP" python3 scripts/e2e-files-video.py | tee "$RUNNER_TEMP/files-video.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
