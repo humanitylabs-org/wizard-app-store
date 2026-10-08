@@ -31,7 +31,7 @@ import secrets
 from typing import cast
 from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.6.2-testing"
+VERSION = "0.6.3-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 8 * 1024 * 1024 * 1024
 MAX_PROJECTS = 8
@@ -263,7 +263,10 @@ def input_args():
     return ["-max_alloc", "67108864", "-threads", "1", "-protocol_whitelist", "fd",
             "-format_whitelist", "mov", "-f", "mov", "-enable_drefs", "0",
             "-use_absolute_path", "0", "-probesize", "1048576", "-analyzeduration", "3000000",
-            "-max_streams", "4", "-max_pixels", "2073600", "-fd", "@FD@", "-i", "fd:"]
+            # H.264 buffers round coded dimensions up to 16-pixel blocks. Keep
+            # probe()'s display-area limit strict; permit only bounded padding here.
+            "-max_streams", "4", "-max_pixels", str(EDIT_PIXELS + 15 * (1920 + 1920) + 225),
+            "-fd", "@FD@", "-i", "fd:"]
 
 
 def probe(source):

@@ -4,7 +4,7 @@
 # faked on loopback here; the real Transcriber runs in scripts/e2e-video-audio.py.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-IMAGE=${VIDEO_IMAGE:-wizard-defleur-video:0.6.2-testing}
+IMAGE=${VIDEO_IMAGE:-wizard-defleur-video:0.6.3-testing}
 [ -n "${VIDEO_SKIP_BUILD:-}" ] || docker build -t "$IMAGE" "$ROOT"
 docker run --rm --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges --memory 10g --memory-swap 10g \

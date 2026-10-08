@@ -737,6 +737,19 @@ class MediaTests(unittest.TestCase):
                                                      {"r_frame_rate": project["normalization"]["fps"]})[0], "constant")
             self.request("DELETE", f"/v1/projects/{project['id']}")
 
+    def test_portrait_1080x1920_h264_passes_probe(self):
+        # H.264 pads 1080 to 1088 coded columns; a strict 2073600 max_pixels rejected every
+        # portrait 1080p source (including our own normalized iPhone 4K output).
+        portrait = self.root / "portrait.mp4"
+        subprocess.run(["/usr/bin/ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30",
+                        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "1", "-c:v", "libx264",
+                        "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", str(portrait)], check=True, timeout=60)
+        meta = service.probe(portrait)
+        self.assertEqual((meta["width"], meta["height"]), (1080, 1920))
+        status, project = self.request("POST", "/v1/projects", portrait.read_bytes(), "video/mp4")
+        self.assertEqual(status, 201, project)
+        self.request("DELETE", f"/v1/projects/{project['id']}")
+
     def test_iphone_mov_hdr_upload_is_converted(self):
         # Like an iPhone .mov: QuickTime brand, HEVC 10-bit HLG HDR, 90-degree rotation, timecode data track.
         mov = self.root / "IMG_0001.mov"
@@ -1219,7 +1232,7 @@ print(json.dumps([a, b]))
         finally:
             del os.environ["BROWSER_URL"]
         self.assertEqual(status, 200)
-        self.assertEqual(caps["version"], "0.6.2-testing")
+        self.assertEqual(caps["version"], "0.6.3-testing")
         b = caps["workflow"]["motion"]["browser"]
         self.assertFalse(b["reachable"])
         self.assertIn("Browser app", b["fix"])

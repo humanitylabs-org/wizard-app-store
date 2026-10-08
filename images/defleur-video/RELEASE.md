@@ -1,3 +1,9 @@
+# Release: 0.6.3-testing (portrait 1080p fix)
+
+- Fix: every portrait 1080x1920 H.264 source was rejected with "native media processing failed", including the app's own conversion of a 4K iPhone recording. H.264 pads 1080 to 1088 coded columns, which exceeded the decoder's 2,073,600 max_pixels. The decoder limit now allows only that block padding; the 1080p display-area limit in probe() is unchanged.
+- Regression test: a 1080x1920 H.264 upload passes probe and creates a project.
+- Verified on the owner's real file: 121.7 s iPhone 4K60 HEVC HLG MP4, 9 streams, 812 MB.
+
 # Release: 0.6.1-testing (iPhone uploads)
 
 - Uploads now accept iPhone `.mov` files (QuickTime brand `qt`, up to 8 tracks, self-reference `alis` drefs). They are always converted to a plain MP4 edit source; the edit source itself stays MP4-only.
