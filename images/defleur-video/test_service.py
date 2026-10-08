@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -851,6 +852,120 @@ class MediaTests(unittest.TestCase):
         with self.assertRaisesRegex(service.Rejected, r"0 data references for 18 tracks \(need 1\.\.18\)"):
             service.mp4_structure(nodref, allow_mov=True)
 
+    def media_root(self, name):
+        media = self.root / name
+        (media / "Videos").mkdir(parents=True)
+        return media
+
+    def test_media_list_import_and_path_safety(self):
+        media = self.media_root("media-a")
+        outside = self.root / "outside.mov"
+        subprocess.run(["/usr/bin/ffmpeg", "-v", "error", "-y", "-i", str(self.source), "-c", "copy", "-f", "mov", str(outside)],
+                       check=True, timeout=60)
+        (media / "Videos" / "IMG_0002.MOV").write_bytes(outside.read_bytes())
+        (media / "Videos" / "notes.txt").write_text("x")
+        (media / "Videos" / "Trip").mkdir()
+        (media / "Videos" / "Trip" / "clip.mp4").write_bytes(self.source.read_bytes())
+        (media / "Videos" / "escape.mov").symlink_to(outside)
+        (media / "Videos" / "linkdir").symlink_to(self.root)
+        (media / "Videos" / "folder.mov").mkdir()
+        os.mkfifo(media / "Videos" / "pipe.mov")
+        with patch.object(service, "MEDIA_DIR", str(media)), patch.object(service, "MEDIA_REQUIRE_MOUNT", False):
+            status, listing = self.request("GET", "/v1/media")
+            self.assertEqual(status, 200, listing)
+            self.assertEqual(sorted(f["path"] for f in listing["files"]), ["Videos/IMG_0002.MOV", "Videos/Trip/clip.mp4"])
+            self.assertTrue(listing["media"]["readable"] and listing["media"]["writable"])
+            status, sub = self.request("GET", "/v1/media?folder=Videos%2FTrip")
+            self.assertEqual([f["path"] for f in sub["files"]], ["Videos/Trip/clip.mp4"])
+            for bad, why in (("../outside.mov", "'..'"), ("Videos/../../outside.mov", "'..'"), ("/etc/passwd.mov", "absolute"),
+                             ("Videos/escape.mov", "not a regular file"), ("Videos/linkdir/outside.mov", "symlink"),
+                             ("Videos/folder.mov", "not a regular file"), ("Videos/pipe.mov", "not a regular file"),
+                             ("Videos/notes.txt", "only video files"), ("", "give a file path"), ("Videos/a\nb.mov", "relative")):
+                status, body = self.request("POST", "/v1/media/import", json.dumps({"path": bad}).encode())
+                self.assertEqual(status, 422, (bad, body))
+                self.assertIn(why, body["error"], bad)
+            status, body = self.request("GET", "/v1/media?folder=..")
+            self.assertEqual(status, 422, body)
+            status, body = self.request("GET", "/v1/media?folder=Videos%2Flinkdir")
+            self.assertEqual(status, 422, body)
+            status, body = self.request("POST", "/v1/media/import", json.dumps({"path": "Videos/missing.mov"}).encode())
+            self.assertEqual(status, 404)
+            self.assertIn("Videos/missing.mov not found in Files", body["error"])
+            before = (media / "Videos" / "IMG_0002.MOV").read_bytes()
+            status, project = self.request("POST", "/v1/media/import", json.dumps({"path": "Videos/IMG_0002.MOV"}).encode())
+            self.assertEqual(status, 201, project)
+            self.assertEqual(project["imported_from"], "Videos/IMG_0002.MOV")
+            self.assertEqual(project["source_name"], "IMG_0002.MOV")
+            self.assertIn("QuickTime MOV container", project["normalization"]["reasons"])
+            self.assertEqual((media / "Videos" / "IMG_0002.MOV").read_bytes(), before)  # the original is never changed
+            self.assertEqual(project["original"]["sha256"], hashlib.sha256(before).hexdigest())
+            self.assertFalse(list(self.server.store.root.glob("*.upload")))
+            self.request("DELETE", f"/v1/projects/{project['id']}")
+
+    def test_media_save_final_never_overwrites(self):
+        media = self.media_root("media-b")
+        final = self.root / "final-for-save.mp4"
+        final.write_bytes(self.source.read_bytes())
+        sha = hashlib.sha256(final.read_bytes()).hexdigest()
+        with patch.object(service, "MEDIA_DIR", str(media)), patch.object(service, "MEDIA_REQUIRE_MOUNT", False):
+            a = service.media_save_final(final, sha, "IMG_5644", "abcd1234")
+            b = service.media_save_final(final, sha, "IMG_5644", "abcd1234")
+            self.assertEqual(a["saved_to"], "Videos/Edited/IMG_5644-edited-abcd1234.mp4")
+            self.assertEqual(b["saved_to"], "Videos/Edited/IMG_5644-edited-abcd1234-2.mp4")
+            for r in (a, b):
+                path = media / r["saved_to"]
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), sha)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o664)
+                self.assertEqual(path.stat().st_uid, os.getuid())
+            self.assertEqual(oct((media / "Videos" / "Edited").stat().st_mode & 0o777), "0o775")
+            self.assertEqual(sorted(p.name for p in (media / "Videos" / "Edited").iterdir()),
+                             ["IMG_5644-edited-abcd1234-2.mp4", "IMG_5644-edited-abcd1234.mp4"])  # no .partial left
+            with self.assertRaisesRegex(service.Rejected, "hash changed"):
+                service.media_save_final(final, "0" * 64, "IMG_5644", "abcd1234")
+            self.assertEqual(len(list((media / "Videos" / "Edited").iterdir())), 2)
+            self.assertEqual(service.media_save_final(final, sha, "../../evil/../x", "ffff0000")["name"], "x-edited-ffff0000.mp4")
+            # Edited replaced by a symlink pointing outside: refused, nothing written outside.
+            shutil.rmtree(media / "Videos" / "Edited")
+            (media / "Videos" / "Edited").symlink_to(self.root)
+            with self.assertRaisesRegex(service.Rejected, "symlink"):
+                service.media_save_final(final, sha, "IMG_5644", "abcd1234")
+            self.assertFalse(list(self.root.glob("IMG_5644-edited-*")))
+
+    def test_media_missing_or_read_only_reports_fix_and_upload_still_works(self):
+        with patch.object(service, "MEDIA_DIR", str(self.root / "no-such-media")), patch.object(service, "MEDIA_REQUIRE_MOUNT", False):
+            status, caps = self.request("GET", "/v1/capabilities")
+            self.assertEqual(status, 200)
+            self.assertFalse(caps["media"]["present"])
+            self.assertIn("not mounted", caps["media"]["fix"])
+            status, body = self.request("GET", "/v1/media")
+            self.assertEqual(status, 409)
+            self.assertIn("not mounted", body["error"])
+            status, body = self.request("POST", "/v1/media/import", json.dumps({"path": "Videos/a.mov"}).encode())
+            self.assertEqual(status, 422)
+            status, project = self.request("POST", "/v1/projects", self.source.read_bytes(), "video/mp4")
+            self.assertEqual(status, 201, project)  # the upload API keeps working
+            self.request("DELETE", f"/v1/projects/{project['id']}")
+        # The image's own (unmounted) /media is never mistaken for the shared folder.
+        self.assertFalse(service.media_status()["present"]) if not os.path.ismount(service.MEDIA_DIR) else None
+        media = self.media_root("media-ro")
+        os.chmod(media / "Videos", 0o555)
+        os.chmod(media, 0o555)
+        try:
+            with patch.object(service, "MEDIA_DIR", str(media)), patch.object(service, "MEDIA_REQUIRE_MOUNT", False):
+                st = service.media_status()
+                if os.getuid() != 0:
+                    self.assertTrue(st["readable"])
+                    self.assertFalse(st["writable"])
+                    self.assertIn("Videos -> Edited".replace("->", "→"), st["fix"])
+                    status, body = self.request("POST", "/v1/media/save-final", json.dumps({"job": "0" * 32}).encode())
+                    self.assertEqual(status, 409)
+                    self.assertIn("cannot write", body["error"])
+                status, listing = self.request("GET", "/v1/media")
+                self.assertEqual(status, 200)  # reading still works
+        finally:
+            os.chmod(media, 0o755)
+            os.chmod(media / "Videos", 0o755)
+
     def test_motion_submission_paths_plan_and_asset_upload(self):
         import motion
         import workflow
@@ -1104,7 +1219,7 @@ print(json.dumps([a, b]))
         finally:
             del os.environ["BROWSER_URL"]
         self.assertEqual(status, 200)
-        self.assertEqual(caps["version"], "0.6.1-testing")
+        self.assertEqual(caps["version"], "0.6.2-testing")
         b = caps["workflow"]["motion"]["browser"]
         self.assertFalse(b["reachable"])
         self.assertIn("Browser app", b["fix"])

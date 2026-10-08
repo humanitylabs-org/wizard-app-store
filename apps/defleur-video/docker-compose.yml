@@ -1,6 +1,6 @@
 services:
   defleur-video:
-    image: ghcr.io/humanitylabs-org/defleur-video:0.6.1-testing
+    image: ghcr.io/humanitylabs-org/defleur-video:0.6.2-testing
     user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
@@ -17,8 +17,11 @@ services:
       TRANSCRIBER_URL: ${TRANSCRIBER_URL}
       BROWSER_URL: ${BROWSER_URL}
       TRANSCRIBER_MODEL: ${TRANSCRIBER_MODEL}
+      VIDEO_MEDIA_DIR: /media
     volumes:
       - ${APP_DATA_DIR}/data:/data
+      # Runtipi's shared media folder: the Files app shows it as the owner's files (sources in Videos/, results in Videos/Edited/).
+      - ${ROOT_FOLDER_HOST}/media:/media
     x-runtipi:
       is_main: true
       internal_port: 8787

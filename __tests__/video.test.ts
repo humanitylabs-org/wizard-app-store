@@ -102,10 +102,12 @@ test("video testing release is private, no-GUI, no token form; optional Transcri
   expect(env.BROWSER_URL).toBe("${BROWSER_URL}");
 });
 
-test("video has independent state, no agent volumes, bounded unprivileged service", () => {
+test("video has independent state plus the shared Files folder, no agent volumes, bounded unprivileged service", () => {
   expect(Object.keys(compose.services)).toEqual(["defleur-video"]);
   const service = compose.services["defleur-video"];
-  expect(service.volumes).toEqual(["${APP_DATA_DIR}/data:/data"]);
+  // Own state plus Runtipi's standard shared media folder (the Files app); nothing else from the host.
+  expect(service.volumes).toEqual(["${APP_DATA_DIR}/data:/data", "${ROOT_FOLDER_HOST}/media:/media"]);
+  expect(service.environment.VIDEO_MEDIA_DIR).toBe("/media");
   expect(service.user).toBe("1000:1000");
   expect(service.read_only).toBe(true);
   expect(service.cap_drop).toEqual(["ALL"]);
@@ -116,7 +118,7 @@ test("video has independent state, no agent volumes, bounded unprivileged servic
   expect(service.cpus).toBeUndefined();
   expect(service.pids_limit).toBeGreaterThanOrEqual(1024);
   expect(service.shm_size).toBe("1g");
-  expect(config.version).toBe("0.6.1-testing");
+  expect(config.version).toBe("0.6.2-testing");
   expect(service.image).toBe(`ghcr.io/humanitylabs-org/defleur-video:${config.version}`);
   expect(service.environment.VIDEO_API_TOKEN).toBeUndefined();
   for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "depends_on"]) {
@@ -130,7 +132,8 @@ test("MCP endpoint ships in the image and is exercised before publish", () => {
   expect(readFileSync("images/defleur-video/requirements.lock", "utf8")).toMatch(/^mcp==2\.0\.0 \\$/m);
   const mcp = readFileSync("images/defleur-video/mcp_server.py", "utf8");
   for (const tool of ["workflow_guide", "capabilities", "create_upload", "start_edit", "apply_cuts", "preview_framing", "submit_motion",
-                      "create_asset_upload", "capture_motion", "render_final", "get_status", "list_projects", "delete_project"])
+                      "create_asset_upload", "capture_motion", "render_final", "get_status", "list_projects", "delete_project",
+                      "list_files", "import_file"])
     expect(mcp).toContain(`def ${tool}(`);
   expect(mcp).not.toMatch(/openai|anthropic|api\.openai/i);
   expect(readFileSync("images/defleur-video/HERMES.md", "utf8")).toContain("hermes mcp add defleur-video --url http://defleur-video:8787/mcp");

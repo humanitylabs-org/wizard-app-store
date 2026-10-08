@@ -102,6 +102,36 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
         expect([8787, 8791, 8792, 9119, 9120]).not.toContain(config.port);
       });
     }
+    if (id === "files") {
+      test("unmodified pinned File Browser on Runtipi's shared media folder only; optional login", () => {
+        const s = compose.services[id];
+        expect(Object.keys(compose.services)).toEqual([id]);
+        expect(s.image).toMatch(new RegExp(`^filebrowser/filebrowser:${config.version.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`));
+        // Only the standard shared folder (as the official store's filebrowser recipes mount it) plus its own database.
+        expect(s.volumes).toEqual(["${ROOT_FOLDER_HOST}/media:/srv", "${APP_DATA_DIR}/data/db:/database"]);
+        for (const key of ["privileged", "network_mode", "pid", "devices", "build", "command"]) expect(s[key]).toBeUndefined();
+        expect(s.read_only).toBe(true);
+        expect(s.cap_drop).toEqual(["ALL"]);
+        // Root only to hand the root-owned media folder (not its contents) to uid 1000, then setuidgid.
+        expect(s.cap_add).toEqual(["CHOWN", "SETUID", "SETGID"]);
+        expect(s.security_opt).toEqual(["no-new-privileges:true"]);
+        const script = s.entrypoint.join("\n");
+        expect(script).not.toMatch(/chown -R|chmod -R/);
+        expect(script).toContain("exec setuidgid user filebrowser");
+        for (const d of ["Videos", "Videos/Edited", "Documents"]) expect(script).toContain(d);
+        expect(script).toContain("--tus.chunkSize 10485760");
+        expect(script).toContain("--auth.method noauth");
+        expect(script).toContain("--auth.method json");
+        expect(script).toContain("--perm.execute=false");
+        expect(s["x-runtipi"]).toEqual({is_main: true, internal_port: 8080});
+        expect(config.form_fields).toHaveLength(1);
+        const pwd = config.form_fields[0];
+        expect([pwd.env_variable, pwd.type, pwd.required, pwd.min]).toEqual(["FILES_PASSWORD", "password", false, 12]);
+        expect(s.environment.FILES_PASSWORD).toBe("${FILES_PASSWORD}");
+        expect(config.description).toMatch(/public domain/);
+        expect([8787, 8791, 8792, 8793, 9119, 9120]).not.toContain(config.port);
+      });
+    }
     if (id === "hermes-frontend-3") {
       test("separate unprivileged frontend with no agent state or secrets", () => {
         const s = compose.services[id];

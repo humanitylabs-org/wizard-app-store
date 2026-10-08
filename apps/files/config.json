@@ -1,0 +1,38 @@
+{
+  "name": "Files",
+  "id": "files",
+  "wizard_type": "view",
+  "available": true,
+  "short_desc": "View: Your own cloud folder for videos, documents and folders, shared by every Wizard app.",
+  "author": "File Browser (filebrowser.org); packaged by Humanity Labs",
+  "port": 8794,
+  "categories": [
+    "media"
+  ],
+  "description": "Unmodified File Browser on Runtipi's shared media folder: upload, download, share and organise videos, documents and folders from any browser, including iPhone Safari (large uploads are sent in resumable chunks). Other apps use the same folder: put a video in Videos, ask Hermes to edit it with DeFleur Video, and the result lands in Videos/Edited. No login by default: keep Runtipi private (e.g. Tailscale). Set a password before exposing it on a public domain.",
+  "tipi_version": 1,
+  "version": "v2.63.23",
+  "source": "https://github.com/filebrowser/filebrowser",
+  "website": "https://filebrowser.org",
+  "exposable": true,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791469952000,
+  "updated_at": 1791469952000,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "password",
+      "label": "Password (optional; turns the login on)",
+      "env_variable": "FILES_PASSWORD",
+      "required": false,
+      "min": 12,
+      "hint": "Leave empty for no login, only if Runtipi is reachable just on your private network (e.g. Tailscale). With a password, sign in as user admin. Always set one before exposing Files on a public domain."
+    }
+  ]
+}

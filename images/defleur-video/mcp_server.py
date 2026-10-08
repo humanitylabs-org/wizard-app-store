@@ -16,6 +16,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -106,7 +107,7 @@ GUIDE = {
         "captions, his 1080x1920 encode and delivery gate. You (the agent) are the editor and motion author; the app never calls an LLM."),
     "steps": [
         "1. capabilities - check the Transcriber is reachable and its model installed; if not, relay the exact fix.",
-        "2. create_upload - get a one-time upload URL and curl command (or point the owner to the /upload page). Files never travel through MCP.",
+        "2. Get the video. Normal path: the owner puts it in the Files app (Files -> Videos) and tells you the file name. Call list_files() to find it, then import_file(path) - it returns the project id ('id'). Fallback only (no Files app): create_upload gives a one-time upload URL, curl command and /upload page. Video bytes never travel through MCP.",
         "3. start_edit(project_id) - transcribes and aligns; call get_status(run_id) until state is 'done' to get the transcript, word timings, filler/pause candidates, proposed cuts and editorial rules.",
         "4. Show the owner the proposed cut list (time, words, reason) and any untranscribed_sound gaps (sound with no transcript: maybe a skipped sentence; not proposed), and get approval or changes. Do not skip this.",
         "5. apply_cuts(project_id, segments) with the approved ranges TO REMOVE; call get_status(run_id) until 'done' for the report: seconds removed, words lost/added, gate pass/fail and download URLs.",
@@ -114,7 +115,7 @@ GUIDE = {
         "7. Optional framing: preview_framing(project_id, framing) shows the fixed crop per setup with face evidence images. For a two-person shot pass framing={'targets': {'<kept segment index>': 'left'|'right'|'center'|'largest'}} (a change of target starts a new setup); 'new_setup_at': [index] forces a new setup.",
         "8. Optional motion graphics (James' piece 3; read motion_contract below): submit_motion -> capture_motion 'smoke' -> look at the frames -> capture_motion 'proof' -> look again. Skip this for a plain captioned talking-head video.",
         "9. render_final(project_id, options) - options {} for live footage + captions, {'motion': true} after a passing proof capture, plus 'framing' if you previewed one. It does the face audit and fixed crops, full motion capture if requested, burned captions, James' 1080x1920 encode, full decode, pixel checks, final re-transcription and James' delivery gate; call get_status(run_id) until 'done'.",
-        "10. Report in plain words: resolution, duration, crop result (and any face flag), motion beats and inserts, caption count and suppressions, delivery gate pass/fail, words lost, and the final MP4 download link. Ask the owner to watch it on a phone. Use delete_project when finished.",
+        "10. Report in plain words: resolution, duration, crop result (and any face flag), motion beats and inserts, caption count and suppressions, delivery gate pass/fail, words lost, and where the finished video is: render_final saves it to Files -> Videos -> Edited (saved_to_files.path) as well as the final_mp4 download link. Ask the owner to watch it on a phone (open Files on the phone, Videos -> Edited, tap the file, then Download or Share). Use delete_project when finished (the copy in Files stays).",
     ],
     "motion_contract": MOTION_CONTRACT,
     "long_work": "start_edit, apply_cuts, capture_motion and render_final return immediately with a run_id. Keep calling get_status(run_id) (each call waits up to ~55 s) until state is 'done' or 'failed'. Transcription and alignment of a few minutes of speech can take several minutes on CPU.",
@@ -123,6 +124,9 @@ GUIDE = {
                       "capture_motion: captured frame images and a contact sheet to look at. render_final: the finished 1080x1920 H.264/AAC MP4 "
                       "(fixed crop per setup, optional motion graphics and fullscreen inserts, burned-in captions), crop ledger, face audit, "
                       "decode/pixel/motion-window checks and James' delivery gate receipt."),
+    "files": ("The Files app is the owner's shared folder on this server (Runtipi's media folder, mounted here at /media). "
+              "Source videos normally live in Files -> Videos; finished videos are saved to Files -> Videos -> Edited as "
+              "<source name>-edited-<id>.mp4 (never overwriting). Paths you pass are relative to Files, e.g. 'Videos/IMG_5644.mov'."),
     "limits": ("One video and one audio stream per upload, at most 20 minutes and 8 GiB, up to 4K (edited at 1080p); finished video up to 6 minutes; "
                "8 projects at a time. capabilities reports host RAM, free disk and per-job estimates."),
 }
@@ -153,6 +157,11 @@ def api(method: str, path: str, body: Any = None, raw: bool = False, timeout: fl
 
 class ToolError(Exception):
     pass
+
+
+def media_fix(caps: dict) -> str | None:
+    m = caps.get("media") or {}
+    return m.get("fix")
 
 
 def artifact(job: str, name: str):
@@ -573,6 +582,14 @@ def do_render_final(run: dict) -> dict:
     if gate_job:
         downloads["delivery_gate_result_json"] = dl(gate_job["id"], "delivery-gate-result.json")
         downloads["delivery_audio_gate_receipt_json"] = dl(gate_job["id"], "audio-gate.json")
+    run["step"] = "save-to-files"
+    save(run)
+    try:
+        saved = api("POST", "/v1/media/save-final", {"job": render["id"]}, timeout=600)
+        files = {"saved": True, "path": saved["saved_to"], "bytes": saved["bytes"], "sha256": saved["sha256"],
+                 "where_to_tell_the_owner": "It's in Files -> Videos -> Edited -> " + saved["name"]}
+    except ToolError as e:
+        files = {"saved": False, "error": str(e), "where_to_tell_the_owner": "Not saved to Files; use the final_mp4 download link."}
     lost = gs.get("words_lost_vs_edited")
     failed_checks = [k for k, v in rs["checks"].items() if v is False]
     mg = rs.get("motion_layer")
@@ -604,6 +621,7 @@ def do_render_final(run: dict) -> dict:
                           "min_source_region_correlation": rs["checks"]["min_source_region_correlation"],
                           "scope": "James' audio_gate.py --stage delivery: evidence completeness, custody and thresholds. Final acoustic-window findings are app-written; it is not human viewing or listening approval."},
         "motion_graphics": rs["motion_layer"],
+        "saved_to_files": files,
         "downloads": downloads,
         "auth_note": "Downloads need 'Authorization: Bearer ***' when the app has a token set." if TOKEN else None,
         "render_seconds": round(time.monotonic() - t0, 1),
@@ -612,7 +630,8 @@ def do_render_final(run: dict) -> dict:
         "jobs": {"face_crop": crop["id"], "final_render": render["id"], "final_asr": fasr["id"], "final_scan": fscan["id"],
                  "delivery_gate": gate_job["id"] if gate_job else None},
         "next": ("Tell the owner in plain words: resolution, duration, how the speaker is framed (and any crop flag), caption count, "
-                 "delivery gate pass/fail with the reason, any words lost, and the final_mp4 link. Ask them to watch it on a phone before "
+                 "delivery gate pass/fail with the reason, any words lost, and where the video is (saved_to_files.where_to_tell_the_owner, "
+                 "else the final_mp4 link). Ask them to watch it on a phone before "
                  "posting. If a face flag or lost word appears, say so plainly; do not call the video approved."),
     }
 
@@ -621,9 +640,9 @@ def do_render_final(run: dict) -> dict:
 
 mcp = MCPServer("defleur-video", version=VERSION, instructions=(
     "DeFleur Video edits talking-head videos on the owner's own server. Start with workflow_guide, then capabilities. "
-    "Flow: create_upload -> (owner uploads with the curl command or /upload page) -> start_edit -> get_status until done -> "
+    "Flow: list_files -> import_file (the owner's video in Files -> Videos; create_upload is the fallback) -> start_edit -> get_status until done -> "
     "show the proposed cuts and get approval -> apply_cuts -> get_status until done -> render_final -> get_status until done -> "
-    "report and share the final 1080x1920 MP4 link. Optional: preview_framing for per-setup crops / speaker choice, and motion graphics "
+    "report where the finished 1080x1920 MP4 is (saved to Files -> Videos -> Edited) and its link. Optional: preview_framing for per-setup crops / speaker choice, and motion graphics "
     "(submit_motion -> capture_motion smoke -> proof -> render_final with {'motion': true}); the contract is in workflow_guide.motion_contract."))
 
 
@@ -636,7 +655,7 @@ def _result(fn, *a, **kw):
 
 @mcp.tool(description=(
     "Call this FIRST when the user wants to edit a video. Explains what DeFleur Video does on this server, the exact order of "
-    "tools to call (capabilities -> create_upload -> start_edit -> get_status -> owner approval -> apply_cuts -> get_status -> "
+    "tools to call (capabilities -> list_files / import_file (or create_upload) -> start_edit -> get_status -> owner approval -> apply_cuts -> get_status -> "
     "optional preview_framing / submit_motion -> capture_motion smoke -> proof -> render_final), James DeFleur's motion "
     "contract for motion graphics and fullscreen inserts (motion_contract), limits, and what is not automated. No arguments."))
 def workflow_guide() -> dict:
@@ -646,8 +665,8 @@ def workflow_guide() -> dict:
 @mcp.tool(description=(
     "Check the app is ready before editing (second step, after workflow_guide). Reports app version, limits, whether the "
     "Transcriber app is reachable and has its speech model installed, whether the Browser app (needed only for motion graphics) "
-    "is reachable, alignment model cache, host RAM / free disk / per-job estimates, and the exact fix to relay to the owner when "
-    "something is broken."))
+    "is reachable, whether the shared Files folder is readable/writable (files), alignment model cache, host RAM / free disk / "
+    "per-job estimates, and the exact fix to relay to the owner when something is broken."))
 def capabilities() -> dict:
     def go():
         caps = api("GET", "/v1/capabilities")
@@ -668,7 +687,9 @@ def capabilities() -> dict:
         browser = {**b, "fix": None if b.get("reachable") else ("Install the Browser app from the Wizard App Store on this same Runtipi server "
                                                                    "(it answers as http://browser:9222), or set BROWSER_URL in DeFleur Video's settings."),
                    "needed_for": "motion graphics and fullscreen inserts only; plain render_final works without it"}
-        return {"version": caps["version"], "ready": fix is None, "transcriber": t, "fix": fix, "browser": browser,
+        files = {**(caps.get("media") or {}), "needed_for": "list_files, import_file and saving finished videos to Files -> Videos -> Edited; "
+                                                           "create_upload works without it"}
+        return {"version": caps["version"], "ready": fix is None, "transcriber": t, "fix": fix, "browser": browser, "files": files,
                 "motion_ready": bool(b.get("reachable")) and bool(wf.get("motion", {}).get("gsap_present")),
                 "resources": wf.get("resources"),
                 "alignment": {"model": al.get("model"), "cached": al.get("cached"),
@@ -678,7 +699,7 @@ def capabilities() -> dict:
 
 
 @mcp.tool(description=(
-    "Step 2 of an edit: get a one-time upload URL (expires in 30 minutes) plus an exact curl command for the owner's video file, "
+    "Fallback when the video is not in the Files app (prefer list_files + import_file): get a one-time upload URL (expires in 30 minutes) plus an exact curl command for the owner's video file, "
     "and the browser upload page URL. Video bytes never go through MCP. Run the curl command yourself if you have the file on "
     "a machine that can reach this server, or give it to the owner. The upload answers with JSON containing the project id "
     "('id'); pass it to start_edit. HEVC/variable-frame-rate phone footage is converted to H.264 constant frame rate on upload."))
@@ -692,6 +713,58 @@ def create_upload(ctx: Context) -> dict:
                 "browser_page": base + "/upload",
                 "accepts": "MP4/MOV with one video and one audio stream, at most 20 minutes and 8 GiB, up to 4K (normalized to 1080p for editing)",
                 "next": "After the upload returns {\"id\": ...}, call start_edit(project_id=<id>). If this URL expires or was used, call create_upload again."}
+    return _result(go)
+
+
+@mcp.tool(description=(
+    "Step 2 (normal path): list the video files in the owner's Files app (the shared folder on this server). folder is relative "
+    "to Files, default 'Videos' (subfolders included, newest first; 'Videos/Edited' holds finished videos). Use it to find the file "
+    "the owner named (e.g. IMG_5644.mov), then call import_file with its path. If Files is not available, the result says how to fix it."))
+def list_files(folder: str = "Videos") -> dict:
+    def go():
+        try:
+            r = api("GET", "/v1/media?" + urllib.parse.urlencode({"folder": folder}))
+        except ToolError as e:
+            if "404" in str(e):
+                raise ToolError(f"folder '{folder}' not found in Files; try list_files('Videos') or list_files('')") from None
+            raise
+        r["next"] = ("Find the owner's file (match the name they gave, ignoring case) and call import_file(path=<its path>). "
+                     "If it is not listed, ask the owner to put it in Files -> Videos." if r["files"] else
+                     "No videos here. Ask the owner to upload the video into the Files app -> Videos, then call list_files again.")
+        return r
+    return _result(go)
+
+
+@mcp.tool(description=(
+    "Step 2 (normal path): make an edit project from a video in the owner's Files app. path is relative to Files, e.g. "
+    "'Videos/IMG_5644.mov' (from list_files). The file is copied and checked exactly like an upload (limits: 20 min, 8 GiB; iPhone "
+    ".mov, HEVC, HDR and variable frame rate are converted to 1080p H.264 constant frame rate); the original in Files is never "
+    "changed. Absolute paths, '..', symlinks and non-regular files are refused. Large phone videos can take a few minutes to "
+    "convert. Returns the project id ('id'); pass it to start_edit."))
+def import_file(path: str) -> dict:
+    def go():
+        if not isinstance(path, str) or not path.strip():
+            raise ToolError("path is required, e.g. 'Videos/IMG_5644.mov' (see list_files)")
+
+        def work(run):
+            run["step"] = "copy-check-convert"
+            save(run)
+            p = api("POST", "/v1/media/import", {"path": path}, timeout=7500)
+            keep = ("id", "duration", "width", "height", "video_codec", "audio_codec", "imported_from", "normalization", "original")
+            return {**{k: p.get(k) for k in keep if k in p}, "project_id": p["id"],
+                    "next": f"Call start_edit(project_id='{p['id']}') (language optional)."}
+        run = start_run("import_file", "files", {"path": path}, work)
+        end = time.monotonic() + 50
+        while time.monotonic() < end:
+            r = load(run["id"])
+            if r["state"] != "running":
+                if r["state"] == "failed":
+                    raise ToolError(r["error"].split(": ", 1)[-1])
+                return r["result"]
+            time.sleep(0.5)
+        return {"run_id": run["id"], "state": "running",
+                "next": f"Still converting (large phone videos take a few minutes). Call get_status('{run['id']}') until 'done'; "
+                        "its result has the project id."}
     return _result(go)
 
 
@@ -945,7 +1018,7 @@ def get_status(job_or_project: str, wait_s: float = 55) -> dict:
     return _result(go)
 
 
-@mcp.tool(description="List uploaded projects (id, duration, size, created) and the state of each project's latest run.")
+@mcp.tool(description="List edit projects (id, duration, size, created, the Files path it was imported from) and the state of each project's latest run.")
 def list_projects() -> dict:
     def go():
         rows = api("GET", "/v1/projects")["projects"]

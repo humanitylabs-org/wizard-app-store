@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import hashlib
 import workflow
 import motion
+import errno
 import fcntl
 import hmac
 import json
@@ -15,6 +16,7 @@ from pathlib import Path
 import re
 import selectors
 import signal
+import stat
 import sqlite3
 import struct
 import subprocess
@@ -24,11 +26,12 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import http.client
+import urllib.parse
 import secrets
 from typing import cast
 from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.6.1-testing"
+VERSION = "0.6.2-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 8 * 1024 * 1024 * 1024
 MAX_PROJECTS = 8
@@ -45,6 +48,11 @@ DISK_RESERVE = int(os.environ.get("VIDEO_DISK_RESERVE_MB", "1024")) * 1024 * 102
 NORMALIZE_THREADS = max(2, min(8, os.cpu_count() or 2))
 UPLOAD_SECONDS = 3600
 UPLOAD_TYPES = ("video/mp4", "video/quicktime", "application/octet-stream")
+MEDIA_DIR = os.environ.get("VIDEO_MEDIA_DIR", "/media")  # Runtipi's shared runtipi/media folder (the Files app)
+MEDIA_VIDEO_SUFFIXES = (".mov", ".mp4", ".m4v")
+MEDIA_EDITED = ("Videos", "Edited")
+MEDIA_LIST_MAX = 500
+MEDIA_REQUIRE_MOUNT = True  # the image's own empty /media is not the shared folder; tests point MEDIA_DIR at a temp dir
 COMMON_FPS = ["24000/1001", "24/1", "25/1", "30000/1001", "30/1", "50/1", "60000/1001", "60/1"]
 ID = re.compile(r"^[a-f0-9]{32}$")
 # Delivery is never approved by this app. Piece 1 supplies the audio/edit
@@ -479,6 +487,217 @@ def normalize_if_needed(path):
         NORMALIZE_LOCK.release()
 
 
+# ---------- shared Files folder (/media) ----------
+
+def media_parts(rel, allow_root=False):
+    """Validate a path relative to /media. No absolute paths, no '..', no control characters."""
+    if not isinstance(rel, str) or len(rel) > 1024 or any(ord(c) < 32 or c == "\x7f" for c in rel):
+        raise Rejected("path must be text relative to the Files folder, e.g. 'Videos/IMG_5644.mov'")
+    if rel.startswith("/") or rel.startswith("~"):
+        raise Rejected("absolute paths are not allowed; give the path inside Files, e.g. 'Videos/IMG_5644.mov'")
+    parts = [p for p in rel.split("/") if p not in ("", ".")]
+    if ".." in parts:
+        raise Rejected("'..' is not allowed in a Files path")
+    if not parts and not allow_root:
+        raise Rejected("give a file path inside Files, e.g. 'Videos/IMG_5644.mov'")
+    return parts
+
+
+def media_open_dir(parts, create=False):
+    """Open /media/<parts> one component at a time with O_NOFOLLOW, so no symlink can lead outside /media."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+    fd = os.open(MEDIA_DIR, flags)
+    try:
+        for i, part in enumerate(parts):
+            try:
+                nxt = os.open(part, flags | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise FileNotFoundError("/".join(parts[:i + 1]) + " not found in Files") from None
+                try:
+                    os.mkdir(part, 0o775, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                nxt = os.open(part, flags | os.O_NOFOLLOW, dir_fd=fd)
+                os.fchmod(nxt, 0o775)  # the service umask is 077; shared folders stay usable by other apps
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise Rejected(f"'{'/'.join(parts[:i + 1])}' is a symlink or not a folder; Files paths never follow symlinks") from None
+                raise
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def media_open_file(rel):
+    """Open a regular file under /media read-only: O_NOFOLLOW at every step, regular files only."""
+    parts = media_parts(rel)
+    if not parts[-1].lower().endswith(MEDIA_VIDEO_SUFFIXES):
+        raise Rejected("only video files (.mov, .mp4, .m4v) can be imported")
+    dfd = media_open_dir(parts[:-1])
+    try:
+        try:
+            st = os.stat(parts[-1], dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            raise FileNotFoundError("/".join(parts) + " not found in Files") from None
+        if not stat.S_ISREG(st.st_mode):
+            raise Rejected(f"'{'/'.join(parts)}' is not a regular file (symlinks, folders and devices are refused)")
+        try:
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise Rejected(f"'{'/'.join(parts)}' is a symlink; Files paths never follow symlinks") from None
+            raise
+    finally:
+        os.close(dfd)
+    st2 = os.fstat(fd)
+    if not stat.S_ISREG(st2.st_mode) or (st2.st_dev, st2.st_ino) != (st.st_dev, st.st_ino):
+        os.close(fd)
+        raise Rejected(f"'{'/'.join(parts)}' changed while opening; try again")
+    fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+    return os.fdopen(fd, "rb"), st2.st_size, parts
+
+
+def media_list(folder="Videos"):
+    parts = media_parts(folder, allow_root=True)
+    files, skipped = [], 0
+    root = media_open_dir(parts)
+
+    def walk(fd, prefix, depth):
+        nonlocal skipped
+        with os.scandir(fd) as it:
+            entries = sorted(it, key=lambda e: e.name)
+        for e in entries:
+            if e.name.startswith(".") or len(files) >= MEDIA_LIST_MAX:
+                continue
+            rel = "/".join(prefix + [e.name])
+            if e.is_dir(follow_symlinks=False):
+                if depth < 3:
+                    try:
+                        sub = os.open(e.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                    except OSError:
+                        continue
+                    try:
+                        walk(sub, prefix + [e.name], depth + 1)
+                    finally:
+                        os.close(sub)
+            elif e.is_file(follow_symlinks=False) and e.name.lower().endswith(MEDIA_VIDEO_SUFFIXES):
+                st = e.stat(follow_symlinks=False)
+                files.append({"path": rel, "name": e.name, "bytes": st.st_size,
+                              "modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime)),
+                              "edited_output": prefix[:2] == list(MEDIA_EDITED)})
+            else:
+                skipped += 1
+    try:
+        walk(root, parts, 0)
+    finally:
+        os.close(root)
+    files.sort(key=lambda f: f["modified"], reverse=True)
+    return {"folder": "/".join(parts) or ".", "files": files, "truncated": len(files) >= MEDIA_LIST_MAX,
+            "non_video_entries_skipped": skipped}
+
+
+def media_status():
+    """Is the shared Files folder usable? Never raises; reports a plain fix instead."""
+    out = {"mount": MEDIA_DIR, "present": False, "readable": False, "videos_folder": False, "edited_folder": "Videos/Edited",
+           "writable": False, "fix": None}
+    upload_note = " Uploads with create_upload keep working meanwhile."
+    try:
+        st = os.stat(MEDIA_DIR)
+        out["present"] = stat.S_ISDIR(st.st_mode) and (os.path.ismount(MEDIA_DIR) or not MEDIA_REQUIRE_MOUNT)
+    except OSError:
+        pass
+    if not out["present"]:
+        out["fix"] = ("The shared Files folder is not mounted in DeFleur Video (no /media). Update DeFleur Video in Runtipi to "
+                      "0.6.2 or later (it mounts runtipi/media), and install the Files app from the Wizard App Store." + upload_note)
+        return out
+    out["readable"] = os.access(MEDIA_DIR, os.R_OK | os.X_OK)
+    if not out["readable"]:
+        out["fix"] = ("DeFleur Video cannot read the shared Files folder (runtipi/media). Install or update the Files app from the "
+                      "Wizard App Store; its first start makes the folder usable by apps (user 1000)." + upload_note)
+        return out
+    try:
+        os.close(media_open_dir(["Videos"]))
+        out["videos_folder"] = True
+    except (OSError, Rejected):
+        pass
+    read_only = bool(os.statvfs(MEDIA_DIR).f_flag & os.ST_RDONLY)
+    # Non-mutating: the deepest existing folder on the way to Videos/Edited must be writable (save creates the rest).
+    target = Path(MEDIA_DIR)
+    for part in MEDIA_EDITED:
+        nxt = target / part
+        if nxt.is_symlink() or not nxt.is_dir():
+            break
+        target = nxt
+    out["writable"] = not read_only and not target.is_symlink() and os.access(target, os.W_OK | os.X_OK)
+    if read_only:
+        out["fix"] = ("The shared Files folder is mounted read-only, so finished videos cannot be saved to Files → Videos → Edited "
+                      "(they stay downloadable from the render_final link). Reading videos from Files still works.")
+    elif not out["writable"]:
+        out["fix"] = ("DeFleur Video cannot write Files → Videos → Edited (runtipi/media is not writable by user 1000). Install or "
+                      "update the Files app from the Wizard App Store and start it once: it creates Videos/ and Videos/Edited/ "
+                      "for apps. Finished videos stay downloadable from the render_final link meanwhile.")
+    elif not out["videos_folder"]:
+        out["fix"] = "There is no Videos folder in Files yet. Install the Files app (it creates Videos/ and Videos/Edited/)."
+    return out
+
+
+def media_save_final(src, sha256, stem, short_id):
+    """Copy a verified final MP4 to /media/Videos/Edited/<stem>-edited-<id>.mp4: never overwrite, atomic, mode 0664."""
+    stem = re.sub(r"[^A-Za-z0-9._ -]+", "_", str(stem).replace("\\", "/").rsplit("/", 1)[-1])[:80].strip(" ._-") or "video"
+    dfd = media_open_dir(list(MEDIA_EDITED), create=True)
+    try:
+        if __import__("shutil").disk_usage(os.path.join(MEDIA_DIR, *MEDIA_EDITED)).free < src.stat().st_size + 64 * 1024 * 1024:
+            raise Rejected("not enough free disk in Files to save the finished video")
+        tmp = f".{stem}-edited-{short_id}.{secrets.token_hex(4)}.partial"
+        h = hashlib.sha256()
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o664, dir_fd=dfd)
+        try:
+            with os.fdopen(fd, "wb", closefd=False) as out, src.open("rb") as f:
+                while chunk := f.read(1024 * 1024):
+                    h.update(chunk)
+                    out.write(chunk)
+                out.flush()
+                os.fchmod(fd, 0o664)
+                os.fsync(fd)
+            os.close(fd)
+            fd = -1
+            if h.hexdigest() != sha256:
+                raise Rejected("final video hash changed while saving; not saved")
+            for n in range(1, 100):
+                name = f"{stem}-edited-{short_id}" + (f"-{n}" if n > 1 else "") + ".mp4"
+                try:
+                    os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)  # fails if name exists
+                    break
+                except FileExistsError:
+                    continue
+                except OSError as exc:
+                    if exc.errno not in (errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK):
+                        raise
+                    try:  # filesystems without hard links: rename only when the name is free
+                        os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                        continue
+                    except FileNotFoundError:
+                        os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+                        break
+            else:
+                raise Rejected("too many saved copies with this name in Videos/Edited")
+            os.fsync(dfd)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except FileNotFoundError:
+                pass
+        return {"saved_to": "/".join(MEDIA_EDITED + (name,)), "name": name, "bytes": src.stat().st_size, "sha256": sha256}
+    finally:
+        os.close(dfd)
+
+
 class Store:
     def __init__(self, root):
         self.root = Path(root).resolve()
@@ -541,7 +760,7 @@ class Store:
             raise FileNotFoundError("project not found")
         return parse_json(row[0])
 
-    def create(self, stream, length):
+    def create(self, stream, length, extra=None):
         if not 0 < length <= MAX_UPLOAD:
             raise Rejected(f"upload must be 1..{MAX_UPLOAD} bytes")
         with self.connect() as c:
@@ -568,6 +787,7 @@ class Store:
             if converted:
                 metadata.update(converted)
             metadata.update({"id": identifier, "upstream_commit": UPSTREAM, "created": time.time(), "missing_delivery_gates": GATES})
+            metadata.update(extra or {})
             dest = self.path(identifier)
             dest.mkdir(mode=0o700)
             tmp.rename(dest / "source.mp4")
@@ -577,6 +797,27 @@ class Store:
         finally:
             tmp.unlink(missing_ok=True)
 
+    def import_media(self, rel):
+        """A file from the shared Files folder becomes a project through exactly the upload path (create())."""
+        f, size, parts = media_open_file(rel)
+        with f:
+            return self.create(f, size, {"imported_from": "/".join(parts), "source_name": parts[-1]})
+
+    def save_final(self, jid):
+        job = self.job(jid)
+        result = job["result"] or {}
+        if job["state"] != "needs_review" or result.get("stage") != "final-render":
+            raise Rejected("only a finished final-render job can be saved to Files")
+        item = next((a for a in result["artifacts"] if a["name"] == "final.mp4"), None)
+        if item is None:
+            raise FileNotFoundError("final.mp4 not in the render manifest")
+        src = self.path(job["project"]) / (jid + ".stage") / "final.mp4"
+        if digest(src) != item["sha256"]:
+            raise Rejected("artifact hash changed; not saved")
+        metadata = self.project(job["project"])
+        stem = Path(metadata.get("source_name") or "video").stem
+        return media_save_final(src, item["sha256"], stem, jid[:8])
+
     def projects(self):
         with self.connect() as c:
             rows = c.execute("SELECT metadata FROM projects").fetchall()
@@ -584,7 +825,7 @@ class Store:
         for row in rows:
             m = parse_json(row[0])
             out.append({"id": m["id"], "duration": m["duration"], "width": m["width"], "height": m["height"],
-                        "created": m.get("created"), "normalized": "normalization" in m})
+                        "created": m.get("created"), "normalized": "normalization" in m, "imported_from": m.get("imported_from")})
         return sorted(out, key=lambda m: m["created"] or 0)
 
     def decisions(self, identifier):
@@ -885,12 +1126,35 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(201, {"path": "/v1/uploads/" + token, "expires_in_s": UPLOAD_TTL, "one_time": True})
         if method == "GET" and self.path == "/v1/projects":
             return self.send(200, {"projects": server.store.projects()})
+        if method == "GET" and (self.path == "/v1/media" or self.path.startswith("/v1/media?")):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, max_num_fields=4)
+            status = media_status()
+            if not status["readable"]:
+                return self.send(409, {"error": status["fix"], "media": status})
+            return self.send(200, {**media_list(query.get("folder", ["Videos"])[0]), "media": status})
+        if method == "POST" and self.path in ("/v1/media/import", "/v1/media/save-final"):
+            if self.headers.get("Content-Type") != "application/json":
+                raise Rejected("Content-Type must be application/json")
+            n = self.length(4096)
+            value = parse_json(self.rfile.read(n))
+            if self.path == "/v1/media/import":
+                if not isinstance(value, dict) or set(value) != {"path"}:
+                    raise Rejected('body must be {"path": "Videos/IMG_5644.mov"}')
+                if not media_status()["readable"]:
+                    raise Rejected(media_status()["fix"])
+                return self.send(201, server.store.import_media(value["path"]))
+            if not isinstance(value, dict) or set(value) != {"job"}:
+                raise Rejected('body must be {"job": "<final-render job id>"}')
+            status = media_status()
+            if not status["writable"]:
+                return self.send(409, {"error": status["fix"] or "Files folder not writable", "media": status})
+            return self.send(201, server.store.save_final(value["job"]))
         store = server.store
         if method == "GET" and self.path == "/v1/capabilities":
             return self.send(200, {"version": VERSION, "upstream_commit": UPSTREAM,
                 "operations": ["upload_mp4", "workflow_stages", "read_workflow_docs", "submit_edit_plan_preview", "persist_transcript_decisions", "burn_timed_captions", "fixed_protected_crop", "cut_edge_review_artifacts", "poll_job", "download_preview", "delete_project"],
                 "limits": {"upload_bytes": MAX_UPLOAD, "duration_s": MAX_DURATION, "output_duration_s": workflow.MAX_OUTPUT_S, "editing_resolution": "up to 1920x1080 (4K and other larger sources are normalized down on upload)", "motion_inline_json_bytes": MAX_MOTION_JSON, "motion_asset_bytes": {k: v for k, v in motion.MAX_ASSET.items()}, "projects": MAX_PROJECTS, "jobs": MAX_JOBS, "workers": 1, "decisions_per_project": 16, "json_bytes": MAX_STAGE_JSON, "preview_job_wall_seconds": 180},
-                "workflow": workflow.capabilities(),
+                "workflow": workflow.capabilities(), "media": media_status(),
                 "ai_calls": False, "delivery_approval": False, "missing_delivery_gates": GATES})
         if method == "POST" and len(parts) == 6 and parts[1:3] == ["v1", "projects"] and parts[4] == "stages":
             if self.headers.get("Content-Type") != "application/json":
@@ -1000,8 +1264,11 @@ class Handler(BaseHTTPRequestHandler):
             self.route(method)
         except Rejected as exc:
             self.send(422, {"error": str(exc)})
-        except FileNotFoundError:
-            self.send(404, {"error": "not found"})
+        except FileNotFoundError as exc:
+            msg = str(exc.args[0]) if exc.args and isinstance(exc.args[0], str) and "in Files" in exc.args[0] else "not found"
+            self.send(404, {"error": msg})
+        except PermissionError:
+            self.send(409, {"error": "permission denied in the shared Files folder (runtipi/media); see capabilities for the fix"})
         except (TimeoutError, ConnectionError):
             self.close_connection = True
         except Exception:

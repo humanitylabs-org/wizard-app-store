@@ -9,9 +9,9 @@
   "categories": [
     "utilities"
   ],
-  "description": "Testing release. Hermes drives it over MCP; no browser UI and no LLM calls. Bundles James DeFleur's DeFleur Video helpers and runs his whole workflow: upload (20 min, up to 4K, edited at 1080p), speech-to-text via the Transcriber app, local alignment, sample-exact cuts with evidence and the dialogue gate, fixed per-setup face crops, optional HTML/SVG/GSAP motion graphics and fullscreen inserts captured with his capture.cjs in the shared Browser app, burned captions, his 1080x1920 encode and delivery gate. No token needed: keep it on your private network (e.g. Tailscale).",
-  "tipi_version": 8,
-  "version": "0.6.1-testing",
+  "description": "Testing release. Hermes drives it over MCP; no browser UI and no LLM calls. Put your video in the Files app (Files → Videos), then tell Hermes the file name; the finished video is saved to Files → Videos → Edited. Bundles James DeFleur's DeFleur Video helpers and runs his whole workflow: import (20 min, up to 4K, iPhone .mov/HDR converted, edited at 1080p), speech-to-text via the Transcriber app, local alignment, sample-exact cuts with evidence and the dialogue gate, fixed per-setup face crops, optional HTML/SVG/GSAP motion graphics captured in the shared Browser app, burned captions, his 1080x1920 encode and delivery gate. Upload links remain as a fallback. No token needed: keep it on your private network (e.g. Tailscale).",
+  "tipi_version": 9,
+  "version": "0.6.2-testing",
   "source": "https://github.com/humanitylabs-org/wizard-app-store",
   "exposable": false,
   "no_gui": true,
@@ -48,5 +48,5 @@
       "hint": "Must already be downloaded in the Transcriber app (its startup model)."
     }
   ],
-  "updated_at": 1791389660963
+  "updated_at": 1791469636894
 }
