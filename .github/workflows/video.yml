@@ -2,7 +2,7 @@ name: Build video editing review API
 on:
   push:
     branches: [main]
-    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'apps/transcriber/**', 'scripts/smoke-video.py', 'scripts/e2e-video-audio.py', 'scripts/e2e-video-mcp.py', 'scripts/e2e-video-motion.py', 'apps/browser/**', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
+    paths: ['images/defleur-video/**', 'apps/defleur-video/**', 'apps/transcriber/**', 'scripts/smoke-video.py', 'scripts/e2e-video-audio.py', 'scripts/e2e-video-mcp.py', 'scripts/e2e-video-motion.py', 'scripts/e2e-files-video.py', 'scripts/smoke-files.py', 'apps/files/**', 'apps/browser/**', 'scripts/translate-video-recipe.mjs', '__tests__/video.test.ts', '.github/workflows/video.yml']
   workflow_dispatch:
 permissions:
   contents: read
