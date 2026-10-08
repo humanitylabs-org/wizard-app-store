@@ -124,13 +124,20 @@ async def flow(url, fb, root, mov, truth, report):
             on_disk = files_smoke.as_root(root, "stat", "-c", "%u:%g:%a", "/r/media/" + saved["path"])
             report["files_app_download"] = {"listed": names, "sha256_match": sha == saved["sha256"], "bytes": n, "on_disk": on_disk}
             assert saved["path"].rsplit("/", 1)[1] in names and sha == saved["sha256"] and on_disk == "1000:1000:664"
-            local = root / "dl.mp4"
+            # Probe in a world-readable folder of its own: on CI ffprobe runs inside the image as uid 1000,
+            # which can't enter the runner's 0700 temp root.
+            dl = Path(tempfile.mkdtemp(prefix="dl-", dir=os.environ.get("TMPDIR")))
+            os.chmod(dl, 0o755)
+            local = dl / "dl.mp4"
             st, data = fb.req("GET", "/api/raw/" + saved["path"])  # the web UI's JWT (noauth mode still issues one)
             assert st == 200
             local.write_bytes(data)
-            os.chmod(local, 0o666)
-            probe = json.loads(e2e.ff("ffprobe", "-v", "error", "-show_streams", "-of", "json", local.name, cwd=root))["streams"]
-            e2e.ff("ffmpeg", "-v", "error", "-xerror", "-i", local.name, "-f", "null", "-", cwd=root)
+            os.chmod(local, 0o644)
+            try:
+                probe = json.loads(e2e.ff("ffprobe", "-v", "error", "-show_streams", "-of", "json", local.name, cwd=dl))["streams"]
+                e2e.ff("ffmpeg", "-v", "error", "-xerror", "-i", local.name, "-f", "null", "-", cwd=dl)
+            finally:
+                shutil.rmtree(dl, ignore_errors=True)
             report["final_probe"] = [(x["codec_type"], x["codec_name"], x.get("width"), x.get("height")) for x in probe]
             assert [(x["codec_name"], x.get("width"), x.get("height")) for x in probe if x["codec_type"] == "video"] == [("h264", 1080, 1920)]
             await tool(s, "delete_project", {"project_id": pid})
