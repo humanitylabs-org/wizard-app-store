@@ -28,7 +28,7 @@ import secrets
 from typing import cast
 from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.6.0-testing"
+VERSION = "0.6.1-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 8 * 1024 * 1024 * 1024
 MAX_PROJECTS = 8
@@ -76,7 +76,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
 """
 UPLOAD_PAGE = ("""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DeFleur Video upload</title><style>body{font:16px system-ui,sans-serif;max-width:36rem;margin:2rem auto;padding:0 1rem}
-input,button{font:inherit;margin:.4rem 0}pre{white-space:pre-wrap;background:#f3f3f3;padding:.6rem}</style></head><body>
+input,button{font:inherit;margin:.4rem 0;max-width:100%;box-sizing:border-box}pre{white-space:pre-wrap;background:#f3f3f3;padding:.6rem}</style></head><body>
 <h1>Upload a video</h1><p>MP4 or MOV, up to 20 minutes and 8 GiB, up to 4K. HEVC, variable-frame-rate or larger-than-1080p video is converted to 1080p H.264.</p>
 <form id="f"><input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov"><br>
 <input type="password" id="token" placeholder="API token (only if this app has one)" autocomplete="off" size="40"><br>
@@ -102,13 +102,19 @@ def parse_json(data):
         raise Rejected("invalid JSON") from exc
 
 
-def mp4_structure(path):
+def mp4_structure(path, allow_mov=False):
     """Bounded structural allowlist. Payloads are skipped, never recursively guessed.
 
-    This preview accepts ordinary self-contained MP4 only, not MOV aliases,
-    fragmented movies, reference movies, or compressed movie metadata.
-    Native demuxing additionally has fd-only protocol access.
+    The edit source is always ordinary self-contained MP4. With allow_mov (upload
+    conversion only) a self-contained QuickTime .mov is also accepted: brand qt,
+    up to 8 tracks (iPhone metadata tracks) and self-reference alis/url drefs; it is
+    then converted to MP4. Fragmented, reference or compressed movies stay rejected.
+    Native demuxing additionally has fd-only protocol access. Returns the major brand.
     """
+    brands = {b"isom", b"iso2", b"mp41", b"mp42", b"avc1"} | ({b"qt  "} if allow_mov else set())
+    max_traks = 8 if allow_mov else 4
+    self_refs = {(12, b"url ", 1)} | ({(12, b"alis", 1)} if allow_mov else set())
+    major = b""
     count = 0
     seen = {b"ftyp": 0, b"moov": 0, b"mdat": 0, b"dref": 0, b"trak": 0}
     containers = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"dinf", b"edts"}
@@ -145,9 +151,10 @@ def mp4_structure(path):
                 if kind == b"ftyp":
                     if depth or length > 256 or length < header + 8:
                         raise Rejected("invalid ftyp")
-                    brand = f.read(4)
-                    if brand not in {b"isom", b"iso2", b"mp41", b"mp42", b"avc1"}:
-                        raise Rejected("only ISO MP4 brands supported")
+                    nonlocal major
+                    major = f.read(4)
+                    if major not in brands:
+                        raise Rejected("only ISO MP4 or QuickTime MOV brands supported" if allow_mov else "only ISO MP4 brands supported")
                 if kind == b"dref":
                     if length < header + 8:
                         raise Rejected("invalid dref")
@@ -155,14 +162,16 @@ def mp4_structure(path):
                     if version_flags != 0 or entries != 1 or length != header + 20:
                         raise Rejected("only one self-contained dref supported")
                     entry_size, entry_type, flags = struct.unpack(">I4sI", f.read(12))
-                    if (entry_size, entry_type, flags) != (12, b"url ", 1):
+                    if (entry_size, entry_type, flags) not in self_refs:
                         raise Rejected("external data references forbidden")
                 if kind in containers:
                     walk(pos + header, pos + length, depth + 1)
                 pos += length
         walk(0, size)
-    if seen[b"ftyp"] != 1 or seen[b"moov"] != 1 or not seen[b"mdat"] or not 1 <= seen[b"trak"] <= 4 or seen[b"dref"] != seen[b"trak"]:
+    if seen[b"ftyp"] != 1 or seen[b"moov"] != 1 or not seen[b"mdat"] or not 1 <= seen[b"trak"] <= max_traks or \
+            (seen[b"dref"] != seen[b"trak"] if not allow_mov else not 1 <= seen[b"dref"] <= seen[b"trak"]):
         raise Rejected("incomplete or unsupported MP4 structure")
+    return major
 
 
 def native(args, source=None, timeout=30, cwd=None, file_limit=33554432, env_extra=None, check=True,
@@ -317,6 +326,7 @@ def loose_input_args():
     """Like input_args but admits phone-size (up to 4096x2304) frames for normalization only."""
     args = input_args()
     args[args.index("-max_pixels") + 1] = str(4096 * 2304)
+    args[args.index("-max_streams") + 1] = "8"
     return args
 
 
@@ -363,14 +373,23 @@ NORMALIZE_LOCK = threading.Semaphore(1)
 
 def normalize_if_needed(path):
     """HEVC / VFR / extra-track phone footage -> H.264 CFR + AAC. Returns provenance or None."""
-    mp4_structure(path)
+    brand = mp4_structure(path, allow_mov=True)
     value = parse_json(native(["/usr/bin/ffprobe", "-v", "error", *loose_input_args(), "-show_streams", "-show_format", "-of", "json"], path))
     streams = value.get("streams", [])
     videos = [s for s in streams if s.get("codec_type") == "video" and not s.get("disposition", {}).get("attached_pic")]
     audios = [s for s in streams if s.get("codec_type") == "audio"]
     if len(videos) != 1 or len(audios) < 1 or videos[0].get("codec_name") not in ("h264", "hevc"):
+        if brand == b"qt  ":
+            raise Rejected("this MOV needs one H.264 or HEVC video track and an audio track")
         return None  # probe() rejects it with the usual message
-    v, a = videos[0], audios[0]
+    # iPhone spatial-audio clips can carry an extra codec ffmpeg can't decode; prefer AAC, then any common codec.
+    common = ("aac", "alac", "mp3", "ac3", "eac3", "opus", "flac")
+    v = videos[0]
+    a = next((s for s in audios if s.get("codec_name") == "aac"), None) or \
+        next((s for s in audios if s.get("codec_name") in common or str(s.get("codec_name", "")).startswith("pcm_")), None)
+    if a is None:
+        raise Rejected("no decodable audio track (found: " + ", ".join(str(s.get("codec_name")) for s in audios) + ")")
+    hdr = v.get("color_transfer") in ("arib-std-b67", "smpte2084")
     try:
         duration = float(value["format"]["duration"])
     except (KeyError, ValueError, TypeError) as exc:
@@ -379,6 +398,10 @@ def normalize_if_needed(path):
         raise Rejected(f"source duration must be at most {MAX_DURATION} seconds")
     mode, rate = frame_rate_mode(path, v)
     reasons = []
+    if brand == b"qt  ":
+        reasons.append("QuickTime MOV container")
+    if hdr:
+        reasons.append(f"HDR ({v.get('color_transfer')}) tone-mapped to SDR BT.709")
     if v["codec_name"] == "hevc":
         reasons.append("HEVC video")
     if mode != "constant":
@@ -408,8 +431,15 @@ def normalize_if_needed(path):
             w, h = h, w
         f = min(1.0, 1920 / max(w, h), math.sqrt(2073600 / (w * h)))
         scale = f"scale={max(2, int(w * f) // 2 * 2)}:{max(2, int(h * f) // 2 * 2)},setsar=1"
-        native(["/usr/bin/ffmpeg", "-v", "error", "-nostdin", *loose_input_args(), "-map", "0:v:0", "-map", "0:a:0",
-                "-vf", scale, "-fps_mode", "cfr", "-r", fps, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        chain = scale
+        color = []
+        if hdr:
+            # Scale first (cheap), then a standard zscale+tonemap HDR->SDR pass so iPhone HDR doesn't look washed out.
+            chain += (f",zscale=tin={v.get('color_transfer')}:min=bt2020nc:pin=bt2020:t=linear:npl=100,format=gbrpf32le,"
+                      "zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
+            color = ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
+        native(["/usr/bin/ffmpeg", "-v", "error", "-nostdin", *loose_input_args(), "-map", f"0:{int(v['index'])}", "-map", f"0:{int(a['index'])}",
+                "-vf", chain, *color, "-fps_mode", "cfr", "-r", fps, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", str(min(2, int(a.get("channels") or 2))),
                 "-map_metadata", "-1", "-movflags", "+faststart", "-threads", str(NORMALIZE_THREADS), "-filter_threads", "2", "-y", out],
                path, timeout=7200, cpu=7200 * NORMALIZE_THREADS, file_limit=MAX_UPLOAD * 2, as_limit=8 * 1024**3, explain=True,
@@ -902,8 +932,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise FileNotFoundError("artifact not in stage manifest")
             return self.send_file(store.path(job["project"]) / (job["id"] + ".stage") / parts[5], item["content_type"], item["sha256"])
         if method == "POST" and self.path == "/v1/projects":
-            if self.headers.get("Content-Type") != "video/mp4":
-                raise Rejected("Content-Type must be video/mp4")
+            if self.headers.get("Content-Type", "").split(";")[0].strip() not in UPLOAD_TYPES:
+                raise Rejected("Content-Type must be video/mp4 or video/quicktime")
             return self.send(201, store.create(self.rfile, self.length(MAX_UPLOAD)))
         if len(parts) == 4 and parts[1:3] == ["v1", "projects"]:
             if method == "GET":

@@ -1,3 +1,11 @@
+# Release: 0.6.1-testing (iPhone uploads)
+
+- Uploads now accept iPhone `.mov` files (QuickTime brand `qt`, up to 8 tracks, self-reference `alis` drefs). They are always converted to a plain MP4 edit source; the edit source itself stays MP4-only.
+- iPhone HDR (HLG/PQ) video is tone-mapped to SDR BT.709 during that conversion, and the extra timecode/metadata tracks are dropped. If several audio tracks exist, AAC is preferred.
+- `POST /v1/projects` accepts `Content-Type: video/quicktime` as well as `video/mp4`.
+- Upload page: the token field no longer overflows on phones.
+- New unit test: an iPhone-style HEVC HLG `.mov` with rotation and a timecode track uploads and converts to H.264 SDR MP4. 36/36 unit tests pass in the image.
+
 # Release: 0.6.0-testing (piece 3 of 3: motion graphics, inserts, multi-setup reframing)
 
 ## What this release is

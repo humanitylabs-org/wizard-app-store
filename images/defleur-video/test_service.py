@@ -408,7 +408,8 @@ class MediaTests(unittest.TestCase):
         for data in (b"not a movie", self.source.read_bytes()[:80], b"#EXTM3U\nhttp://127.0.0.1"):
             status, _ = self.request("POST", "/v1/projects", data, "video/mp4")
             self.assertEqual(status, 422)
-        self.assertEqual(self.request("POST", "/v1/projects", self.source.read_bytes(), "video/quicktime")[0], 422)
+        for kind in ("text/plain", "image/png", ""):  # video/quicktime is accepted now (iPhone .mov)
+            self.assertEqual(self.request("POST", "/v1/projects", self.source.read_bytes(), kind)[0], 422)
         self.assertEqual(self.request("GET", "/v1/projects/../secrets")[0], 404)
         self.assertFalse(list(self.server.store.root.glob("*.upload")))
 
@@ -735,6 +736,32 @@ class MediaTests(unittest.TestCase):
                                                      {"r_frame_rate": project["normalization"]["fps"]})[0], "constant")
             self.request("DELETE", f"/v1/projects/{project['id']}")
 
+    def test_iphone_mov_hdr_upload_is_converted(self):
+        # Like an iPhone .mov: QuickTime brand, HEVC 10-bit HLG HDR, 90-degree rotation, timecode data track.
+        mov = self.root / "IMG_0001.mov"
+        subprocess.run(["/usr/bin/ffmpeg", "-v", "error", "-y", "-i", str(self.source), "-t", "2", "-c:v", "libx265",
+                        "-x265-params", "log-level=error:pools=1:frame-threads=1:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc",
+                        "-pix_fmt", "yuv420p10le", "-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc",
+                        "-tag:v", "hvc1", "-c:a", "aac", "-metadata:s:v", "rotate=90", "-timecode", "01:00:00:00", "-f", "mov", str(mov)],
+                       check=True, timeout=120)
+        self.assertEqual(mov.read_bytes()[8:12], b"qt  ")
+        with self.assertRaisesRegex(service.Rejected, "ISO MP4"):
+            service.mp4_structure(mov)  # the edit source itself stays MP4-only
+        self.assertEqual(service.mp4_structure(mov, allow_mov=True), b"qt  ")
+        status, project = self.request("POST", "/v1/projects", mov.read_bytes(), "video/quicktime")
+        self.assertEqual(status, 201, project)
+        reasons = " | ".join(project["normalization"]["reasons"])
+        self.assertIn("QuickTime MOV container", reasons)
+        self.assertIn("HDR (arib-std-b67)", reasons)
+        self.assertEqual(project["video_codec"], "h264")
+        src = self.server.store.path(project["id"]) / "source.mp4"
+        self.assertIn(src.read_bytes()[8:12], (b"isom", b"mp42"))
+        info = json.loads(subprocess.run(["/usr/bin/ffprobe", "-v", "error", "-show_entries", "stream=codec_type,color_transfer,width,height",
+                                          "-of", "json", str(src)], capture_output=True, text=True, check=True).stdout)["streams"]
+        self.assertEqual([s["codec_type"] for s in info], ["video", "audio"])
+        self.assertEqual(info[0].get("color_transfer"), "bt709")
+        self.request("DELETE", f"/v1/projects/{project['id']}")
+
     def test_motion_submission_paths_plan_and_asset_upload(self):
         import motion
         import workflow
@@ -988,7 +1015,7 @@ print(json.dumps([a, b]))
         finally:
             del os.environ["BROWSER_URL"]
         self.assertEqual(status, 200)
-        self.assertEqual(caps["version"], "0.6.0-testing")
+        self.assertEqual(caps["version"], "0.6.1-testing")
         b = caps["workflow"]["motion"]["browser"]
         self.assertFalse(b["reachable"])
         self.assertIn("Browser app", b["fix"])

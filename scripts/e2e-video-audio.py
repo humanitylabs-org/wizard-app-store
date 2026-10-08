@@ -29,7 +29,7 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = os.environ.get("VIDEO_TEST_IMAGE", "wizard-defleur-video:0.6.0-testing")
+IMAGE = os.environ.get("VIDEO_TEST_IMAGE", "wizard-defleur-video:0.6.1-testing")
 OUT = Path(os.environ.get("E2E_OUT") or tempfile.mkdtemp(prefix="defleur-e2e-"))
 CACHE = os.environ.get("E2E_CACHE")
 TTS_MODEL = "speaches-ai/Kokoro-82M-v1.0-ONNX"
