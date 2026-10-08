@@ -2,7 +2,7 @@
 
 Testing release of James DeFleur's DeFleur Video workflow, with his original helper scripts bundled. Hermes makes the editorial decisions; this app runs the media steps and returns evidence. It makes no LLM or paid calls.
 
-**Connect Hermes once:** `hermes mcp add defleur-video --url http://<server>:8787/mcp` (or `http://defleur-video:8787/mcp` from inside Runtipi), restart Hermes, then just ask it to edit a video. The app describes its own workflow through MCP tools: upload link, transcript and proposed cuts for your approval, the edited audio, then the finished 1080×1920 captioned vertical video and a report.
+**Connect Hermes:** Hermes Agent from the Wizard App Store on the same server connects it automatically within a minute. For another Hermes, run `hermes mcp add defleur-video --url http://<server>:8787/mcp` and restart it. Then just ask it to edit a video. The app describes its own workflow through MCP tools: upload link, transcript and proposed cuts for your approval, the edited audio, then the finished 1080×1920 captioned vertical video and a report.
 
 **Install the Transcriber and Browser apps first.** Speech-to-text goes to the Transcriber at `http://transcriber:8000`; motion graphics are captured in the shared Browser app at `http://browser:9222` (only needed for motion). Change either address in the settings if yours is elsewhere. Hermes' `capabilities` check tells you exactly what is missing.
 

@@ -6,6 +6,8 @@ DeFleur Video serves an MCP endpoint at `/mcp` on its port (8787). Hermes reads 
 Install **Transcriber** and **Browser** first, then **DeFleur Video**, from the Wizard App Store on the same Runtipi server. The Browser is only needed for motion graphics; plain captioned edits work without it. `capabilities` tells Hermes (and you) the exact fix if either is missing.
 
 ## 2. Connect Hermes (once)
+If you use **Hermes Agent from the Wizard App Store** on the same server, there is nothing to do. Its wizard-apps sync adds `defleur-video` within about a minute. Start a new chat (/new) if one was already open.
+
 If Hermes runs on another machine in your Tailscale network:
 
 ```sh
