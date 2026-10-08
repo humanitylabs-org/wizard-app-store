@@ -56,7 +56,10 @@ def iphone_mov(fixture):
              "-tag:v", "hvc1", "-c:a:0", "aac", "-c:a:1", "alac", "-ac:a:1", "4", "-c:s", "mov_text",
              "-timecode", "01:00:00:00", "-f", "mov", out.name]
     e2e.ff(*args, cwd=fixture)
-    os.chmod(out, 0o666)
+    try:
+        os.chmod(out, 0o666)
+    except PermissionError:  # CI runners: ffmpeg runs inside the candidate image, so another uid owns the file
+        pass
     return out
 
 
