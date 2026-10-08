@@ -122,7 +122,9 @@ async def flow(url, fb, root, mov, truth, report):
             report["files_app_download"] = {"listed": names, "sha256_match": sha == saved["sha256"], "bytes": n, "on_disk": on_disk}
             assert saved["path"].rsplit("/", 1)[1] in names and sha == saved["sha256"] and on_disk == "1000:1000:664"
             local = root / "dl.mp4"
-            local.write_bytes(http_call("GET", f"http://127.0.0.1:{fb.port}/api/raw/{saved['path']}", timeout=300)[1])
+            st, data = fb.req("GET", "/api/raw/" + saved["path"])  # the web UI's JWT (noauth mode still issues one)
+            assert st == 200
+            local.write_bytes(data)
             os.chmod(local, 0o666)
             probe = json.loads(e2e.ff("ffprobe", "-v", "error", "-show_streams", "-of", "json", local.name, cwd=root))["streams"]
             e2e.ff("ffmpeg", "-v", "error", "-xerror", "-i", local.name, "-f", "null", "-", cwd=root)
@@ -178,6 +180,9 @@ def main():
         # Files first (as Miguel installs it): it makes media/ usable by uid 1000 and creates Videos/Edited.
         fcmd, fenv, _, fport = files_smoke.start(name + "-f", root, "", fc)
         fb = files_smoke.FB(fport)
+        st, page = fb.req("GET", "/")  # a fresh browser: the app shell, configured for no login
+        report["files_web_ui"] = {"status": st, "noauth": b'"AuthMethod":"noauth"' in page, "branding": b'"Name":"Files"' in page}
+        assert st == 200 and report["files_web_ui"]["noauth"], page[:400]
         assert fb.login() == 200
         run(*cmds["t"], "up", "-d", env=envs["t"])
         run(*cmds["v"], "up", "-d", env=envs["v"])
