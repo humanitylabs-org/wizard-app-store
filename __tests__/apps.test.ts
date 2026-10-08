@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { appInfoSchema, dynamicComposeSchemaYaml } from "@runtipi/common/schemas";
 import { type } from "arktype";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { parse } from "yaml";
 
 for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)) {
@@ -36,6 +37,13 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       if (config.wizard_type === "service" || config.wizard_type === "external") expect(config.no_gui).toBe(true);
       if (config.wizard_type === "view") expect(config.no_gui ?? false).toBe(false);
     });
+    test("optional wizard_mcp_path: MCP endpoint the Hermes wizard-apps sync connects", () => {
+      // Read by the sync straight from this store, so new MCP apps connect without a Hermes Agent update.
+      if (config.wizard_mcp_path === undefined) return;
+      expect(["service", "external"]).toContain(config.wizard_type);
+      expect(config.wizard_mcp_path).toMatch(/^\/[A-Za-z0-9._~\/-]{0,200}$/);
+      expect(compose.services[id]["x-runtipi"].internal_port).toBeInteger();
+    });
     if (id === "hermes-agent") {
     test("unmodified pinned image and supported startup", () => {
       const s = compose.services[id];
@@ -47,7 +55,8 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
     });
     test("isolated data, no host privileges or auth bypass", () => {
       const s = compose.services[id];
-      expect(Object.keys(compose.services)).toEqual([id]);
+      // The only extra service is the wizard-apps sync (tested below).
+      expect(Object.keys(compose.services)).toEqual([id, "wizard-apps"]);
       expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data"]);
       for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build"]) expect(s[key]).toBeUndefined();
       expect(s.environment.HERMES_DASHBOARD_INSECURE).toBeUndefined();
@@ -61,6 +70,25 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       const pwd = config.form_fields.find((f: {env_variable: string}) => f.env_variable.endsWith("PASSWORD"));
       expect(pwd.required).toBe(true);
       expect(pwd.default).toBeUndefined();
+    });
+    test("wizard-apps sync: same unmodified image, unprivileged, opt-out, embedded source current", () => {
+      const s = compose.services["wizard-apps"];
+      expect(s.image).toBe(compose.services[id].image);
+      expect(s.entrypoint).toEqual(["/opt/hermes/.venv/bin/python3", "-c"]);
+      expect(s.command).toHaveLength(1);
+      expect(s.command[0]).toBe(readFileSync("sidecars/wizard-apps/sync.py", "utf8"));
+      expect(spawnSync("python3", ["scripts/embed-wizard-apps-sync.py", "--check"]).status).toBe(0);
+      expect(s.user).toBe("1000:1000");
+      expect(s.read_only).toBe(true);
+      expect(s.cap_drop).toEqual(["ALL"]);
+      expect(s.security_opt).toEqual(["no-new-privileges:true"]);
+      expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data"]);
+      expect(s.environment).toEqual({HERMES_HOME: "/opt/data", HOME: "/opt/data", WIZARD_APPS_SYNC: "${WIZARD_APPS_SYNC:-true}"});
+      expect(s.logging.options["max-size"]).toBe("1m");
+      expect(s["x-runtipi"]).toEqual({add_to_main_network: true});
+      for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "ports"]) expect(s[key]).toBeUndefined();
+      const field = config.form_fields.find((f: {env_variable: string}) => f.env_variable === "WIZARD_APPS_SYNC");
+      expect(field).toMatchObject({type: "boolean", default: true, required: false});
     });
     }
     if (id === "transcriber") {

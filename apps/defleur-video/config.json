@@ -2,6 +2,7 @@
   "name": "DeFleur Video (Testing)",
   "id": "defleur-video",
   "wizard_type": "service",
+  "wizard_mcp_path": "/mcp",
   "available": true,
   "short_desc": "Service: Hermes-operated vertical-video editor running James DeFleur's full workflow (cuts, crops, motion graphics, captions).",
   "author": "Humanity Labs; workflow contract informed by Wizard Modules",
