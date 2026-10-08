@@ -44,11 +44,13 @@ ClientSession, streamable_http_client = m.ClientSession, m.streamable_http_clien
 def iphone_mov(fixture):
     out = fixture / "IMG_5644.mov"
     srt = fixture / "meta.srt"
-    srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nmeta\n")
+    srt.write_text("1\n00:00:00,000 --> 00:10:00,000\nmeta\n")
+    dur = json.loads(e2e.ff("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", "talking-1080p.mp4",
+                            cwd=fixture))["format"]["duration"]
     args = ["ffmpeg", "-v", "error", "-y", "-i", "talking-1080p.mp4", "-f", "lavfi", "-i", "anoisesrc=a=0.001:r=48000:d=60"]
     args += [x for _ in range(6) for x in ("-i", "meta.srt")]
     args += ["-map", "0:v", "-map", "0:a", "-map", "1:a"] + [x for i in range(6) for x in ("-map", f"{i + 2}:s")]
-    args += ["-shortest", "-c:v", "libx265", "-preset", "fast",
+    args += ["-t", dur, "-c:v", "libx265", "-preset", "fast",
              "-x265-params", "log-level=error:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc",
              "-pix_fmt", "yuv420p10le", "-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc",
              "-tag:v", "hvc1", "-c:a:0", "aac", "-c:a:1", "alac", "-ac:a:1", "4", "-c:s", "mov_text",
@@ -88,6 +90,7 @@ async def flow(url, fb, root, mov, truth, report):
                                      ("id", "video_codec", "width", "height", "duration", "imported_from", "normalization")},
                                      "original_streams": imp["original"]["streams"]}
             assert imp["video_codec"] == "h264" and imp["original"]["streams"] >= 9, imp
+            assert float(imp["duration"]) > 5, imp  # the real-face speech fixture, not a 2 s stub
             assert imp["original"]["sha256"] == hashlib.sha256(mov.read_bytes()).hexdigest()
             pid, log = imp["id"], []
             edit = await wait_run(s, (await tool(s, "start_edit", {"project_id": pid, "language": "en"}))["run_id"], log)
@@ -95,18 +98,22 @@ async def flow(url, fb, root, mov, truth, report):
             cuts = edit["proposed_cuts"]
             report["start_edit"] = {"transcript": edit["transcript"], "proposed_cuts": cuts, "untranscribed_sound": edit.get("untranscribed_sound")}
             if not cuts:
-                p = truth["pause"]
-                mid = (p["start_s"] + p["end_s"]) / 2
-                cuts = [{"start_s": round(mid - 0.2, 3), "end_s": round(mid + 0.2, 3), "reason": "long pause (fallback)"}]
+                d = float(imp["duration"])
+                cuts = [{"start_s": round(d * 0.45, 3), "end_s": round(d * 0.45 + 0.3, 3), "reason": "long pause (fallback)"}]
             report["chosen_cuts"] = cuts
             cut = await wait_run(s, (await tool(s, "apply_cuts", {"project_id": pid, "segments": cuts}))["run_id"], log)
             assert cut["dialogue_gate"]["pass"], cut["dialogue_gate"]
+            assert cut["seconds_removed"] > 0.2 and not cut["words_lost_vs_source"], cut
             final = await wait_run(s, (await tool(s, "render_final", {"project_id": pid}))["run_id"], log, budget=3600)
             saved = final["saved_to_files"]
             report["render_final"] = {"final": final["final"], "delivery_gate_pass": final["delivery_gate"]["pass"],
+                                      "crop": final["crop"], "captions": final["captions"],
                                       "saved_to_files": saved, "runs": log}
             assert saved["saved"] and saved["path"].startswith("Videos/Edited/IMG_5644-edited-") and saved["path"].endswith(".mp4"), saved
             assert saved["sha256"] == final["final"]["sha256"]
+            assert final["delivery_gate"]["pass"], final["delivery_gate"]
+            assert final["crop"]["face_inside_crop_all_samples"] and not final["crop"]["flags"], final["crop"]
+            assert final["captions"]["cues"] >= 2, final["captions"]
             # Visible and downloadable through the Files app.
             st, body = fb.req("GET", "/api/resources/Videos/Edited/")
             names = [i["name"] for i in json.loads(body)["items"]]
