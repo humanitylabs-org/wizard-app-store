@@ -64,6 +64,8 @@ def runtipi_chmod(data, image):
 
 
 def main():
+    if subprocess.run(["docker", "image", "inspect", VIDEO_IMAGE], capture_output=True).returncode:
+        run("docker", "pull", VIDEO_IMAGE, timeout=900)
     net = "wzapps-e2e-" + secrets.token_hex(4)
     ref = os.environ.get("WIZARD_APPS_STORE_REF") or run("git", "rev-parse", "HEAD", cwd=ROOT)
     report: dict = {"network": "external, named like runtipi_tipi_main_network", "store_ref": ref}
@@ -93,6 +95,9 @@ def main():
             return json.loads(hx("/opt/hermes/.venv/bin/python3", "-c",
                 "import yaml,json;print(json.dumps((yaml.safe_load(open('/opt/data/config.yaml')) or {}).get('mcp_servers') or {}))"))
 
+        def apps_json():
+            return hx("sh", "-c", "cat /opt/data/wizard-apps/apps.json 2>/dev/null; true")
+
         def skill():
             return hx("sh", "-c", "cat /opt/data/skills/wizard-apps/SKILL.md 2>/dev/null; true")
 
@@ -114,6 +119,7 @@ def main():
             wait("'no Wizard apps found'", lambda: "no Wizard apps found" in side_logs(), 120)
             assert "defleur-video" not in servers(), servers()
             assert "No Wizard apps are running" in skill()
+            assert json.loads(apps_json())["apps"] == []
             info = json.loads(run("docker", "inspect", run(*h, "ps", "-q", "hermes-agent", env=h_env)))[0]
             img = json.loads(run("docker", "image", "inspect", image))[0]["Config"]
             assert info["Config"]["Image"] == image and info["Config"]["Entrypoint"] == img["Entrypoint"]
@@ -140,14 +146,20 @@ def main():
             assert servers()["defleur-video"] == {"url": "http://defleur-video:8787/mcp", "enabled": True}
             text = skill()
             assert "DeFleur Video" in text and "mcp__defleur_video__" in text and "workflow_guide" in text
-            report["2_connect"] = {"mcp_list_after_s": round(listed), "gateway_reconciled_after_s": round(reconciled),
+            discovered = json.loads(apps_json())["apps"]
+            assert [(a["id"], a["type"], a["mcp_url"], a["mcp_ready"]) for a in discovered] == \
+                [("defleur-video", "mcp", "http://defleur-video:8787/mcp", True)], discovered
+            report["2_connect"] = {"apps_json": discovered,"mcp_list_after_s": round(listed), "gateway_reconciled_after_s": round(reconciled),
                 "gateway_log": re.findall(r".*MCP servers reconciled.*", gateway_log())[-1][-160:],
                 "mcp_test_tail": [l.strip() for l in test.splitlines() if l.strip()][-4:], "tools_counted": tools,
                 "hermes_restarts": json.loads(run("docker", "inspect", info["Id"]))[0]["RestartCount"]}
 
-            # 3. Owner's things survive several cycles.
+            # 3. Owner's things survive several cycles; steady state writes nothing.
+            stamp = "stat -c '%Y %s' /opt/data/config.yaml /opt/data/wizard-apps/apps.json /opt/data/skills/wizard-apps/SKILL.md"
+            before = (hx("sh", "-c", stamp), apps_json(), skill())
             time.sleep(20)
             assert user_state() == mine
+            assert (hx("sh", "-c", stamp), apps_json(), skill()) == before, "steady state must not rewrite files"
             report["3_user_untouched"] = mine
 
             # 4. App stops -> entry removed after the grace period; comes back on restart.

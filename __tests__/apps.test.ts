@@ -75,8 +75,9 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       const s = compose.services["wizard-apps"];
       expect(s.image).toBe(compose.services[id].image);
       expect(s.entrypoint).toEqual(["/opt/hermes/.venv/bin/python3", "-c"]);
-      expect(s.command).toHaveLength(1);
-      expect(s.command[0]).toBe(readFileSync("sidecars/wizard-apps/sync.py", "utf8"));
+      // bootstrap + agent-agnostic discovery core + Hermes adapter, byte-identical to the reviewed sources.
+      expect(s.command).toEqual(["bootstrap.py", "wizard_core.py", "hermes_adapter.py"]
+        .map((f) => readFileSync(`sidecars/wizard-apps/${f}`, "utf8")));
       expect(spawnSync("python3", ["scripts/embed-wizard-apps-sync.py", "--check"]).status).toBe(0);
       expect(s.user).toBe("1000:1000");
       expect(s.read_only).toBe(true);
@@ -89,6 +90,11 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "ports"]) expect(s[key]).toBeUndefined();
       const field = config.form_fields.find((f: {env_variable: string}) => f.env_variable === "WIZARD_APPS_SYNC");
       expect(field).toMatchObject({type: "boolean", default: true, required: false});
+    });
+    test("wizard-apps sync: deterministic core and idempotent adapter (unit tests)", () => {
+      const r = spawnSync("python3", ["-m", "unittest", "-q", "test_wizard_apps"], {cwd: "sidecars/wizard-apps", encoding: "utf8"});
+      expect(r.stderr).toContain("OK");
+      expect(r.status).toBe(0);
     });
     }
     if (id === "transcriber") {
