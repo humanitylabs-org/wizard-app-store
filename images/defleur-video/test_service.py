@@ -1400,7 +1400,7 @@ print(json.dumps([cuts, mcp_server.keeps_from(cuts, 121.728), mcp_server.preview
         finally:
             del os.environ["BROWSER_URL"]
         self.assertEqual(status, 200)
-        self.assertEqual(caps["version"], "0.6.4-testing")
+        self.assertEqual(caps["version"], "0.6.5-testing")
         b = caps["workflow"]["motion"]["browser"]
         self.assertFalse(b["reachable"])
         self.assertIn("Browser app", b["fix"])
@@ -1411,6 +1411,136 @@ print(json.dumps([cuts, mcp_server.keeps_from(cuts, 121.728), mcp_server.preview
         self.assertIn("per_job_estimates", res)
         self.assertGreaterEqual(caps["limits"]["duration_s"], 900)
         self.assertGreaterEqual(caps["limits"]["output_duration_s"], 300)
+
+    def _mcp_py(self, code):
+        """Run code against mcp_server in the venv Python (the MCP SDK is not in the service Python); returns its last JSON line."""
+        py = "/opt/venv/bin/python" if Path("/opt/venv/bin/python").exists() else os.environ.get("E2E_MCP_PYTHON", sys.executable)
+        env = {**os.environ, "VIDEO_DATA_DIR": tempfile.mkdtemp()}
+        out = subprocess.run([py, "-I", "-c", "import sys, json\nsys.path.insert(0, sys.argv[1])\nimport mcp_server\n" + code,
+                              str(Path(service.__file__).parent)], capture_output=True, text=True, env=env)
+        if out.returncode and "No module named 'mcp'" in out.stderr:
+            self.skipTest("MCP SDK not installed in this Python")
+        self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+        return json.loads(out.stdout.strip().splitlines()[-1])
+
+    def test_agent_check_match_mismatch_unknown(self):
+        r = self._mcp_py("""
+c = mcp_server.agent_check
+hermes = {"name": "mcp", "version": "0.1.0"}
+print(json.dumps({
+  "match": c("Hermes Agent", "claude-opus-5-5", hermes),
+  "match_1m": c("hermes-agent", "anthropic/Claude-Opus-5-5[1m]", None),
+  "mismatch_model": c("Hermes Agent", "gpt-5", hermes),
+  "mismatch_client": c("Hermes Agent", "claude-opus-5-5", {"name": "claude-code", "version": "2.1"}),
+  "unknown_model": c("Hermes Agent", None, hermes),
+  "unknown_all": c(None, None, None),
+  "older_opus": mcp_server.model_matches("claude-opus-4-1"),
+  "intended": mcp_server.INTENDED}))
+""")
+        self.assertIs(r["match"]["match"], True)
+        self.assertFalse(r["match"]["requires_owner_confirmation"])
+        self.assertIsNone(r["match"]["warning"])
+        self.assertIs(r["match_1m"]["match"], True)
+        for k in ("mismatch_model", "mismatch_client"):
+            self.assertIs(r[k]["match"], False, k)
+            self.assertTrue(r[k]["requires_owner_confirmation"])
+            self.assertIn("Hermes Agent with Claude Opus 5.5", r[k]["warning"])
+            self.assertIn("Continue?", r[k]["warning"])
+        self.assertIn("gpt-5", r["mismatch_model"]["warning"])
+        self.assertEqual(r["mismatch_client"]["detected_client"]["harness"], "Claude Code")
+        for k in ("unknown_model", "unknown_all"):
+            self.assertEqual(r[k]["match"], "unknown", k)
+            self.assertTrue(r[k]["requires_owner_confirmation"])
+        self.assertIn("only what the agent reports", r["unknown_model"]["model_note"])
+        self.assertFalse(r["older_opus"])
+        self.assertEqual(r["intended"], {"harness": "Hermes Agent", "model": "Claude Opus 5.5", "model_id": "claude-opus-5-5"})
+
+    def test_guide_defaults_to_motion_with_one_combined_approval(self):
+        g = self._mcp_py("print(json.dumps({'guide': mcp_server.GUIDE, 'instructions': mcp_server.mcp.instructions}))")
+        steps, text = g["guide"]["steps"], json.dumps(g["guide"])
+        self.assertTrue(steps[0].startswith("0. Agent check"))
+        self.assertIn("ON by default", g["guide"]["default_edit"])
+        self.assertTrue(any("ONE approval question" in x and "motion plan" in x for x in steps))
+        self.assertTrue(any("render_final(project_id, {'motion': true})" in x for x in steps))
+        self.assertNotIn("Skip this for a plain captioned", text)
+        self.assertIn("SKILL.md", g["guide"]["skill"])
+        for w in ("agent_harness", "ONE owner approval", "render_final({'motion': true})", "SKILL.md"):
+            self.assertIn(w, g["instructions"])
+        # ordering: approval (5) before apply_cuts (6) before submit_motion (7) before render (9)
+        idx = lambda needle: next(i for i, x in enumerate(steps) if needle in x)
+        self.assertLess(idx("ONE approval question"), idx("6. apply_cuts"))
+        self.assertLess(idx("6. apply_cuts"), idx("submit_motion ->"))
+        self.assertLess(idx("submit_motion ->"), idx("9. render_final"))
+
+    def test_render_status_elapsed_is_live_with_sub_stage(self):
+        r = self._mcp_py("""
+run = {"id": "run-" + "a" * 32, "kind": "render_final", "project": "b" * 32, "state": "running", "step": "final-render",
+       "steps": [{"stage": "face-crop", "elapsed_s": 41.0}], "created": 1000.0, "updated": 1048.9, "stage_started": 1045.0,
+       "progress": {"phase": "motion-capture", "phase_elapsed_s": 3.0, "elapsed_s": 3.9, "frames_total": 7200,
+                    "frames_captured": 120, "phases_done": [{"phase": "prepare", "seconds": 0.9}], "estimate_remaining_s": 1900}}
+a, b = mcp_server.public_run(run, now=1100.0), mcp_server.public_run(run, now=1700.0)
+done = mcp_server.public_run({**run, "state": "done", "result": {}}, now=5000.0)
+print(json.dumps([a, b, done]))
+""")
+        a, b, done = r
+        self.assertEqual(a["elapsed_s"], 100.0)        # not frozen at the last save (48.9)
+        self.assertEqual(b["elapsed_s"], 700.0)
+        self.assertEqual(a["step_elapsed_s"], 55.0)
+        self.assertEqual(a["sub_stage"]["phase"], "motion-capture")
+        self.assertEqual(a["sub_stage"]["frames_captured"], 120)
+        self.assertGreater(b["sub_stage"]["phase_elapsed_s"], a["sub_stage"]["phase_elapsed_s"])
+        self.assertGreater(a["estimate_remaining_s"], b["estimate_remaining_s"])
+        self.assertEqual(a["stages_left"], ["asr", "acoustic-scan", "delivery-gate", "save-to-files"])
+        self.assertIn("final-render / motion-capture", a["next"])
+        self.assertEqual(done["elapsed_s"], 48.9)       # finished runs keep their real duration
+
+    def test_job_progress_file_is_live_and_cleared(self):
+        import workflow
+        folder = self.root / "progress-test"
+        folder.mkdir()
+        jid = "c" * 32
+        ctx = workflow.Ctx(folder / (jid + ".stage"), None, None, None)
+        ctx.progress("prepare", frames_total=600, estimate_s=200)
+        time.sleep(0.05)
+        ctx.progress("motion-capture")
+        (folder / (jid + ".work") / "picture-frames").mkdir(parents=True)
+        for i in range(3):
+            (folder / (jid + ".work") / "picture-frames" / f"{i:06d}.jpg").write_bytes(b"x")
+        p = service.job_progress(folder, jid)
+        self.assertEqual(p["phase"], "motion-capture")
+        self.assertEqual([x["phase"] for x in p["phases_done"]], ["prepare"])
+        self.assertEqual((p["frames_total"], p["frames_captured"], p["estimate_total_s"]), (600, 3, 200))
+        self.assertLessEqual(p["estimate_remaining_s"], 200)
+        self.assertIsNone(service.job_progress(folder, "d" * 32))
+        for name in ("_final_render", "_motion_capture", "_face_crop"):  # every render sub-stage reports progress
+            import inspect
+            self.assertIn("ctx.progress(", inspect.getsource(getattr(workflow, name)), name)
+        src = inspect.getsource(workflow._final_render)
+        for phase in ("prepare", "motion-capture", "live-frames-crop", "captions-encode", "encode-verify", "decode-check"):
+            self.assertIn(f'ctx.progress("{phase}"', src)
+
+    def test_skill_md_served_and_agent_skills_format(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+        c.request("GET", "/SKILL.md")
+        r = c.getresponse()
+        body = r.read().decode()
+        c.close()
+        self.assertEqual(r.status, 200)
+        self.assertTrue(r.getheader("Content-Type").startswith("text/markdown"))
+        self.assertEqual(r.getheader("X-Content-SHA256"), hashlib.sha256(body.encode()).hexdigest())
+        self.assertTrue(body.startswith("---\nname: defleur-video-editing\ndescription: "))
+        for must in ("Agent check", "requires_owner_confirmation", "One approval question", "words_lost_near_cuts",
+                     "asr_variance_far_from_cuts", "several frames", "beats_delivered", "{'motion': true}", "Hermes Agent with Claude Opus 5.5"):
+            self.assertIn(must, body)
+
+    def test_proxy_remembers_mcp_client_info(self):
+        init = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "hermes-agent", "version": "1.2<script>"}}}).encode()
+        got = json.loads(service.mcp_client_seen("10.0.0.9", init, "python-httpx/0.28"))
+        self.assertEqual((got["name"], got["version"], got["user_agent"]), ("hermes-agent", "1.2script", "python-httpx/0.28"))
+        self.assertEqual(json.loads(service.mcp_client_seen("10.0.0.9", b'{"method":"tools/call"}', None))["name"], "hermes-agent")
+        self.assertIsNone(service.mcp_client_seen("10.0.0.10", b'{"method":"tools/call"}', None))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

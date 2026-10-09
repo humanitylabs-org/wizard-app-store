@@ -503,6 +503,23 @@ class Ctx:
     def write(self, name, obj):
         (self.root / name).write_text(json.dumps(obj, allow_nan=False, indent=2))
 
+    def progress(self, phase, **extra):
+        """Live sub-stage progress beside the stage folder (<job>.progress); the API shows it while the job runs.
+        Best effort: progress reporting never fails a job."""
+        now = time.time()
+        p = getattr(self, "_progress", None)
+        if p is None:
+            p = self._progress = {"started": now, "phases_done": []}
+        if p.get("phase"):
+            p["phases_done"].append({"phase": p["phase"], "seconds": round(now - p["phase_started"], 1)})
+        p.update({"phase": phase, "phase_started": now, **extra})
+        try:
+            tmp = self.root.parent / (self.root.stem + ".progress.tmp")
+            tmp.write_text(json.dumps(p))
+            tmp.replace(self.root.parent / (self.root.stem + ".progress"))
+        except OSError:
+            pass
+
     def ref(self, jid, stages, name, dest=None):
         """Verified consumption of an earlier stage's artifact (hash re-checked)."""
         job, folder = self.lookup(jid, stages)
@@ -823,6 +840,7 @@ def _face_crop(ctx, value, source, metadata):
     if value.get("framing"):
         ctx.write("framing.json", value["framing"])
         extra = ["--framing", ctx.root / "framing.json"]
+    ctx.progress("face-audit-crop")
     ctx.app("face_audit.py", [source, edit_map, ctx.root, "--model", model, "--canvas", f"{CANVAS[0]}x{CANVAS[1]}",
                               "--caption-top", str(top), *extra], timeout=1780, cpu=3600, as_limit=4 * 1024**3, nofile=128,
             file_limit=64 * 1024**2, threads="2")
@@ -864,6 +882,9 @@ def _final_render(ctx, value, source, metadata):
     if float(asm["result"]["summary"]["duration_s"]) > MAX_OUTPUT_S:
         raise Rejected(f"edited video is {asm['result']['summary']['duration_s']:.0f} s; the output limit is {MAX_OUTPUT_S:.0f} s")
     use_motion = "proof_job" in value
+    # Rough whole-stage estimate from measured 4-vCPU runs: ~0.26 s/frame with motion (capture dominates), ~0.1 s without.
+    ctx.progress("prepare", frames_total=frames, motion=use_motion,
+                 estimate_s=round(30 + frames * (0.26 if use_motion else 0.1)))
     ensure_resources(frames * (2 if use_motion else 1), "final-render", memory_bytes=(2560 if use_motion else 1536) * 1024**2)
     edit_map, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edit-map.json", "edit-map.json")
     ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edited.wav", "edited.wav")
@@ -887,6 +908,7 @@ def _final_render(ctx, value, source, metadata):
         ctx.source = source
         work, st, plan, _m, timeline, _s, _ = _motion_root(ctx, {**value, "composition_sha256": proof["result"]["summary"]["composition_sha256"]}, "full")
         lap("setup")
+        ctx.progress("motion-capture")
         cap = _capture(ctx, work, "full")
         lap("full_motion_capture_browser")
         cap_checks = _capture_checks(cap, plan, float(__import__("fractions").Fraction(str(mapped["fps"]))))
@@ -907,6 +929,7 @@ def _final_render(ctx, value, source, metadata):
         ctx.write("visual-plan.json", {"beats": [], "caption_suppress": [],
                                        "note": "No HTML/SVG/GSAP motion composition submitted: live footage only, captions never suppressed."})
         lap("setup")
+        ctx.progress("live-frames-crop")
         ctx.app("final_render.py", ["render", source, edit_map, ledger, root], timeout=3600, cpu=7200, as_limit=4 * 1024**3,
                 nofile=128, file_limit=64 * 1024**2, threads="2")
         lap("live_frames_crop")
@@ -916,9 +939,11 @@ def _final_render(ctx, value, source, metadata):
     ctx.used["caption_layer"] = HELPERS["caption_layer"][1]
     try:
         lap("setup")
+        ctx.progress("captions-encode")
         ctx.run("encode", [root], flags=("-s", "-E"), **big)
         lap("encode_py_captions_and_x264")
         if use_motion:
+            ctx.progress("motion-pixel-check")
             ctx.app("motion_frames.py", ["check", root / "final.mp4", root / "base-map.json", root, work / "base_frames",
                                          root / "picture-frames", root / "motion-check.json", "--caption-dir", helper("encode").parent],
                     timeout=1200, cpu=2400, as_limit=6 * 1024**3, nofile=128, file_limit=64 * 1024**2, threads="2")
@@ -927,15 +952,18 @@ def _final_render(ctx, value, source, metadata):
         if work is not None:
             shutil.rmtree(work, ignore_errors=True)
     lap("motion_pixel_check")
+    ctx.progress("encode-verify")
     code, out, err = ctx.run("encode", [root, "--verify-only"], flags=("-s", "-E"), check=False, **big)
     lap("encode_py_verify_only")
     if code:
         raise Rejected("encode.py --verify-only failed: " + _tail(err))
     verified = json.loads(out)
     if not use_motion:
+        ctx.progress("live-pixel-check")
         ctx.app("final_render.py", ["check", source, edit_map, ledger, root, "--caption-dir", helper("encode").parent],
                 timeout=1200, cpu=2400, as_limit=4 * 1024**3, nofile=128, file_limit=64 * 1024**2, threads="2")
     lap("live_pixel_check")
+    ctx.progress("decode-check")
     with wave.open(str(root / "edited.wav")) as w:
         channels = w.getnchannels()
     ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", "-threads", "1", "-i", root / "final.mp4", "-map", "0:a:0",
@@ -1125,7 +1153,9 @@ def _motion_capture(ctx, value, source, metadata):
     mode = value["mode"]
     work = None
     try:
+        ctx.progress("prepare-frames")
         work, st, plan, mapped, timeline, style, _ = _motion_root(ctx, value, mode)
+        ctx.progress("motion-capture")
         cap = _capture(ctx, work, mode)
         fps = float(Fraction(str(mapped["fps"])))
         checks = _capture_checks(cap, plan, fps)

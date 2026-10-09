@@ -44,10 +44,99 @@ LANG_NAMES = {"english": "en", "spanish": "es", "french": "fr", "german": "de", 
 NOT_BUILT = ["human viewing and listening review (always the owner's job)",
              "animated (moving) crops: James' contract forbids detector-driven pans; reframing is one fixed crop per setup"]
 
+# The setup DeFleur Video is built and tested for. One place: the agent check, GUIDE, SKILL.md and the app card quote it.
+INTENDED = {"harness": "Hermes Agent", "model": "Claude Opus 5.5", "model_id": "claude-opus-5-5"}
+# MCP clientInfo names of other harnesses (lower-case substrings). The Python MCP SDK's default name is "mcp".
+OTHER_CLIENTS = {"claude-code": "Claude Code", "claude-ai": "Claude (claude.ai / desktop)", "cursor": "Cursor", "codex": "OpenAI Codex",
+                 "openai": "OpenAI", "visual studio code": "VS Code", "vscode": "VS Code", "windsurf": "Windsurf", "goose": "Goose",
+                 "cline": "Cline", "continue": "Continue", "zed": "Zed", "librechat": "LibreChat", "n8n": "n8n", "openclaw": "OpenClaw"}
+
+
+def _norm_model(m: str) -> str:
+    m = re.sub(r"\[.*?\]", "", m.strip().lower())          # claude-opus-5-5[1m] -> claude-opus-5-5
+    m = re.split(r"[/:]", m)[-1] if re.search(r"[/:]", m) else m  # anthropic/claude-opus-5-5, bedrock:...
+    m = re.sub(r"^(anthropic|us|eu|apac|global)\.", "", m)     # bedrock-style prefixes
+    return re.sub(r"[\s._]+", "-", m).strip("-")
+
+
+def model_matches(model: str | None) -> bool | None:
+    if not model or not str(model).strip():
+        return None
+    n = _norm_model(str(model))
+    return bool(re.fullmatch(r"(claude-)?opus-5-5(-\d{8}|-v\d+(-\d+)?|-latest)?", n))
+
+
+def harness_matches(harness: str | None) -> bool | None:
+    if not harness or not str(harness).strip():
+        return None
+    return "hermes" in re.sub(r"[^a-z]", "", str(harness).lower())
+
+
+def detected_harness(client: dict | None) -> dict:
+    """What the MCP initialize clientInfo says (server-side; the model is never in MCP)."""
+    if not client or not client.get("name"):
+        return {"harness": None, "verdict": "unknown", "basis": "no MCP clientInfo seen for this connection"}
+    name = str(client["name"]).lower()
+    if "hermes" in name:
+        return {"harness": "Hermes Agent", "verdict": "intended", "basis": f"clientInfo name '{client['name']}'"}
+    for key, label in OTHER_CLIENTS.items():
+        if key in name:
+            return {"harness": label, "verdict": "other", "basis": f"clientInfo name '{client['name']}'"}
+    if name == "mcp":
+        return {"harness": None, "verdict": "unknown", "basis": "clientInfo is the Python MCP SDK default ('mcp'), which Hermes Agent "
+                                                                 "sends but so can other Python agents: consistent with Hermes, not proof"}
+    return {"harness": client["name"], "verdict": "unknown", "basis": f"unrecognised clientInfo name '{client['name']}'"}
+
+
+def agent_check(harness: str | None, model: str | None, client: dict | None) -> dict:
+    det = detected_harness(client)
+    h, m = harness_matches(harness), model_matches(model)
+    if det["verdict"] == "other":
+        h = False
+    match = False if False in (h, m) else (True if h and m else "unknown")
+    out = {"intended": INTENDED, "detected_client": {**(client or {}), **det},
+           "claimed": {"agent_harness": harness or None, "agent_model": model or None, "harness_matches": h, "model_matches": m},
+           "match": match, "requires_owner_confirmation": match is not True,
+           "model_note": "MCP does not carry the model name, so the model is only what the agent reports; a missing model counts as unknown."}
+    if match is True:
+        out["warning"] = None
+        out["next"] = "Intended setup. Continue with capabilities."
+    else:
+        you = (harness or det.get("harness") or "an unknown agent") + " with " + (model or "an unknown model")
+        out["warning"] = (f"DeFleur Video is built for {INTENDED['harness']} with {INTENDED['model']}. You're using {you}. "
+                          "You can continue, but results may vary; you'll get the best results with the intended setup. Continue?")
+        out["next"] = ("Before importing anything, show the owner `warning` word for word and WAIT for a yes. "
+                       + ("If you did not pass agent_harness and agent_model, call workflow_guide again with your own harness name and "
+                          "exact model id first. " if not (harness and model) else "")
+                       + "If they say yes, continue with capabilities; otherwise stop.")
+    return out
+
+
+def client_from(ctx) -> dict | None:
+    """clientInfo for this caller: the SDK session (stateful) or the header the app's /mcp proxy adds (stateless)."""
+    try:
+        cp = ctx.session.client_params  # type: ignore[union-attr]
+        ci = getattr(cp, "client_info", None) if cp else None
+        if ci is not None and getattr(ci, "name", None):
+            return {"name": ci.name, "version": getattr(ci, "version", None), "source": "MCP initialize (session)"}
+    except Exception:
+        pass
+    try:
+        raw = ctx.request_context.request.headers.get("x-defleur-mcp-client")  # type: ignore[union-attr]
+        if raw:
+            d = json.loads(raw)
+            if isinstance(d, dict):
+                return {**{k: str(v)[:80] for k, v in d.items() if k in ("name", "version", "title", "user_agent", "protocol_version")},
+                        "source": "MCP initialize (seen by the app proxy for this peer)"}
+    except Exception:
+        pass
+    return None
+
+
 MOTION_CONTRACT = {
-    "what": ("Optional motion graphics (James DeFleur's defleur-motion piece). YOU author a small project-local HTML/SVG/GSAP page; "
+    "what": ("Motion graphics, on by default (James DeFleur's defleur-motion piece). YOU author a small project-local HTML/SVG/GSAP page; "
              "the app captures it frame-by-frame with James' capture.cjs in the shared Browser app, burns captions and encodes. "
-             "Without a submission render_final makes live footage plus captions."),
+             "Without a submission render_final makes live footage plus captions (plain), which is only for the cases in default_edit."),
     "page_rules": [
         "index.html must include <script src=\"defleur/ledger.js\"></script> (app-generated: defines window.sourceFrameForOutputFrame(frame) from the locked source-frame map, plus window.DEFLEUR with fps, frames, duration, beats, inserts) and <script src=\"defleur/gsap.min.js\"></script> (vendored GSAP 3.15.0) BEFORE your own script.",
         "Canvas is exactly 1080x1920 CSS px; body margin 0; overflow hidden.",
@@ -106,17 +195,36 @@ GUIDE = {
         "and James' dialogue gate; then fixed per-setup face crops (optionally choosing which speaker each segment frames), optional "
         "HTML/SVG/GSAP motion graphics and fullscreen inserts captured by James' capture.cjs in the shared Browser app, burned "
         "captions, his 1080x1920 encode and delivery gate. You (the agent) are the editor and motion author; the app never calls an LLM."),
+    "skill": "The editing judgment for this app is in SKILL.md (MCP resource defleur-video://SKILL.md, or GET /SKILL.md on this app). It agrees with these steps.",
+    "default_edit": ("A DeFleur edit = the owner's approved cuts + motion graphics (James DeFleur's motion contract: your HTML/SVG/GSAP "
+                     "beats and any fullscreen inserts) + burned captions + the fixed 9:16 crop. Motion graphics are ON by default: they "
+                     "are the point of this editor. Go plain (render_final({})) ONLY if the owner asks for plain / no motion, the Browser "
+                     "app is missing (relay capabilities' fix), or motion capture still fails after a reasonable retry; then tell the "
+                     "owner exactly why."),
     "steps": [
-        "1. capabilities - check the Transcriber is reachable and its model installed; if not, relay the exact fix.",
-        "2. Get the video. Normal path: the owner puts it in the Files app (Files -> Videos) and tells you the file name. Call list_files() to find it, then import_file(path) - it returns the project id ('id'). Fallback only (no Files app): create_upload gives a one-time upload URL, curl command and /upload page. Video bytes never travel through MCP.",
-        "3. start_edit(project_id) - transcribes and aligns; call get_status(run_id) until state is 'done' to get the transcript, word timings, filler/pause candidates, proposed cuts and editorial rules.",
-        "4. Show the owner the proposed cut list (time, words, reason) and any untranscribed_sound gaps (sound with no transcript: maybe a skipped sentence; not proposed), and get approval or changes. Do not skip this.",
-        "5. apply_cuts(project_id, segments) with the approved ranges TO REMOVE; call get_status(run_id) until 'done' for the report: seconds removed, words lost/added, gate pass/fail and download URLs. An empty list (segments=[]) means no cuts: keep the whole source (captions/framing only); use it to go back to an uncut edit.",
-        "6. Tell the owner the apply_cuts result. If words_lost_near_cuts is non-empty or the dialogue gate failed, adjust the cuts with them and run apply_cuts again. asr_variance_far_from_cuts are words the second ASR pass missed in untouched audio: mention them, they are not lost.",
-        "7. Optional framing: preview_framing(project_id, framing) shows the fixed crop per setup with face evidence images. For a two-person shot pass framing={'targets': {'<kept segment index>': 'left'|'right'|'center'|'largest'}} (a change of target starts a new setup); 'new_setup_at': [index] forces a new setup.",
-        "8. Optional motion graphics (James' piece 3; read motion_contract below): submit_motion -> capture_motion 'smoke' -> look at the frames -> capture_motion 'proof' -> look again. Skip this for a plain captioned talking-head video.",
-        "9. render_final(project_id, options) - options {} for live footage + captions, {'motion': true} after a passing proof capture, plus 'framing' if you previewed one. It does the face audit and fixed crops, full motion capture if requested, burned captions, James' 1080x1920 encode, full decode, pixel checks, final re-transcription and James' delivery gate; call get_status(run_id) until 'done'.",
-        "10. Report in plain words: resolution, duration, crop result (and any face flag), motion beats and inserts, caption count and suppressions, delivery gate pass/fail, words lost, and where the finished video is: render_final saves it to Files -> Videos -> Edited (saved_to_files.path) as well as the final_mp4 download link. Ask the owner to watch it on a phone (open Files on the phone, Videos -> Edited, tap the file, then Download or Share). Use delete_project when finished (the copy in Files stays).",
+        "0. Agent check: call workflow_guide(agent_harness=<your harness, e.g. 'Hermes Agent'>, agent_model=<your exact model id>). "
+        "If agent_check.requires_owner_confirmation, show the owner agent_check.warning in plain words and WAIT for a yes before importing anything.",
+        "1. capabilities - the Transcriber must be ready; motion_ready must be true for motion graphics (if not, relay the Browser fix to the owner).",
+        "2. Get the video: list_files() to find the owner's file in Files -> Videos (match the name, ignoring case), then import_file(path); it returns the project id. "
+        "Fallback only (no Files app): create_upload. Video bytes never travel through MCP.",
+        "3. start_edit(project_id) -> get_status(run_id) until 'done': transcript, word timings, proposed cuts, untranscribed_sound.",
+        "4. Draft the motion plan from the transcript (3-6 beats for a 1-3 minute video, plus any fullscreen inserts): for each beat the "
+        "source time range, the spoken words it explains, and what the viewer sees change (see motion_contract.beat_rules). Times are "
+        "SOURCE seconds for now; they are converted to edited seconds in step 7.",
+        "5. ONE approval question: show the cut list (time, words, reason, and any untranscribed_sound gaps) AND the motion plan together; "
+        "ask the owner to approve or change either. Do not skip the cut approval. Do not apply cuts before the answer.",
+        "6. apply_cuts(project_id, approved cuts) -> get_status until 'done'. If words_lost_near_cuts is non-empty or the dialogue gate "
+        "failed, fix the cuts and apply again; asr_variance_far_from_cuts are untouched audio the second ASR pass missed (mention, not lost).",
+        "7. Author the motion composition (motion_contract) with beat/insert times in EDITED seconds: convert each approved source "
+        "time with apply_cuts' time_map (edited = edited_start_s + (source - source_start_s) inside a kept segment) or read them off "
+        "edited_words. submit_motion -> capture_motion 'smoke' -> LOOK at the frames -> fix if needed -> capture_motion 'proof' -> LOOK at the contact sheet and frames.",
+        "8. Optional framing for two-person shots: preview_framing(project_id, framing); pass the same framing to capture_motion and render_final.",
+        "9. render_final(project_id, {'motion': true}) after a passing proof (plain: {} only for the reasons in default_edit). Poll get_status: "
+        "elapsed_s, step, sub_stage and estimate_remaining_s are live; a motion render of a 2-minute video takes ~15 min on 4 CPUs.",
+        "10. Report in plain words: resolution, duration, the motion beats and inserts delivered (times and what each shows), caption count "
+        "and suppressions, crop result (if a framing flag appears, look at several frames across the video, not one), delivery gate "
+        "pass/fail with the reason, words lost, and where the video is (Files -> Videos -> Edited, plus the final_mp4 link). If you "
+        "rendered plain, say why. Ask the owner to watch it on a phone before posting.",
     ],
     "motion_contract": MOTION_CONTRACT,
     "long_work": "start_edit, apply_cuts, capture_motion and render_final return immediately with a run_id. Keep calling get_status(run_id) (each call waits up to ~55 s) until state is 'done' or 'failed'. Transcription and alignment of a few minutes of speech can take several minutes on CPU.",
@@ -250,11 +358,19 @@ def stage(run: dict, op: str, body: dict, wait_s: float = 2400) -> dict:
                 raise
             time.sleep(2)
     end = time.monotonic() + wait_s
+    run["stage_started"], run["progress"] = time.time(), None
+    save(run)
+    last_saved = time.monotonic()
     while job["state"] in ("queued", "running"):
         if time.monotonic() > end:
             raise ToolError(f"{op} job {job['id']} still running after {wait_s:.0f} s")
         time.sleep(0.5)
         job = api("GET", f"/v1/jobs/{job['id']}")
+        prog = job.get("progress")
+        if prog != run.get("progress") and (time.monotonic() - last_saved > 2 or (prog or {}).get("phase") != (run.get("progress") or {}).get("phase")):
+            run["progress"], last_saved = prog, time.monotonic()
+            save(run)
+    run["progress"] = None
     run["steps"].append({"stage": op, "job": job["id"], "state": job["state"],
                          "elapsed_s": (job.get("result") or {}).get("elapsed_s")})
     save(run)
@@ -316,7 +432,10 @@ def do_start_edit(run: dict) -> dict:
         "next": ("Show the owner proposed_cuts as a readable list (time range, the words around it, reason). "
                  + (f"Also tell them about the {len(untranscribed)} untranscribed_sound gap(s): there is sound the transcript does not "
                     "show (maybe a skipped sentence); they stay in unless the owner listens and asks to cut them. " if untranscribed else "")
-                 + "Ask them to approve, drop or add cuts. Only then call apply_cuts(project_id, segments=<approved ranges to REMOVE>). "
+                 + "ALSO draft the motion plan now (workflow_guide step 4: 3-6 explanatory beats, each with its source time range, the "
+                 "spoken words it explains and what the viewer sees change, plus any fullscreen inserts) and show the cuts and the motion "
+                 "plan together in ONE question. Motion graphics are the default; only skip them if the owner asks for a plain video. "
+                 "After the owner approves, call apply_cuts(project_id, segments=<approved ranges to REMOVE>). "
                  "Do not call apply_cuts without the owner's approval."),
     }
 
@@ -505,6 +624,9 @@ def do_apply_cuts(run: dict) -> dict:
         "seconds_removed": round(duration - float(edit_map["duration"]), 3),
         "source_duration_s": round(duration, 3), "edited_duration_s": round(float(edit_map["duration"]), 3),
         "cuts_applied": cuts, "kept_segments": len(keeps),
+        "time_map": [{"source_start_s": round(float(b["start_s"]), 3), "source_end_s": round(float(b["end_s"]), 3),
+                      "edited_start_s": round(float(b["output_start"]), 3), "edited_end_s": round(float(b["output_end"]), 3)} for b in blocks],
+        "time_map_note": "Kept source spans and where they land in the edited video: edited = edited_start_s + (source - source_start_s). Motion beat/insert times are EDITED seconds.",
         "no_cuts": not cuts,
         "words_removed_by_cuts": removed,
         "words_lost_vs_source": lost, "words_added_vs_source": added,
@@ -539,8 +661,10 @@ def do_apply_cuts(run: dict) -> dict:
         "jobs": {"pcm_assemble": asm["id"], "speech_cut_audit": audit["id"], "acoustic_scan": scan["id"], "edited_asr": easr["id"], "dialogue_gate": gate["id"]},
         "next": ("Tell the owner in plain words: seconds removed, any words lost or added, gate pass/fail with the reason, and the download links. "
                  "Ask them to listen to the edited audio/preview. If words were lost or the gate failed, propose adjusted cuts and call apply_cuts again. "
-                 "When the owner is happy with the cut: optionally preview_framing (two-person shots) and motion graphics "
-                 "(submit_motion -> capture_motion smoke/proof), then render_final(project_id) for the finished 1080x1920 captioned video."),
+                 "When the cut is good: convert the approved motion plan to edited seconds with time_map, author the composition "
+                 "(workflow_guide.motion_contract), submit_motion -> capture_motion 'smoke' -> look -> 'proof' -> look, then "
+                 "render_final(project_id, {'motion': true}). Use render_final(project_id, {}) (plain) only if the owner asked for no motion, "
+                 "the Browser app is missing, or capture keeps failing - and tell the owner why."),
     }
 
 
@@ -640,6 +764,10 @@ def do_render_final(run: dict) -> dict:
                  "where_to_tell_the_owner": "It's in Files -> Videos -> Edited -> " + saved["name"]}
     except ToolError as e:
         files = {"saved": False, "error": str(e), "where_to_tell_the_owner": "Not saved to Files; use the final_mp4 download link."}
+    plan = (run["params"].get("proof") or {}).get("plan") or {}
+    beats_delivered = [{"start": b.get("start"), "end": b.get("end"), "spoken_anchor": b.get("spoken_anchor"), "shows": b.get("state_after"),
+                        "visual_family": b.get("visual_family")} for b in plan.get("beats", [])] if proof else []
+    inserts_delivered = [{k: r.get(k) for k in ("start", "end", "asset", "reason")} for r in plan.get("inserts", [])] if proof else []
     lost = gs.get("words_lost_vs_edited") or []
     # Older gate summaries (no lost_words_fail) keep the strict rule: any lost word fails.
     words_fail = bool(gs.get("lost_words_fail", bool(lost)))
@@ -686,21 +814,34 @@ def do_render_final(run: dict) -> dict:
         "final_render_phase_seconds": rs.get("phase_seconds"),
         "jobs": {"face_crop": crop["id"], "final_render": render["id"], "final_asr": fasr["id"], "final_scan": fscan["id"],
                  "delivery_gate": gate_job["id"] if gate_job else None},
-        "next": ("Tell the owner in plain words: resolution, duration, how the speaker is framed (and any crop flag), caption count, "
-                 "delivery gate pass/fail with the reason, any words lost, and where the video is (saved_to_files.where_to_tell_the_owner, "
-                 "else the final_mp4 link). Ask them to watch it on a phone before "
-                 "posting. If a face flag or lost word appears, say so plainly; do not call the video approved."),
+        "beats_delivered": beats_delivered,
+        "inserts_delivered": inserts_delivered,
+        "next": ("Tell the owner in plain words: resolution, duration, the motion beats and inserts delivered (beats_delivered: time "
+                 "and what each shows; say so plainly if this render is plain and why), caption count, how the speaker is framed (if a "
+                 "crop flag appears, look at several frames across the video before judging it), delivery gate pass/fail with the "
+                 "reason, any words lost, and where the video is (saved_to_files.where_to_tell_the_owner, else the final_mp4 link). "
+                 "Ask them to watch it on a phone before posting. Do not call the video approved."),
     }
 
 
 # ---------- MCP tools ----------
 
 mcp = MCPServer("defleur-video", version=VERSION, instructions=(
-    "DeFleur Video edits talking-head videos on the owner's own server. Start with workflow_guide, then capabilities. "
-    "Flow: list_files -> import_file (the owner's video in Files -> Videos; create_upload is the fallback) -> start_edit -> get_status until done -> "
-    "show the proposed cuts and get approval -> apply_cuts -> get_status until done -> render_final -> get_status until done -> "
-    "report where the finished 1080x1920 MP4 is (saved to Files -> Videos -> Edited) and its link. Optional: preview_framing for per-setup crops / speaker choice, and motion graphics "
-    "(submit_motion -> capture_motion smoke -> proof -> render_final with {'motion': true}); the contract is in workflow_guide.motion_contract."))
+    "DeFleur Video edits talking-head videos on the owner's own server into finished 1080x1920 shorts WITH motion graphics. "
+    "Start with workflow_guide(agent_harness, agent_model) and follow its agent_check: if it asks for owner confirmation, show its warning and wait for a yes. "
+    "Default flow: capabilities -> list_files -> import_file -> start_edit -> get_status -> draft cuts AND a motion plan -> ONE owner approval "
+    "for both -> apply_cuts -> get_status -> submit_motion -> capture_motion smoke -> look -> proof -> look -> render_final({'motion': true}) -> "
+    "get_status (live progress) -> report the beats delivered and where the MP4 is (Files -> Videos -> Edited). Render plain ({}) only if the "
+    "owner asks, the Browser app is missing, or capture keeps failing, and say why. Editing judgment: SKILL.md (resource defleur-video://SKILL.md)."))
+
+
+SKILL_FILE = Path(__file__).with_name("SKILL.md")
+
+
+@mcp.resource("defleur-video://SKILL.md", name="SKILL.md", title="DeFleur Video editing skill", mime_type="text/markdown",
+              description="Editing judgment for DeFleur Video (Agent Skills format): agent check, combined cut + motion approval, gates, report.")
+def skill_md() -> str:
+    return SKILL_FILE.read_text()
 
 
 def _result(fn, *a, **kw):
@@ -711,12 +852,13 @@ def _result(fn, *a, **kw):
 
 
 @mcp.tool(description=(
-    "Call this FIRST when the user wants to edit a video. Explains what DeFleur Video does on this server, the exact order of "
-    "tools to call (capabilities -> list_files / import_file (or create_upload) -> start_edit -> get_status -> owner approval -> apply_cuts -> get_status -> "
-    "optional preview_framing / submit_motion -> capture_motion smoke -> proof -> render_final), James DeFleur's motion "
-    "contract for motion graphics and fullscreen inserts (motion_contract), limits, and what is not automated. No arguments."))
-def workflow_guide() -> dict:
-    return GUIDE
+    "Call this FIRST when the user wants to edit a video, with agent_harness = the agent harness you run in (e.g. 'Hermes Agent', "
+    "'Claude Code', 'Cursor') and agent_model = your exact model id. Returns agent_check (intended setup: Hermes Agent + Claude Opus 5.5; "
+    "if requires_owner_confirmation, show the owner its warning and wait for a yes before importing), the default edit (approved cuts "
+    "+ motion graphics + captions + crop), the exact tool order (one combined cut + motion-plan approval, then apply_cuts, submit_motion, "
+    "capture_motion smoke/proof, render_final({'motion': true})), James DeFleur's motion_contract, limits and what is not automated."))
+def workflow_guide(ctx: Context, agent_harness: str | None = None, agent_model: str | None = None) -> dict:
+    return {"agent_check": agent_check(agent_harness, agent_model, client_from(ctx)), **GUIDE}
 
 
 @mcp.tool(description=(
@@ -829,8 +971,8 @@ def import_file(path: str) -> dict:
     "Step 3: analyse an uploaded project. Runs source audio extraction, speech-to-text (Transcriber), preflight and local word "
     "alignment in the background and returns a run_id immediately. Then call get_status(run_id) repeatedly until state is "
     "'done'; the result has the transcript with word timings, filler / long-pause / repeat candidates, proposed_cuts and James "
-    "DeFleur's editorial rules. IMPORTANT: show the owner the proposed cut list and get their approval (or changes) BEFORE "
-    "calling apply_cuts. language is optional (e.g. 'en'); default is auto-detect."))
+    "DeFleur's editorial rules. IMPORTANT: draft the motion plan from the transcript too, show the owner the proposed cut list "
+    "AND the motion plan in ONE question and get their approval (or changes) BEFORE calling apply_cuts. language is optional (e.g. 'en'); default is auto-detect."))
 def start_edit(project_id: str, language: str | None = None) -> dict:
     def go():
         if not ID.fullmatch(project_id or ""):
@@ -848,12 +990,13 @@ def start_edit(project_id: str, language: str | None = None) -> dict:
 
 
 @mcp.tool(description=(
-    "Step 5, only AFTER the owner approved the cut list from start_edit. segments = the time ranges to REMOVE from the source, "
+    "Step 6, only AFTER the owner approved the cut list (and motion plan) from start_edit. segments = the time ranges to REMOVE from the source, "
     "each {start_s, end_s, reason} in source seconds (start_edit's proposed_cuts already has this shape). Runs sample-exact "
     "audio assembly, per-edge cut audit, acoustic scan, re-transcription of the edited audio and the dialogue gate in the "
     "background; returns a run_id immediately. Keep calling get_status(run_id) until 'done' for the report: seconds removed, "
     "words lost/added vs the source, gate pass/fail with reasons and download URLs. segments=[] means NO cuts (keep the whole "
-    "source, captions/framing only); use it to return to an uncut edit."))
+    "source, captions/framing only); use it to return to an uncut edit. The report's time_map converts source seconds to the "
+    "edited seconds that submit_motion's plan uses."))
 def apply_cuts(project_id: str, segments: list[dict], ctx: Context) -> dict:
     def go():
         if not ID.fullmatch(project_id or ""):
@@ -892,7 +1035,8 @@ def latest_proof(project_id: str, cut_run: str) -> dict:
                 raise ToolError("the composition changed after the last proof capture; run capture_motion(project_id, 'proof') again")
             if not res["pass"]:
                 raise ToolError("the last proof capture did not pass; fix the composition and capture a proof again")
-            return {"crop_job": res["crop_job"], "capture_job": res["capture_job"], "framing": res["framing"]}
+            return {"crop_job": res["crop_job"], "capture_job": res["capture_job"], "framing": res["framing"],
+                    "plan": {k: current.get("plan", {}).get(k, []) for k in ("beats", "inserts")}}
     raise ToolError("no passing proof capture for the current cut; run capture_motion(project_id, 'smoke') then 'proof' first")
 
 
@@ -925,7 +1069,7 @@ def preview_framing(project_id: str, ctx: Context, framing: dict | None = None) 
 
 
 @mcp.tool(description=(
-    "Motion graphics step 1 (optional; James DeFleur's defleur-motion contract, condensed in workflow_guide.motion_contract). "
+    "Motion graphics step 1 (default for every DeFleur edit, after apply_cuts; James DeFleur's defleur-motion contract, condensed in workflow_guide.motion_contract). "
     "Upload YOUR composition for this project: files = {path: text} for index.html, .css, .js, .svg, .json, or "
     "{path: {'base64': ...}} for small .png/.jpg/.webp/.woff2 (use create_asset_upload for video clips and big images). "
     "plan = James' visual-plan: {'beats': [{start, end, spoken_anchor, viewer_inference, visual_family, state_before, "
@@ -992,12 +1136,15 @@ def capture_motion(project_id: str, mode: str, ctx: Context, framing: dict | Non
 
 
 @mcp.tool(description=(
-    "Step 9, after apply_cuts is done and the owner accepts the cut. Renders the finished vertical short in the background and "
+    "Step 9, after apply_cuts and a passing capture_motion 'proof'. Default options: {'motion': true} (motion graphics are the default "
+    "DeFleur edit). Renders the finished vertical short in the background and "
     "returns a run_id: face audit and one fixed 9:16 crop per setup (centered and flagged if no face is found), burned-in "
     "captions from the edited-audio word timings (James' caption_layer.py), the 1080x1920 H.264/AAC encode and --verify-only "
     "(James' encode.py), full decode, decoded-pixel crop/caption checks, re-transcription of the final audio and James' "
     "delivery gate. Keep calling get_status(run_id) until 'done' for resolution, duration, crop summary, caption count, gate "
-    "result, words lost and download URLs. options: {} for live footage + captions (no Browser needed); "
+    "result, words lost, beats_delivered and download URLs. get_status shows live elapsed_s, sub_stage and estimate_remaining_s. "
+    "options: {} = plain live footage + captions, ONLY when the owner asked for no motion, the Browser app is missing or capture keeps "
+    "failing (pass 'plain_reason': '<why>' and tell the owner); "
     "{'motion': true} after a passing capture_motion 'proof' of the current composition (full capture of every frame, "
     "motion-window and caption-suppression checks); {'framing': {...}} as in preview_framing (with motion, the proof's "
     "framing is used)."))
@@ -1006,8 +1153,8 @@ def render_final(project_id: str, ctx: Context, options: dict | None = None) -> 
         if not ID.fullmatch(project_id or ""):
             raise ToolError("project_id must be the 32-hex project id")
         opts = options or {}
-        if not isinstance(opts, dict) or set(opts) - {"motion", "framing"}:
-            raise ToolError("options may contain only 'motion' (bool) and 'framing' (object)")
+        if not isinstance(opts, dict) or set(opts) - {"motion", "framing", "plain_reason"}:
+            raise ToolError("options may contain only 'motion' (bool), 'framing' (object) and 'plain_reason' (text)")
         cuts = runs_for(project_id, "apply_cuts", "done")
         if not cuts:
             raise ToolError("run apply_cuts for this project first and wait for it to finish (get_status)")
@@ -1025,20 +1172,49 @@ def render_final(project_id: str, ctx: Context, options: dict | None = None) -> 
             run = start_run("render_final", project_id, {"cut": {"jobs": cut["result"]["jobs"], "run": cut["id"]},
                                                          "language": lang, "base_url": base_url(ctx), "proof": proof,
                                                          "framing": opts.get("framing")}, do_render_final)
-        return {"run_id": run["id"], "state": "running", "from_apply_cuts_run": cut["id"],
-                "next": f"Call get_status('{run['id']}') now and keep calling it until state is 'done' (each call waits up to ~55 s). "
-                        "Rendering takes roughly 1-3x the video length on this server."}
+        out = {"run_id": run["id"], "state": "running", "from_apply_cuts_run": cut["id"], "motion": bool(proof),
+               "next": f"Call get_status('{run['id']}') now and keep calling it until state is 'done' (each call waits up to ~55 s; "
+                       "elapsed_s, sub_stage and estimate_remaining_s move while it works). "
+                       + ("With motion, expect ~8 min of render per output minute on a 4-CPU server." if proof else
+                          "Plain render: about 1.5-3x the video length.")}
+        if not proof:
+            out["plain_note"] = ("This is a PLAIN render (no motion graphics). Motion graphics are the default DeFleur edit: tell the owner "
+                                 "why this one is plain" + (f" ({str(opts['plain_reason'])[:200]})" if opts.get("plain_reason") else
+                                                            " (owner asked / Browser app missing / capture failed)") + ".")
+        return out
     return _result(go)
 
 
-def public_run(r: dict) -> dict:
+# Rough share of a render_final run per app stage (measured on 4 vCPU); used only for a remaining-time hint.
+RENDER_PLAN = ["face-crop", "final-render", "asr", "acoustic-scan", "delivery-gate", "save-to-files"]
+
+
+def public_run(r: dict, now: float | None = None) -> dict:
+    """Run status with LIVE timings: elapsed is computed at read time, not when the run file was last saved."""
+    now = time.time() if now is None else now
     out = {k: r.get(k) for k in ("id", "kind", "project", "state", "step", "error")}
-    out["elapsed_s"] = round((r.get("updated") or time.time()) - r["created"], 1)
+    running = r["state"] == "running"
+    out["elapsed_s"] = round((now if running else (r.get("updated") or now)) - r["created"], 1)
     out["stages_done"] = [s["stage"] for s in r.get("steps", [])]
     if r["state"] == "done":
         out["result"] = r["result"]
-    elif r["state"] == "running":
-        out["next"] = f"Still working on '{r['step']}'. Call get_status('{r['id']}') again."
+    elif running:
+        if r.get("stage_started"):
+            out["step_elapsed_s"] = round(now - r["stage_started"], 1)
+        prog = r.get("progress") or {}
+        if prog:
+            sub = {k: prog[k] for k in ("phase", "phases_done", "frames_total", "frames_captured") if k in prog}
+            if prog.get("phase_elapsed_s") is not None:  # recomputed from the save time so it keeps moving between saves
+                sub["phase_elapsed_s"] = round(prog["phase_elapsed_s"] + max(0.0, now - (r.get("updated") or now)), 1)
+            out["sub_stage"] = sub
+            if prog.get("estimate_remaining_s") is not None:
+                left = max(0, round(prog["estimate_remaining_s"] - max(0.0, now - (r.get("updated") or now))))
+                out["estimate_remaining_s"] = left
+                out["estimate_note"] = "rough, from measured runs on a 4-vCPU server; final checks add ~1-2 min"
+        if r.get("kind") == "render_final" and r.get("step") in RENDER_PLAN:
+            out["stages_left"] = RENDER_PLAN[RENDER_PLAN.index(r["step"]) + 1:]
+        what = r["step"] + (f" / {out['sub_stage']['phase']}" if out.get("sub_stage", {}).get("phase") else "")
+        out["next"] = f"Still working on '{what}' (it is progressing; elapsed_s is live). Call get_status('{r['id']}') again."
     return out
 
 

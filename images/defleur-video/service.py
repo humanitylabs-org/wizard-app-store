@@ -31,7 +31,7 @@ import secrets
 from typing import cast
 from editing import DURATION_TOLERANCE_S, Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.6.4-testing"
+VERSION = "0.6.5-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 8 * 1024 * 1024 * 1024
 MAX_PROJECTS = 8
@@ -932,6 +932,8 @@ class Store:
         value["result"] = parse_json(value["result"]) if value["result"] else None
         value["delivery_approved"] = False
         value["missing_delivery_gates"] = GATES
+        if value["state"] == "running":
+            value["progress"] = job_progress(self.path(value["project"]), jid)
         return value
 
     def delete(self, identifier):
@@ -986,7 +988,57 @@ class Store:
             finally:
                 for caption in target.parent.glob(row["id"] + "-caption-*.txt"):
                     caption.unlink(missing_ok=True)
+                (target.parent / (row["id"] + ".progress")).unlink(missing_ok=True)
                 del NATIVE_CONTEXT.deadline
+
+
+SKILL_PATH = Path(__file__).with_name("SKILL.md")
+MCP_CLIENTS: dict = {}
+MCP_CLIENTS_LOCK = threading.Lock()
+
+
+def mcp_client_seen(peer: str, body: bytes | None, user_agent: str | None) -> str | None:
+    """Remember the clientInfo (name/version) a peer sent in its MCP initialize; return it (compact JSON) for later calls."""
+    if body and b'"initialize"' in body[:4096]:
+        try:
+            msg = json.loads(body)
+            params = msg.get("params") or {} if isinstance(msg, dict) and msg.get("method") == "initialize" else None
+        except ValueError:
+            params = None
+        if isinstance(params, dict):
+            ci = params.get("clientInfo") if isinstance(params.get("clientInfo"), dict) else {}
+            clean = lambda v: re.sub(r"[^A-Za-z0-9 ._:/()+@-]", "", str(v))[:80] if v is not None else None
+            rec = {"name": clean(ci.get("name")), "version": clean(ci.get("version")), "title": clean(ci.get("title")),
+                   "protocol_version": clean(params.get("protocolVersion")), "user_agent": clean(user_agent), "seen": int(time.time())}
+            with MCP_CLIENTS_LOCK:
+                MCP_CLIENTS[peer] = json.dumps({k: v for k, v in rec.items() if v is not None}, separators=(",", ":"))
+                while len(MCP_CLIENTS) > 64:
+                    MCP_CLIENTS.pop(next(iter(MCP_CLIENTS)))
+    with MCP_CLIENTS_LOCK:
+        return MCP_CLIENTS.get(peer)
+
+
+def job_progress(folder: Path, jid: str) -> dict | None:
+    """Live sub-stage of a running workflow job (written by workflow.Ctx.progress), with live timings computed now."""
+    try:
+        p = json.loads((folder / (jid + ".progress")).read_text())
+    except (OSError, ValueError):
+        return None
+    now = time.time()
+    out = {"phase": p.get("phase"), "phase_elapsed_s": round(now - p.get("phase_started", now), 1),
+           "elapsed_s": round(now - p.get("started", now), 1), "phases_done": p.get("phases_done", [])}
+    if p.get("frames_total"):
+        out["frames_total"] = p["frames_total"]
+    if p.get("phase") == "motion-capture":
+        try:  # capture.cjs writes one JPEG per frame: a cheap live frame counter
+            with os.scandir(folder / (jid + ".work") / "picture-frames") as it:
+                out["frames_captured"] = sum(1 for _ in it)
+        except OSError:
+            pass
+    if p.get("estimate_s"):
+        out["estimate_total_s"] = p["estimate_s"]
+        out["estimate_remaining_s"] = max(0, round(p["estimate_s"] - out["elapsed_s"]))
+    return out
 
 
 class VideoServer(ThreadingHTTPServer):
@@ -1062,6 +1114,10 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(n) if n else None
         headers = {k: v for k, v in self.headers.items() if k.lower() in (
             "content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id", "host")}
+        peer = self.client_address[0] if self.client_address else "?"
+        info = mcp_client_seen(peer, body, self.headers.get("User-Agent"))
+        if info:  # the stateless MCP server never sees initialize again: hand it the clientInfo this peer announced
+            headers["X-DeFleur-MCP-Client"] = info
         c = http.client.HTTPConnection("127.0.0.1", MCP_PORT, timeout=150)
         try:
             try:
@@ -1084,6 +1140,15 @@ class Handler(BaseHTTPRequestHandler):
     def route(self, method):
         if self.path == "/healthz" and method == "GET":
             return self.send(200, {"status": "ok", "version": VERSION})
+        if self.path == "/SKILL.md" and method == "GET":  # the agent-facing editing judgment; public like /healthz
+            data = SKILL_PATH.read_bytes()
+            self.send_response(200)
+            for k, v in (("Content-Type", "text/markdown; charset=utf-8"), ("Content-Length", str(len(data))),
+                         ("X-Content-SHA256", hashlib.sha256(data).hexdigest()), ("Cache-Control", "no-cache"),
+                         ("X-Content-Type-Options", "nosniff")):
+                self.send_header(k, v)
+            self.end_headers()
+            return self.wfile.write(data)
         server = cast(VideoServer, self.server)
         parts = self.path.split("/")
         if method == "GET" and self.path == "/upload":

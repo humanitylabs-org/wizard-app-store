@@ -118,7 +118,7 @@ test("video has independent state plus the shared Files folder, no agent volumes
   expect(service.cpus).toBeUndefined();
   expect(service.pids_limit).toBeGreaterThanOrEqual(1024);
   expect(service.shm_size).toBe("1g");
-  expect(config.version).toBe("0.6.4-testing");
+  expect(config.version).toBe("0.6.5-testing");
   expect(service.image).toBe(`ghcr.io/humanitylabs-org/defleur-video:${config.version}`);
   expect(service.environment.VIDEO_API_TOKEN).toBeUndefined();
   for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "depends_on"]) {
