@@ -882,9 +882,10 @@ def _final_render(ctx, value, source, metadata):
     if float(asm["result"]["summary"]["duration_s"]) > MAX_OUTPUT_S:
         raise Rejected(f"edited video is {asm['result']['summary']['duration_s']:.0f} s; the output limit is {MAX_OUTPUT_S:.0f} s")
     use_motion = "proof_job" in value
-    # Rough whole-stage estimate from measured 4-vCPU runs: ~0.26 s/frame with motion (capture dominates), ~0.1 s without.
+    # Rough whole-stage estimate from measured 4-vCPU runs: ~0.32 s/frame with motion (capture 0.25 + captions/encode/checks),
+    # ~0.1 s without. During motion capture the API re-estimates from the measured capture rate.
     ctx.progress("prepare", frames_total=frames, motion=use_motion,
-                 estimate_s=round(30 + frames * (0.26 if use_motion else 0.1)))
+                 estimate_s=round(60 + frames * (0.32 if use_motion else 0.1)))
     ensure_resources(frames * (2 if use_motion else 1), "final-render", memory_bytes=(2560 if use_motion else 1536) * 1024**2)
     edit_map, _ = ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edit-map.json", "edit-map.json")
     ctx.ref(value["assemble_job"], {"pcm-assemble"}, "edited.wav", "edited.wav")

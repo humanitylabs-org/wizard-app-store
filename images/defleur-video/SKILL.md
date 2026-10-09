@@ -63,7 +63,8 @@ after one reasonable fix-and-retry. Pass `plain_reason` and tell the owner why.
 
 `get_status` reports a live `elapsed_s`, the current `step`, a `sub_stage` (face audit, live frames or motion capture with a
 frame count, captions and encode, verify, decode check, then re-transcription and the delivery gate), and `estimate_remaining_s`.
-A motion render of a 2-minute video takes about 15 minutes on 4 CPUs. Tell the owner it is progressing; it is not frozen.
+Motion capture takes about 0.25 s per output frame on 4 CPUs: a 2-minute video takes about 15 minutes at 30 fps and about 35 minutes
+at 60 fps (iPhone 4K60 footage stays 60 fps). Tell the owner the expected time up front, and that it is progressing, not frozen.
 
 ## 5. Read the gates and report
 

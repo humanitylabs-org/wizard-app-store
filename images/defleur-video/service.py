@@ -1036,8 +1036,19 @@ def job_progress(folder: Path, jid: str) -> dict | None:
         except OSError:
             pass
     if p.get("estimate_s"):
-        out["estimate_total_s"] = p["estimate_s"]
-        out["estimate_remaining_s"] = max(0, round(p["estimate_s"] - out["elapsed_s"]))
+        total = float(p["estimate_s"])
+        n, done = p.get("frames_total") or 0, out.get("frames_captured") or 0
+        if p.get("phase") == "motion-capture" and done >= 30 and n:
+            # measured capture rate so far + ~0.07 s/frame for captions/encode/checks (owner's file: 4K60 source, 4 vCPU)
+            total = out["elapsed_s"] + (n - done) * out["phase_elapsed_s"] / done + n * 0.07
+        elif p.get("phase") not in ("prepare", "motion-capture", "live-frames-crop", "face-audit-crop") and n:
+            total = max(total, out["elapsed_s"] + 30)
+        out["estimate_total_s"] = round(total)
+        left = round(total - out["elapsed_s"])
+        if left > 0:
+            out["estimate_remaining_s"] = left
+        else:
+            out["estimate_note"] = "taking longer than the rough estimate; still working (watch phase / phase_elapsed_s)"
     return out
 
 

@@ -216,7 +216,8 @@ GUIDE = {
         "edited_words. submit_motion -> capture_motion 'smoke' -> LOOK at the frames -> fix if needed -> capture_motion 'proof' -> LOOK at the contact sheet and frames.",
         "8. Optional framing for two-person shots: preview_framing(project_id, framing); pass the same framing to capture_motion and render_final.",
         "9. render_final(project_id, {'motion': true}) after a passing proof (plain: {} only for the reasons in default_edit). Poll get_status: "
-        "elapsed_s, step, sub_stage and estimate_remaining_s are live; a motion render of a 2-minute video takes ~15 min on 4 CPUs.",
+        "elapsed_s, step, sub_stage (with frames_captured) and estimate_remaining_s are live. Motion capture takes ~0.25 s per output frame on 4 CPUs: "
+        "a 2-minute video takes ~15 min at 30 fps and ~35 min at 60 fps. Tell the owner the expected time up front.",
         "10. Report in plain words: resolution, duration, the motion beats and inserts delivered (times and what each shows), caption count "
         "and suppressions, crop result (if a framing flag appears, look at several frames across the video, not one), delivery gate "
         "pass/fail with the reason, words lost, and where the video is (Files -> Videos -> Edited, plus the final_mp4 link). If you "
@@ -1171,7 +1172,8 @@ def render_final(project_id: str, ctx: Context, options: dict | None = None) -> 
         out = {"run_id": run["id"], "state": "running", "from_apply_cuts_run": cut["id"], "motion": bool(proof),
                "next": f"Call get_status('{run['id']}') now and keep calling it until state is 'done' (each call waits up to ~55 s; "
                        "elapsed_s, sub_stage and estimate_remaining_s move while it works). "
-                       + ("With motion, expect ~8 min of render per output minute on a 4-CPU server." if proof else
+                       + ("With motion, expect ~0.25 s per output frame on a 4-CPU server (a 2-minute video: ~15 min at 30 fps, "
+                          "~35 min at 60 fps); tell the owner." if proof else
                           "Plain render: about 1.5-3x the video length.")}
         if not proof:
             out["plain_note"] = ("This is a PLAIN render (no motion graphics). Motion graphics are the default DeFleur edit: tell the owner "
@@ -1204,9 +1206,14 @@ def public_run(r: dict, now: float | None = None) -> dict:
                 sub["phase_elapsed_s"] = round(prog["phase_elapsed_s"] + max(0.0, now - (r.get("updated") or now)), 1)
             out["sub_stage"] = sub
             if prog.get("estimate_remaining_s") is not None:
-                left = max(0, round(prog["estimate_remaining_s"] - max(0.0, now - (r.get("updated") or now))))
-                out["estimate_remaining_s"] = left
-                out["estimate_note"] = "rough, from measured runs on a 4-vCPU server; final checks add ~1-2 min"
+                left = round(prog["estimate_remaining_s"] - max(0.0, now - (r.get("updated") or now)))
+                if left > 0:
+                    out["estimate_remaining_s"] = left
+                    out["estimate_note"] = "rough, from the measured capture rate on this server; final checks add a few minutes"
+                else:
+                    out["estimate_note"] = "taking longer than the rough estimate; still working"
+            elif prog.get("estimate_note"):
+                out["estimate_note"] = prog["estimate_note"]
         if r.get("kind") == "render_final" and r.get("step") in RENDER_PLAN:
             out["stages_left"] = RENDER_PLAN[RENDER_PLAN.index(r["step"]) + 1:]
         what = r["step"] + (f" / {out['sub_stage']['phase']}" if out.get("sub_stage", {}).get("phase") else "")

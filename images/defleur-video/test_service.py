@@ -1515,6 +1515,23 @@ print(json.dumps([a, b, done]))
         self.assertEqual((p["frames_total"], p["frames_captured"], p["estimate_total_s"]), (600, 3, 200))
         self.assertLessEqual(p["estimate_remaining_s"], 200)
         self.assertIsNone(service.job_progress(folder, "d" * 32))
+        # adaptive: with a measured capture rate the estimate follows it; once overdue it says so instead of showing 0
+        prog = json.loads((folder / (jid + ".progress")).read_text())
+        prog.update({"started": time.time() - 100, "phase_started": time.time() - 90})
+        (folder / (jid + ".progress")).write_text(json.dumps(prog))
+        for i in range(3, 60):
+            (folder / (jid + ".work") / "picture-frames" / f"{i:06d}.jpg").write_bytes(b"x")
+        p = service.job_progress(folder, jid)
+        self.assertAlmostEqual(p["estimate_remaining_s"], (600 - 60) * 1.5 + 600 * 0.07, delta=3)
+        prog.update({"phase": "captions-encode", "started": time.time() - 5000})
+        (folder / (jid + ".progress")).write_text(json.dumps(prog))
+        self.assertGreater(service.job_progress(folder, jid)["estimate_remaining_s"], 0)
+        prog.update({"phase": "motion-capture"})
+        (folder / (jid + ".progress")).write_text(json.dumps(prog))
+        shutil.rmtree(folder / (jid + ".work"))
+        p = service.job_progress(folder, jid)
+        self.assertNotIn("estimate_remaining_s", p)
+        self.assertIn("longer than the rough estimate", p["estimate_note"])
         for name in ("_final_render", "_motion_capture", "_face_crop"):  # every render sub-stage reports progress
             import inspect
             self.assertIn("ctx.progress(", inspect.getsource(getattr(workflow, name)), name)
@@ -1541,6 +1558,17 @@ print(json.dumps([a, b, done]))
         inside, clear = face_audit.judge(box, [0, 0, 1080, 1920], 1240 / 1920)
         self.assertTrue(inside)
         self.assertFalse(clear)
+
+    def test_motion_check_passes_plans_without_caption_suppression(self):
+        """Owner's real-file motion run: six beats, captions shown throughout (no caption_suppress) -> the delivery gate failed
+        'captions_suppressed_where_declared' although nothing was declared."""
+        from motion_frames import suppression_ok
+        self.assertTrue(suppression_ok([], []))
+        rng = [{"start": 1.0, "end": 2.0, "reason": "graphic says it"}]
+        self.assertFalse(suppression_ok(rng, []))                       # declared but never sampled
+        self.assertTrue(suppression_ok(rng, [{"cue_on": False, "caption_band_changed_fraction": 0.001}]))
+        self.assertFalse(suppression_ok(rng, [{"cue_on": True, "caption_band_changed_fraction": 0.001}]))
+        self.assertFalse(suppression_ok(rng, [{"cue_on": False, "caption_band_changed_fraction": 0.02}]))
 
     def test_skill_md_served_and_agent_skills_format(self):
         c = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)

@@ -166,6 +166,14 @@ def thumbs(a) -> None:
     print(json.dumps({"frames": picks}))
 
 
+def suppression_ok(declared: list, sampled_rows: list) -> bool:
+    """Captions stay off where the plan suppresses them. No declared range = nothing to check (true; 0.6.4 failed every motion
+    plan without suppression here). With ranges, there must be samples inside them and none may show a caption."""
+    if not declared:
+        return True
+    return bool(sampled_rows) and all(not r["cue_on"] and r["caption_band_changed_fraction"] < 0.004 for r in sampled_rows)
+
+
 def check(a) -> None:
     """Motion-mode picture checks on the exact final.mp4 (live-only renders use final_render.py check)."""
     import sys
@@ -249,7 +257,7 @@ def check(a) -> None:
     off = [r["caption_band_changed_fraction"] for r in rows if not r["cue_on"]]
     sup_rows = [r for r in rows if r["suppressed"]]
     captions_ok = bool(on) and min(on) >= 0.01 and (not off or max(off) < 0.004)
-    suppressed_ok = bool(sup_rows) and all(not r["cue_on"] and r["caption_band_changed_fraction"] < 0.004 for r in sup_rows)
+    suppressed_ok = suppression_ok(sup, sup_rows)
     encode_ok = max(r["final_vs_capture_outside_band"] for r in rows) < 6.0
     cues = len(_chunks(timeline["words"], int(style["max_words"]), int(style["max_chars"])))
     result = {"frames": frames, "samples": rows, "caption_cues": cues, "cue_on_frames": sum(1 for f in range(frames) if cue(f)),
