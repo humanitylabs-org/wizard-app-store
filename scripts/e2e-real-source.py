@@ -100,7 +100,7 @@ async def flow(url, remote, report, peak):
             save()
             cut = await timed("apply_cuts_proposed", "apply_cuts", {"project_id": pid, "segments": cuts})
             keys = ("seconds_removed", "kept_segments", "words_lost_vs_source", "words_added_vs_source", "words_lost_near_cuts",
-                    "asr_variance_far_from_cuts", "fillers_source_only", "fillers_edit_only", "dialogue_gate", "preview", "cut_sound_check")
+                    "asr_variance_far_from_cuts", "words_near_cuts_heard_on_local_recheck", "local_rechecks", "fillers_source_only", "fillers_edit_only", "dialogue_gate", "preview", "cut_sound_check")
             report["apply_cuts_proposed"] = {k: cut.get(k) for k in keys}
             save()
             empty = await timed("apply_cuts_empty", "apply_cuts", {"project_id": pid, "segments": []})

@@ -25,13 +25,32 @@ Found by the owner's first real edit (121.7 s iPhone 4K60 HEVC HLG, natural spee
   (`editing.DURATION_TOLERANCE_S`, same rule in both places). The preview shows the first 60 s of longer edits instead of failing.
 - **apply_cuts(segments=[]) = no cuts.** Keeps the whole source (captions/framing only); the way back to an uncut edit.
   Tool description and workflow_guide say so.
-- Tests: test_filler_cut_never_overlaps_adjacent_words, test_edit_asr_variance_far_from_cuts_does_not_fail_the_gate,
+- **Near-cut lost words get a focused second opinion.** On the owner's file the full 2-minute edited ASR heard
+  "means a friend of a friend" where the source is "means [um cut] right a friend": 'right' starts 0.01 s after the cut,
+  so it is (correctly) treated as possibly clipped. A focused Transcriber pass on the SAME edited audio, 4 s each side
+  (`asr` stage now takes optional `start_s`/`end_s`, max 60 s), heard "that mean right friend of a friend". A near-cut word is
+  cleared only when the focused pass hears it **in place** (aligned to its own position, not merely somewhere in the window);
+  cleared words are listed under `words_near_cuts_heard_on_local_recheck` with the job id. Otherwise the gate still fails.
+  Measured on the source audio: the removed 38.39-39.17 span alone transcribes as noise ("Thanks."), the kept 39.17-40.08
+  span alone as "Right.".
+- **Preview ENOMEM on 1080x1920 60 fps.** The low-res preview trimmed full-size frames and scaled after concat; concat
+  queues the later segment's frames while the first plays, so ffmpeg peaked at 5.1 GB RSS and failed under its 1 GiB
+  address-space limit ("native media processing failed"). It now scales to 270x480 once, then splits and trims
+  (85 MB peak, same output).
+- Tests: test_filler_cut_never_overlaps_adjacent_words, test_near_cut_word_cleared_only_when_local_recheck_hears_it_in_place,
+  test_portrait_preview_scales_before_segment_trims, test_edit_asr_variance_far_from_cuts_does_not_fail_the_gate,
   test_edit_real_lost_word_next_to_a_cut_fails_the_gate, test_collapsed_alignment_words_are_kept_and_bounded_by_neighbours,
   test_delivery_asr_variance_passes_but_many_or_clustered_losses_fail, test_edit_plan_tolerates_audio_slightly_longer_than_video,
-  test_empty_cut_list_keeps_the_whole_source. 49/49 in the image; test_audio_gate.py passes.
+  test_empty_cut_list_keeps_the_whole_source. 51/51 in the image; test_audio_gate.py passes.
 - Upgrading: projects and start_edit/apply_cuts runs live in the app data volume and survive the update. Re-run start_edit
   to get the fixed (unpadded) proposals; the import does not need repeating.
-- Real file: REAL_FILE_RESULTS
+- Real file: verified with `scripts/e2e-real-source.py --real-source` (owner's exact 812 MB bytes; Files + real
+  Speaches Transcriber + this image, translated Runtipi recipes, 4 CPUs, MCP only). import_file 484 s; start_edit 114 s
+  (420 words; proposals 33.42-33.59 and 38.39-39.17, no neighbour overlap); apply_cuts(proposed) 63 s: 0.95 s removed,
+  dialogue gate **pass** ('right' cleared by the focused re-check; 10 far-from-cut words listed as ASR variance), preview
+  rendered; apply_cuts([]) 56 s, gate pass; render_final({}) 779 s (final-render phase 710 s): 1080x1920 H.264 60 fps,
+  121.73 s, saved to `Videos/Edited/hormozi advice 7-edited-e19abd4f.mp4`, delivery gate **pass** (2 scattered ASR-variance
+  words, limit 21; min source-region correlation 0.99954). Container memory.peak 3.68 GB (10 GiB limit).
 
 # Release: 0.6.3-testing (portrait 1080p fix)
 
