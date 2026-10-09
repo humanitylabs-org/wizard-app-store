@@ -1,3 +1,39 @@
+# Release: 0.6.5-testing (motion graphics by default, live render progress, agent check, SKILL.md)
+
+From the owner's one-sentence test on 0.6.4: Hermes (with GPT) delivered a clean edit with NO motion graphics, because the guide
+called them optional ("skip this for a plain captioned talking-head video"). get_status also looked frozen for about 15 minutes during render_final.
+
+- **Motion graphics by default.** GUIDE (`default_edit` and steps 0-10), the MCP `instructions`, and the start_edit, apply_cuts,
+  submit_motion and render_final descriptions now define a DeFleur edit as: approved cuts + motion graphics + captions + crop.
+  Right after start_edit, the agent drafts a motion plan (beats with source times, the spoken words each explains, and what changes) and
+  shows it with the cut list in ONE approval question. apply_cuts returns `time_map` (source to edited seconds), because
+  submit_motion's plan is in edited seconds, so the order is: approve, then apply_cuts, then author and submit, then smoke, then proof, then `render_final({'motion': true})`.
+  The agent renders plain only when the owner asks, the Browser app is missing, or capture keeps failing. `render_final({})` then returns a
+  `plain_note` (optional `plain_reason`) telling the agent to explain why. The report lists `beats_delivered` and `inserts_delivered`.
+  Tests: `test_guide_defaults_to_motion_with_one_combined_approval`.
+- **Live progress.** Cause: get_status computed `elapsed_s` from the run file's last save, and the file was only saved between app
+  stages, so a 15-minute final-render froze at 48.9 s. Now `elapsed_s` is computed when status is read. Each workflow stage writes a
+  `<job>.progress` sub-stage file (prepare, face-audit-crop, motion-capture with a live frame count, live-frames-crop,
+  captions-encode, motion-pixel-check, encode-verify, live-pixel-check, decode-check). The job API returns it and the MCP run
+  mirrors it, so get_status shows `step`, `step_elapsed_s`, `sub_stage`, `stages_left` and a rough `estimate_remaining_s`.
+  Tests: `test_render_status_elapsed_is_live_with_sub_stage` and `test_job_progress_file_is_live_and_cleared`.
+- **Agent check (step 0).** `workflow_guide(agent_harness, agent_model)` returns `agent_check` {intended, detected_client, claimed,
+  match: true|false|"unknown", warning, requires_owner_confirmation}. The intended setup (Hermes Agent with Claude Opus 5.5,
+  `claude-opus-5-5`) lives in one constant, `INTENDED`, and accepts `[1m]`, provider-prefixed and dated ids. The app's /mcp proxy remembers
+  each peer's MCP initialize `clientInfo`. The server is stateless, so tool calls never see initialize themselves. Hermes Agent
+  sends the Python SDK default `mcp/0.1.0`, which is reported as "consistent with Hermes, not proof". Known other clients
+  (claude-code, cursor, ...) make the result a mismatch. The model is only what the agent reports, and a missing model counts as unknown.
+  Tests: `test_agent_check_match_mismatch_unknown` and `test_proxy_remembers_mcp_client_info`.
+- **SKILL.md** (Agent Skills format, `name: defleur-video-editing`): the agent check, the combined approval, how to read the gates
+  (`words_lost_near_cuts` versus `asr_variance_far_from_cuts`), framing flags (look at several frames), and what to report. It is served at
+  `GET /SKILL.md` (no token, like /healthz; `X-Content-SHA256`) and as the MCP resource `defleur-video://SKILL.md`. GUIDE and the MCP
+  instructions point to it, and it defers to workflow_guide if they ever differ. Test: `test_skill_md_served_and_agent_skills_format`.
+- **Framing flag, now specific.** On the owner's file (portrait 4K, so the crop is the full frame), 201 of 244 sampled face
+  boxes plus the 15% margin reach the caption top (y 1240), and only 9 touch the side margin. The flag now gives counts and how far
+  (median and max px below the caption top: the chin and neck area sit under the captions) and says when no fixed crop can avoid it,
+  instead of the vague "faces near safety margin or caption band". The check itself is correct: the face box bottom sits
+  around 65% of the height, and that is where captions go. Test: `test_framing_flag_says_how_far_into_the_caption_band`.
+
 # Release: 0.6.4-testing (first real edit: false lost words, padded filler cuts, preview 422, no way back to uncut)
 
 Found by the owner's first real edit (121.7 s iPhone 4K60 HEVC HLG, natural speech). Each fix has a failing-first unit test.

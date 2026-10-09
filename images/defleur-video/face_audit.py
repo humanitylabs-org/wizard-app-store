@@ -184,7 +184,8 @@ def main() -> None:
     for sid, members in enumerate(setups):
         boxes = [b for j in members for b in seg_boxes[j]]
         crop, zoom, feasible = plan_crop(boxes, W, H, aspect, cap_frac)
-        rows, bad = [], 0
+        rows, bad, edge, band, depth = [], 0, 0, 0, []
+        scale = ch_out / crop[3]
         for k, f in samples:
             if k not in members:
                 continue
@@ -195,20 +196,33 @@ def main() -> None:
                 row.update({"box": [round(v, 1) for v in faces[0][:4]], "score": round(faces[0][4], 3), "inside_crop_with_margin": inside,
                             "clear_of_caption_band": clear})
                 bad += not (inside and clear)
+                edge += not inside
+                if not clear:
+                    band += 1
+                    x0, y0, w0, h0 = faces[0][:4]
+                    # output px the face box (+margin) reaches below the caption top: the chin/neck region under captions
+                    depth.append((y0 + h0 + MARGIN * h0 - (crop[1] + crop[3] * cap_frac)) * scale)
             rows.append(row)
         detected = sum(1 for r in rows if r["faces"])
         flags = []
         if not detected:
             flags.append("no face found: centered crop")
-        if bad:
-            flags.append(f"{bad} sampled face(s) outside the crop margin or inside the caption band")
+        if edge:
+            flags.append(f"{edge} of {detected} sampled face(s) within the {int(MARGIN * 100)}% safety margin of the crop edge")
+        if band:
+            med = sorted(depth)[len(depth) // 2]
+            flags.append(f"{band} of {detected} sampled face box(es) (+{int(MARGIN * 100)}% margin) reach into the caption band; median "
+                         f"{med:.0f} px, max {max(depth):.0f} px below the caption top on the 1080x1920 output (the chin/neck area "
+                         f"sits under the captions{'' if feasible else '; no fixed crop of this setup can avoid it'})")
         if detected and detected < len(rows):
             flags.append(f"face missed in {len(rows) - detected} of {len(rows)} samples")
         if zoom < 1.0:
             flags.append(f"crop zoomed to {zoom:.2f} of full height to keep the face above the captions")
         passed = bool(detected) and not bad and feasible
         audit = {"setup": f"setup-{sid}", "segments": members, "crop": crop, "zoom": zoom, "samples": rows, "detected": detected,
-                 "violations": bad, "pass": passed, "flags": flags, "margin_fraction": MARGIN, "caption_band_top_fraction": round(cap_frac, 4),
+                 "violations": bad, "near_crop_edge": edge, "into_caption_band": band,
+                 "caption_band_overlap_px": {"median": round(sorted(depth)[len(depth) // 2]), "max": round(max(depth))} if depth else None,
+                 "pass": passed, "flags": flags, "margin_fraction": MARGIN, "caption_band_top_fraction": round(cap_frac, 4),
                  "scope": "Sampled-frame face containment; a face missed by the detector is not audited."}
         (a.out / f"face-audit-setup-{sid}.json").write_text(json.dumps(audit, indent=2))
         for k in members:
@@ -229,7 +243,9 @@ def main() -> None:
                 cv2.rectangle(img, (int(fx * s_), int(fy * s_)), (int((fx + fw) * s_), int((fy + fh) * s_)), (0, 0, 255), 2)
             cv2.imwrite(str(a.out / f"setup-{sid}-crop.png"), img)
         summary["setups"].append({"setup": f"setup-{sid}", "segments": members, "crop": crop, "zoom": zoom, "samples": len(rows),
-                                  "detected": detected, "violations": bad, "pass": passed, "flags": flags})
+                                  "detected": detected, "violations": bad, "near_crop_edge": edge, "into_caption_band": band,
+                 "caption_band_overlap_px": {"median": round(sorted(depth)[len(depth) // 2]), "max": round(max(depth))} if depth else None,
+                 "pass": passed, "flags": flags})
         summary["pass"] = summary["pass"] and passed
         summary["flags"] += [f"setup-{sid}: {x}" for x in flags]
     ledger["ranges"].sort(key=lambda r: r["start"])

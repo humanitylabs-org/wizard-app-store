@@ -46,7 +46,7 @@ test("motion capture: James' capture.cjs adapted only as recorded in NOTICE; exa
 test("image bundles James' helpers byte-for-byte with NOTICE, no faster-whisper", () => {
   expect(readFileSync("images/defleur-video/.dockerignore", "utf8").trim().split("\n"))
     .toEqual(["*", "!Dockerfile", "!service.py", "!editing.py", "!client.py", "!workflow.py", "!transcriber.py",
-              "!scan_windows.py", "!energy.py", "!mcp_server.py", "!face_audit.py", "!final_render.py", "!motion.py", "!motion_frames.py",
+              "!scan_windows.py", "!energy.py", "!mcp_server.py", "!SKILL.md", "!face_audit.py", "!final_render.py", "!motion.py", "!motion_frames.py",
               "!capture/package.json", "!capture/package-lock.json", "!capture/capture-remote.cjs", "!capture/capture-remote.diff", "!NOTICE", "!requirements.lock", "!defleur", "!defleur/**", "defleur/.gitignore"]);
   const dockerfile = readFileSync("images/defleur-video/Dockerfile", "utf8");
   expect(dockerfile).toContain("COPY defleur/ /opt/defleur/");

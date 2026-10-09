@@ -1435,6 +1435,8 @@ print(json.dumps({
   "unknown_model": c("Hermes Agent", None, hermes),
   "unknown_all": c(None, None, None),
   "older_opus": mcp_server.model_matches("claude-opus-4-1"),
+  "spellings": [mcp_server.model_matches(m) for m in ("Claude Opus 5.5", "us.vendor.claude-opus-5-5-v1:0", "claude-opus-5-5-20260601",
+                                                      "claude-opus-5-50", "claude-sonnet-5-5", "gpt-5")],
   "intended": mcp_server.INTENDED}))
 """)
         self.assertIs(r["match"]["match"], True)
@@ -1453,6 +1455,7 @@ print(json.dumps({
             self.assertTrue(r[k]["requires_owner_confirmation"])
         self.assertIn("only what the agent reports", r["unknown_model"]["model_note"])
         self.assertFalse(r["older_opus"])
+        self.assertEqual(r["spellings"], [True, True, True, False, False, False])
         self.assertEqual(r["intended"], {"harness": "Hermes Agent", "model": "Claude Opus 5.5", "model_id": "claude-opus-5-5"})
 
     def test_guide_defaults_to_motion_with_one_combined_approval(self):
@@ -1518,6 +1521,26 @@ print(json.dumps([a, b, done]))
         src = inspect.getsource(workflow._final_render)
         for phase in ("prepare", "motion-capture", "live-frames-crop", "captions-encode", "encode-verify", "decode-check"):
             self.assertIn(f'ctx.progress("{phase}"', src)
+
+    def test_framing_flag_says_how_far_into_the_caption_band(self):
+        """Owner's 4K60 portrait file: crop = full frame (portrait source), chin ~0-90 px under the caption top. The flag must
+        say that (count, px, which region) instead of a vague 'faces near safety margin or caption band'."""
+        import inspect
+        import face_audit
+        src = inspect.getsource(face_audit.main)
+        self.assertNotIn("outside the crop margin or inside the caption band", src)
+        for must in ("reach into the caption band", "px below the caption top", "chin/neck", "no fixed crop of this setup can avoid it",
+                     "caption_band_overlap_px", "near_crop_edge"):
+            self.assertIn(must, src)
+        # portrait 1080x1920 source, a head that moves between y 560 and y 1420 (as in the owner's file): no fixed crop keeps
+        # every sampled face above the captions, so it is flagged rather than silently moved
+        boxes = [[277.0, 560.0, 520.0, 545.0], [167.0, 875.0, 560.0, 545.0]]
+        crop, zoom, feasible = face_audit.plan_crop(boxes, 1080, 1920, 1080 / 1920, 1240 / 1920)
+        self.assertFalse(feasible)
+        box = [277.0, 700.0, 520.0, 545.0]  # bottom at 1245 px, caption top 1240 px
+        inside, clear = face_audit.judge(box, [0, 0, 1080, 1920], 1240 / 1920)
+        self.assertTrue(inside)
+        self.assertFalse(clear)
 
     def test_skill_md_served_and_agent_skills_format(self):
         c = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)

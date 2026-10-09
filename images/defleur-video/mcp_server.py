@@ -47,23 +47,19 @@ NOT_BUILT = ["human viewing and listening review (always the owner's job)",
 # The setup DeFleur Video is built and tested for. One place: the agent check, GUIDE, SKILL.md and the app card quote it.
 INTENDED = {"harness": "Hermes Agent", "model": "Claude Opus 5.5", "model_id": "claude-opus-5-5"}
 # MCP clientInfo names of other harnesses (lower-case substrings). The Python MCP SDK's default name is "mcp".
-OTHER_CLIENTS = {"claude-code": "Claude Code", "claude-ai": "Claude (claude.ai / desktop)", "cursor": "Cursor", "codex": "OpenAI Codex",
-                 "openai": "OpenAI", "visual studio code": "VS Code", "vscode": "VS Code", "windsurf": "Windsurf", "goose": "Goose",
+OTHER_CLIENTS = {"claude-code": "Claude Code", "claude-ai": "Claude (claude.ai / desktop)", "cursor": "Cursor", "codex": "Codex",
+                 "visual studio code": "VS Code", "vscode": "VS Code", "windsurf": "Windsurf", "goose": "Goose",
                  "cline": "Cline", "continue": "Continue", "zed": "Zed", "librechat": "LibreChat", "n8n": "n8n", "openclaw": "OpenClaw"}
 
 
-def _norm_model(m: str) -> str:
-    m = re.sub(r"\[.*?\]", "", m.strip().lower())          # claude-opus-5-5[1m] -> claude-opus-5-5
-    m = re.split(r"[/:]", m)[-1] if re.search(r"[/:]", m) else m  # anthropic/claude-opus-5-5, bedrock:...
-    m = re.sub(r"^(anthropic|us|eu|apac|global)\.", "", m)     # bedrock-style prefixes
-    return re.sub(r"[\s._]+", "-", m).strip("-")
-
-
 def model_matches(model: str | None) -> bool | None:
+    """True for the intended model id in any common spelling: 'Claude Opus 5.5', 'claude-opus-5-5[1m]', provider-prefixed
+    ('<provider>/claude-opus-5-5', '<region>.<provider>.claude-opus-5-5-v1:0') or dated variants. None when not reported."""
     if not model or not str(model).strip():
         return None
-    n = _norm_model(str(model))
-    return bool(re.fullmatch(r"(claude-)?opus-5-5(-\d{8}|-v\d+(-\d+)?|-latest)?", n))
+    n = re.sub(r"\[.*?\]", "", str(model).strip().lower())
+    n = re.sub(r"[\s._]+", "-", n)
+    return bool(re.search(r"(^|[^a-z0-9])(claude-)?opus-5-5($|[^0-9])", n))
 
 
 def harness_matches(harness: str | None) -> bool | None:

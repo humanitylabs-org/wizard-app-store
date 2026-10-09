@@ -3,7 +3,7 @@
 DeFleur Video serves an MCP endpoint at `/mcp` on its port (8787). Hermes reads the tool descriptions and follows James DeFleur's workflow by itself, so you don't need a long prompt.
 
 ## 1. Install
-Install **Files**, **Transcriber** and **Browser** first, then **DeFleur Video**, from the Wizard App Store on the same Runtipi server. The Browser is only needed for motion graphics; plain captioned edits work without it. **Files** is your shared folder (Runtipi's `media` folder): videos go in Files → Videos, finished edits come back in Files → Videos → Edited. `capabilities` tells Hermes (and you) the exact fix if either is missing.
+Install **Files**, **Transcriber** and **Browser** first, then **DeFleur Video**, from the Wizard App Store on the same Runtipi server. The Browser captures the motion graphics, which every edit includes by default; without it Hermes can only render a plain captioned edit, and it will tell you why. **Files** is your shared folder (Runtipi's `media` folder): videos go in Files → Videos, finished edits come back in Files → Videos → Edited. `capabilities` tells Hermes (and you) the exact fix if either is missing.
 
 ## 2. Connect Hermes (once)
 If Hermes runs on another machine in your Tailscale network:
@@ -40,7 +40,7 @@ What Hermes then does:
 ## Tools
 | Tool | Use |
 |---|---|
-| `workflow_guide` | What the app does, the order of steps, James' motion contract (`motion_contract`) and limits |
+| `workflow_guide(agent_harness?, agent_model?)` | Agent check against the intended setup (Hermes Agent + Claude Opus 5.5; the owner confirms a mismatch), what the app does, the order of steps, James' motion contract (`motion_contract`) and limits |
 | `capabilities` | Whether the Transcriber (with its model) and the Browser are reachable, with the exact fix if not; host RAM, free disk and per-job estimates |
 | `list_files(folder='Videos')` | Video files in the Files app (subfolders included, newest first) |
 | `import_file(path)` | Make a project from a Files video, e.g. `Videos/IMG_5644.mov`; refuses `..`, absolute paths, symlinks and non-regular files |
@@ -48,7 +48,7 @@ What Hermes then does:
 | `start_edit(project_id, language?)` | Background run: source audio, ASR, preflight, alignment. Returns the transcript, word timings, filler/pause/repeat candidates, proposed cuts and James' editorial rules |
 | `apply_cuts(project_id, segments)` | Background run: PCM assembly, cut audit, acoustic scan, re-ASR of the edit, dialogue gate. Reports the results and download URLs |
 | `preview_framing(project_id, framing?)` | Optional: fixed crop per setup with face-audit evidence images; choose which person each kept segment frames (`targets`) or force new setups (`new_setup_at`) |
-| `submit_motion(project_id, files, plan, replace?)` | Optional motion graphics: Hermes' HTML/SVG/GSAP composition and James' visual plan (beats, caption_suppress, inserts) |
+| `submit_motion(project_id, files, plan, replace?)` | Motion graphics (default): Hermes' HTML/SVG/GSAP composition and James' visual plan (beats, caption_suppress, inserts) |
 | `create_asset_upload(project_id, path)` | One-time upload URL for a big asset, e.g. a B-roll clip for a fullscreen insert |
 | `capture_motion(project_id, 'smoke'\|'proof', framing?)` | James' capture.cjs through the Browser app; returns frame images and a contact sheet to look at; proof also runs his reverse-seek determinism check |
 | `render_final(project_id, options?)` | Background run: face audit + fixed crops, full motion capture if `{'motion': true}` (after a passing proof), burned captions (suppressed only where declared), James' 1080×1920 encode, decode and pixel checks, final re-ASR and James' delivery gate; saves the MP4 to Files → Videos → Edited |
