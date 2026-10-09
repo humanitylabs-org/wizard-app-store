@@ -28,6 +28,11 @@ called them optional ("skip this for a plain captioned talking-head video"). get
   (`words_lost_near_cuts` versus `asr_variance_far_from_cuts`), framing flags (look at several frames), and what to report. It is served at
   `GET /SKILL.md` (no token, like /healthz; `X-Content-SHA256`) and as the MCP resource `defleur-video://SKILL.md`. GUIDE and the MCP
   instructions point to it, and it defers to workflow_guide if they ever differ. Test: `test_skill_md_served_and_agent_skills_format`.
+- **Motion delivery gate bug (found only by the real-file run).** A motion plan with NO `caption_suppress` failed
+  `captions_suppressed_where_declared` because the check required at least one sampled suppressed frame. That also failed
+  `motion_check_pass` and `picture_map_verified`, so every motion edit without suppression failed delivery. The e2e fixture always
+  declared a suppression, which hid it. Now no declared range means nothing to check; a declared range must be sampled and caption-free.
+  Test: `test_motion_check_passes_plans_without_caption_suppression`.
 - **Framing flag, now specific.** On the owner's file (portrait 4K, so the crop is the full frame), 201 of 244 sampled face
   boxes plus the 15% margin reach the caption top (y 1240), and only 9 touch the side margin. The flag now gives counts and how far
   (median and max px below the caption top: the chin and neck area sit under the captions) and says when no fixed crop can avoid it,
