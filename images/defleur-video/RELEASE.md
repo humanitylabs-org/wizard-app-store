@@ -38,6 +38,14 @@ called them optional ("skip this for a plain captioned talking-head video"). get
   (median and max px below the caption top: the chin and neck area sit under the captions) and says when no fixed crop can avoid it,
   instead of the vague "faces near safety margin or caption band". The check itself is correct: the face box bottom sits
   around 65% of the height, and that is where captions go. Test: `test_framing_flag_says_how_far_into_the_caption_band`.
+- **Real-file motion run (the owner's exact 812 MB 4K60 HLG iPhone file, 121.7 s of speech; real Transcriber, Files, Browser, 0.6.5 image).**
+  The agent check returned `false` for (Hermes Agent, gpt-5), `true` for (Hermes Agent, claude-opus-5-5) and `unknown` with no model; detected clientInfo
+  was `mcp/0.1.0`. The default flow then ran: import 571 s, start_edit 114 s, 2 'um' cuts, apply_cuts 64 s (dialogue gate pass, 0.95 s removed),
+  a 6-beat plan (an advice ladder that climbs level by level, a player-vs-coach comparison, and "many times over" dots), smoke 129 s, proof 83 s (12 reverse-seek frames byte-identical),
+  render_final({'motion': true}) 2388 s (capture 1750 s for 7247 frames at 60 fps, captions and x264 361 s, checks ~190 s). Delivery gate passed,
+  all 6 beats showed motion, nothing appeared outside the beats, and the result was 1080x1920 60 fps 120.78 s with 90 captions. Container memory.peak was 2.65 GB. get_status advanced
+  every 20 s (frames_captured 76 -> 7247; the remaining time tracked the measured rate). The first run of the same flow exposed the
+  caption-suppression gate bug above.
 
 # Release: 0.6.4-testing (first real edit: false lost words, padded filler cuts, preview 422, no way back to uncut)
 
