@@ -80,14 +80,21 @@ def validate_transcript(value, duration):
     return value
 
 
-def visual_filters(plan, directory, stem):
+def visual_filters(plan, directory, stem, part="all"):
+    """Preview picture chain. part='geometry': crop/scale/pad only (per source frame; run it BEFORE trimming segments so
+    the concat queue buffers 270x480 frames, not full-size ones); 'post': fps + captions (output timeline); 'all': both."""
     framing = plan.get("framing", {"mode": "contain"})
     if framing["mode"] == "contain":
         filters = ["scale=270:480:force_original_aspect_ratio=decrease:force_divisible_by=2", "pad=270:480:(ow-iw)/2:(oh-ih)/2"]
     else:
         c = framing["crop"]
         filters = [f"crop={c['width']}:{c['height']}:{c['x']}:{c['y']}", "scale=270:480"]
-    filters += ["setsar=1", "fps=24"]
+    filters += ["setsar=1"]
+    if part == "geometry":
+        return ",".join(filters)
+    if part == "post":
+        filters = []
+    filters += ["fps=24"]
     for i, cue in enumerate(plan.get("captions", [])):
         name = f"{stem}-caption-{i}.txt"
         (directory / name).write_text(cue["text"], encoding="ascii")
@@ -561,6 +568,67 @@ def edit_word_review(kept, got, blocks, duration, words):
                       "cut, or has unusable timing. A kept word wholly inside one assembled block and further than that from "
                       "every cut is sample-identical audio in the edit (assemble_pcm copies PCM ranges), so a second ASR pass "
                       "missing it is ASR variance; it is listed under asr_variance_far_from_cuts and does not fail the gate.")}
+
+
+RECHECK_PAD_S = 4.0      # local re-check window: this much edited audio on each side of a near-cut lost word
+RECHECK_MAX_WINDOWS = 8
+
+
+def source_to_edited(t, blocks, eps=1e-6):
+    """Edited-timeline time of source time t, or None when t lies in a cut."""
+    offset = 0.0
+    for a, b in sorted((float(x["start_s"]), float(x["end_s"])) for x in blocks):
+        if a - eps <= t <= b + eps:
+            return offset + min(max(t, a), b) - a
+        offset += b - a
+    return None
+
+
+def _kept_mid(row, blocks):
+    """Edited time of the middle of the kept part of a lost word (None when no part of it is kept or timing unusable)."""
+    s, e = row["source_start_s"], row["source_end_s"]
+    if row.get("timing") != "aligned":
+        return None
+    best = None
+    for b in blocks:
+        lo, hi = max(s, float(b["start_s"])), min(e, float(b["end_s"]))
+        if hi - lo > 0.001 and (best is None or hi - lo > best[1] - best[0]):
+            best = (lo, hi)
+    return None if best is None else source_to_edited((best[0] + best[1]) / 2, blocks)
+
+
+def recheck_windows(lost_near, blocks, edited_duration):
+    """Edited-time windows [start, end] for a focused second ASR opinion on near-cut lost words (merged, capped)."""
+    wins = []
+    for r in lost_near:
+        t = _kept_mid(r, blocks)
+        if t is None:
+            continue
+        lo, hi = max(0.0, t - RECHECK_PAD_S), min(float(edited_duration), t + RECHECK_PAD_S)
+        if wins and lo <= wins[-1][1]:
+            wins[-1][1] = max(wins[-1][1], hi)
+        else:
+            wins.append([lo, hi])
+    return [[round(a, 3), round(b, 3)] for a, b in wins[:RECHECK_MAX_WINDOWS]]
+
+
+def recheck_result(window, kept, blocks, got_tokens, lost_near):
+    """Which near-cut lost words a focused ASR pass over `window` (edited time) hears in place. The kept words whose
+    mapped span lies inside the window are aligned with the window transcript; a target counts as heard only when it is
+    aligned to the same token at its own position (a common word heard elsewhere does not count)."""
+    a, b = window
+    exp = []
+    for k in kept:
+        if float(k["end"]) - float(k["start"]) < USABLE_WORD_S or not _norm(k["word"]):
+            continue
+        s, e = source_to_edited(float(k["start"]), blocks), source_to_edited(float(k["end"]), blocks)
+        if s is not None and e is not None and a <= s and e <= b:
+            exp.append(k)
+    toks = [_norm(k["word"]) for k in exp]
+    _, _, lost_pos = _diff_core(toks, [t for t in map(_norm, got_tokens) if t])
+    present = {k["index"] for k in exp}
+    missing = {exp[p]["index"] for p in lost_pos}
+    return [r["source_index"] for r in lost_near if r.get("source_index") in present and r["source_index"] not in missing]
 
 
 DELIVERY_CLUSTER_WORDS = 3   # this many lost words ...

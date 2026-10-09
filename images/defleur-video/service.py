@@ -330,14 +330,20 @@ def edit_plan(value, duration, metadata=None):
 
 
 def render(source, target, plan):
-    filters, joins = [], []
+    # Scale/crop to 270x480 ONCE, before the per-segment trims: concat reads segments in order, so every frame of the
+    # later trims queues while the first plays. At 1080x1920 that queue is ~3 MB/frame (5 GB RSS for a 33 s first
+    # segment at 60 fps on the owner's file -> ENOMEM under the 1 GiB limit); at 270x480 it is ~0.2 MB/frame.
+    n = len(plan["segments"])
+    filters = [f"[0:v]{visual_filters(plan, target.parent, target.stem, 'geometry')},split={n}" + "".join(f"[s{i}]" for i in range(n)),
+               f"[0:a]asplit={n}" + "".join(f"[b{i}]" for i in range(n))]
+    joins = []
     for i, row in enumerate(plan["segments"]):
         start, end = row["start_s"], row["end_s"]
-        filters += [f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{i}]",
-                    f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}]"]
+        filters += [f"[s{i}]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{i}]",
+                    f"[b{i}]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}]"]
         joins.append(f"[v{i}][a{i}]")
-    filters.append("".join(joins) + f"concat=n={len(joins)}:v=1:a=1[v][a]")
-    filters.append("[v]" + visual_filters(plan, target.parent, target.stem) + "[out]")
+    filters.append("".join(joins) + f"concat=n={n}:v=1:a=1[v][a]")
+    filters.append("[v]" + visual_filters(plan, target.parent, target.stem, "post") + "[out]")
     native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", *input_args(),
             "-filter_complex_threads", "1", "-filter_complex", ";".join(filters),
             "-map", "[out]", "-map", "[a]", "-map_metadata", "-1", "-map_chapters", "-1",

@@ -1347,6 +1347,52 @@ print(json.dumps([cuts, mcp_server.keeps_from(cuts, 121.728), mcp_server.preview
         self.assertEqual(preview, [{"start_s": 0.0, "end_s": 60.0, "reason": "kept speech"}])
         self.assertTrue(guide)
 
+    def test_near_cut_word_cleared_only_when_local_recheck_hears_it_in_place(self):
+        """Owner's file: full edited ASR merged 'means [cut] right a friend' into 'means a friend'; a focused pass on the
+        same edited audio heard 'that mean right friend of a friend'."""
+        from editing import cut_regions, edit_word_review, recheck_result, recheck_windows
+        sr = 48000
+        words = self._kept("so that means um right a friend of a friend so somebody who")
+        um = words[3]
+        blocks = [{"start_s": 0.0, "end_s": round((um["start"] + 0.01) * sr) / sr},
+                  {"start_s": round((um["end"] - 0.01) * sr) / sr, "end_s": 6.0}]
+        _, _, kept = cut_regions(words, blocks, 6.0, timed=True)
+        got = [w["word"] for w in kept if w["word"] != "right"]
+        rev = edit_word_review(kept, got, blocks, 6.0, words)
+        self.assertEqual([r["word"] for r in rev["lost_near_cuts"]], ["right"])
+        wins = recheck_windows(rev["lost_near_cuts"], blocks, 5.6)
+        self.assertEqual(len(wins), 1)
+        heard = recheck_result(wins[0], kept, blocks, "that mean right friend of a friend so".split(), rev["lost_near_cuts"])
+        self.assertEqual(heard, [rev["lost_near_cuts"][0]["source_index"]])
+        # 'right' heard only somewhere else (not at its position) does not clear it.
+        self.assertEqual(recheck_result(wins[0], kept, blocks, "so that means a friend of a friend right".split(),
+                                        rev["lost_near_cuts"]), [])
+        # And not heard at all -> still lost.
+        self.assertEqual(recheck_result(wins[0], kept, blocks, "so that means a friend of a friend".split(), rev["lost_near_cuts"]), [])
+
+    def test_portrait_preview_scales_before_segment_trims(self):
+        """Owner's file: the 2-segment preview of a 1080x1920 60 fps source trimmed full-size frames and scaled after
+        concat; ffmpeg peaked at 5.1 GB RSS and failed (ENOMEM) under the 1 GiB native limit. Scaling once before the
+        trims measured 85 MB on the same file. The graph must scale before any trim, and the preview must still render."""
+        seen = []
+        real = service.native
+        def spy(args, *a, **kw):
+            if "-filter_complex" in args:
+                seen.append(args[args.index("-filter_complex") + 1])
+            return real(args, *a, **kw)
+        portrait = self.root / "portrait-cuts.mp4"
+        subprocess.run(["/usr/bin/ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=60",
+                        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "4", "-c:v", "libx264", "-preset", "ultrafast",
+                        "-threads", "2", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", str(portrait)], check=True, timeout=120)
+        plan = {"segments": [{"start_s": 0.0, "end_s": 2.5, "reason": "kept"}, {"start_s": 2.8, "end_s": 4.03, "reason": "kept"}]}
+        plan = service.edit_plan(plan, 4.0)
+        with patch.object(service, "native", spy):
+            service.render(portrait, self.root / "portrait-cuts-preview.mp4", plan)
+        graph = seen[0]
+        self.assertLess(graph.index("scale=270:480"), graph.index("trim="), graph)
+        self.assertEqual(graph.count("scale="), 1, graph)
+        self.assertTrue((self.root / "portrait-cuts-preview.mp4").stat().st_size > 0)
+
     def test_capabilities_report_browser_and_resources(self):
         os.environ["BROWSER_URL"] = "http://127.0.0.1:9"
         try:

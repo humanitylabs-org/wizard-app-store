@@ -25,7 +25,8 @@ from typing import Any
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # run with -I: make the app's pure helpers importable
 from editing import (FILLERS, HANDLE_S, PAUSE_S, REPORT_FILLERS, align_words, candidates_from,  # noqa: E402,F401
-                     cut_regions, cut_sound_check, delivery_word_review, diff_words, edit_word_review)
+                     cut_regions, cut_sound_check, delivery_word_review, diff_words, edit_word_review,
+                     recheck_result, recheck_windows)
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -411,6 +412,25 @@ def do_apply_cuts(run: dict) -> dict:
     lost, added, variants = review_words["lost"], review_words["added"], review_words["variants"]
     fillers_source_only, fillers_edit_only = review_words["fillers_source_only"], review_words["fillers_edit_only"]
     lost_near = review_words["lost_near_cuts"]
+    # A long ASR pass can merge or re-segment words next to a splice. Give each near-cut lost word a focused second
+    # opinion on the SAME edited audio (RECHECK_PAD_S around it): it counts as present only if heard in place.
+    rechecks = []
+    if lost_near:
+        run["step"] = "local re-check of words near cuts"
+        save(run)
+        edited_len = float(asm["result"]["summary"]["duration_s"])
+        for win in recheck_windows(lost_near, blocks, edited_len):
+            wj = stage(run, "asr", {"audio_job": asm["id"], "language": lang, "start_s": win[0], "end_s": win[1]})
+            toks = [w["word"] for w in artifact(wj["id"], "asr.json")["words"]]
+            heard = set(recheck_result(win, kept_words, blocks, toks, lost_near))
+            rechecks.append({"edited_window_s": win, "asr_job": wj["id"], "text": " ".join(toks)[:600],
+                             "heard_in_place": [r["word"] for r in lost_near if r.get("source_index") in heard]})
+            for r in lost_near:
+                if r.get("source_index") in heard:
+                    r["heard_on_local_recheck"] = {"edited_window_s": win, "asr_job": wj["id"]}
+        recovered = [r for r in lost_near if r.get("heard_on_local_recheck")]
+        lost_near = [r for r in lost_near if not r.get("heard_on_local_recheck")]
+        review_words.update(lost_near_cuts=lost_near, lost_near_cuts_heard_on_local_recheck=recovered, fail=bool(lost_near))
     fillers_left = [w for w in got if w in FILLERS]
     sound = cut_sound_check(cuts, artifact(edit["jobs"]["source_audio"], "energy.json"), words)
 
@@ -489,6 +509,8 @@ def do_apply_cuts(run: dict) -> dict:
         "words_removed_by_cuts": removed,
         "words_lost_vs_source": lost, "words_added_vs_source": added,
         "words_lost_near_cuts": lost_near,
+        "words_near_cuts_heard_on_local_recheck": review_words.get("lost_near_cuts_heard_on_local_recheck", []),
+        "local_rechecks": rechecks,
         "asr_variance_far_from_cuts": review_words["asr_variance_far_from_cuts"],
         "lost_word_basis": review_words["basis"],
         "fillers_still_heard": fillers_left,

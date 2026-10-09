@@ -346,8 +346,14 @@ def validate(stage, value, metadata, lookup):
         _obj(value, {"language"})
         _lang(value["language"])
     elif stage == "asr":
-        _obj(value, {"audio_job", "language"})
+        _obj(value, {"audio_job", "language"}, {"start_s", "end_s"})
         _lang(value["language"], allow_auto=True)
+        if ("start_s" in value) != ("end_s" in value):
+            raise Rejected("asr window needs both start_s and end_s")
+        if "start_s" in value:
+            ws, we = _num(value["start_s"], "start_s"), _num(value["end_s"], "end_s")
+            if not 0 <= ws < we or we - ws > 60:
+                raise Rejected("asr window must be 0 <= start_s < end_s and at most 60 s")
         lookup(value["audio_job"], {"source-audio", "pcm-assemble", "final-render"})
     elif stage == "align":
         _obj(value, {"asr_job", "language"}, {"model"})
@@ -609,14 +615,16 @@ def _asr(ctx, value, source, metadata):
     job, _ = ctx.lookup(value["audio_job"], {"source-audio", "pcm-assemble", "final-render"})
     name = {"source-audio": "source.wav", "pcm-assemble": "edited.wav", "final-render": "final-audio.wav"}[job["result"]["stage"]]
     wav, _ = ctx.ref(value["audio_job"], {"source-audio", "pcm-assemble", "final-render"}, name)
-    ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", "-i", wav, "-ac", "1", "-ar", "16000",
+    window = ["-ss", str(value["start_s"]), "-t", str(round(value["end_s"] - value["start_s"], 6))] if "start_s" in value else []
+    ctx.native(["/usr/bin/ffmpeg", "-v", "error", "-xerror", "-n", "-i", wav, *window, "-ac", "1", "-ar", "16000",
                 "-c:a", "pcm_s16le", "-threads", "1", ctx.root / "asr-input.wav"], timeout=120, file_limit=256 * 1024 * 1024, cpu=200)
     receipt, raw = transcriber.transcribe(ctx.root / "asr-input.wav", value["language"], ctx.deadline)
     receipt["provenance"]["input_artifact"] = {"job": value["audio_job"], "name": name, "sha256": sha(wav)}
     ctx.write("asr.json", receipt)
     ctx.write("transcriber-response.json", raw)
     ctx.used["asr.py (schema only; local faster-whisper replaced by Transcriber)"] = HELPERS["asr"][1]
-    return {"audio_job": value["audio_job"], "audio": name, "words": len(receipt["words"]), "language_detected": receipt["language_detected"],
+    return {"audio_job": value["audio_job"], "audio": name, "words": len(receipt["words"]),
+            "window_s": [value["start_s"], value["end_s"]] if "start_s" in value else None, "language_detected": receipt["language_detected"],
             "transcriber_model": receipt["model_resolved"], "seconds": receipt["seconds"], "text": raw.get("text", "")[:2000]}
 
 

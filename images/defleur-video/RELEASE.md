@@ -1,3 +1,38 @@
+# Release: 0.6.4-testing (first real edit: false lost words, padded filler cuts, preview 422, no way back to uncut)
+
+Found by the owner's first real edit (121.7 s iPhone 4K60 HEVC HLG, natural speech). Each fix has a failing-first unit test.
+
+- **Dialogue gate: ASR variance is no longer "lost words".** apply_cuts compares the source-aligned kept words with a second
+  Transcriber pass over the edited WAV. On real speech the second pass segments differently (the source had 16 words
+  aligned to one instant, 22.98-22.98 s), so words far from any cut were reported lost. The editor now keeps each kept
+  word's source timing (`cut_regions(..., timed=True)`) and locates every lost token (`editing.edit_word_review`):
+  - lost within **0.5 s of a cut edge**, crossing a cut, or with unusable timing -> `words_lost_near_cuts`, **fails** the gate;
+  - lost but wholly inside one assembled block and >= 0.5 s from every cut edge -> `asr_variance_far_from_cuts` (with
+    timings), **does not fail**. Principle: assemble_pcm copies sample ranges, so such a word is byte-identical audio in
+    the edit; the edit cannot have removed it. Collapsed (zero-length) alignments are located by their nearest timed
+    neighbours (the bounded span must be inside one block and 0.5 s from cuts) and are now kept in the expected list.
+  - Every word is still reported (`words_lost_vs_source`, `words_added_vs_source`). James' audio_gate.py is unchanged.
+- **Delivery gate (render_final): edited audio vs final video.** The final audio is the edited WAV re-encoded and its
+  custody is proven separately (source-region correlation >= 0.90, James' gate). Scattered lost words are ASR variance
+  (`asr_variance`, located in edited time). The words check fails only when more than **max(3, 5% of words)** are lost or
+  **3 lost words fall within 2 s** (a dropout looks like a cluster; ASR variance does not). `editing.delivery_word_review`.
+  Older gate summaries without the new fields keep the strict rule.
+- **Filler/repeat cuts never eat neighbours.** The +-0.02 s padding is clamped to [previous word end + 0.01, next word
+  start - 0.01]; with adjacent words the cut trims the filler's own edge instead (owner's 'means' 38.12-38.38 | 'um'
+  38.38-39.18 | 'right' 39.18 -> cut 38.39-39.17, was 38.36-39.20). Fillers separated by a real word are not merged.
+- **Preview 422 "out-of-source span".** start_edit's duration is the audio length (121.728 s); the project's video is
+  121.726 s. edit_plan and workflow segments now accept an end up to **0.05 s** past the duration and clamp it
+  (`editing.DURATION_TOLERANCE_S`, same rule in both places). The preview shows the first 60 s of longer edits instead of failing.
+- **apply_cuts(segments=[]) = no cuts.** Keeps the whole source (captions/framing only); the way back to an uncut edit.
+  Tool description and workflow_guide say so.
+- Tests: test_filler_cut_never_overlaps_adjacent_words, test_edit_asr_variance_far_from_cuts_does_not_fail_the_gate,
+  test_edit_real_lost_word_next_to_a_cut_fails_the_gate, test_collapsed_alignment_words_are_kept_and_bounded_by_neighbours,
+  test_delivery_asr_variance_passes_but_many_or_clustered_losses_fail, test_edit_plan_tolerates_audio_slightly_longer_than_video,
+  test_empty_cut_list_keeps_the_whole_source. 49/49 in the image; test_audio_gate.py passes.
+- Upgrading: projects and start_edit/apply_cuts runs live in the app data volume and survive the update. Re-run start_edit
+  to get the fixed (unpadded) proposals; the import does not need repeating.
+- Real file: REAL_FILE_RESULTS
+
 # Release: 0.6.3-testing (portrait 1080p fix)
 
 - Fix: every portrait 1080x1920 H.264 source was rejected with "native media processing failed", including the app's own conversion of a 4K iPhone recording. H.264 pads 1080 to 1088 coded columns, which exceeded the decoder's 2,073,600 max_pixels. The decoder limit now allows only that block padding; the 1080p display-area limit in probe() is unchanged.
