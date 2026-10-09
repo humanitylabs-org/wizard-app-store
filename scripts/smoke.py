@@ -59,7 +59,9 @@ def ready():
     raise RuntimeError('Authenticated dashboard did not become ready within 180 seconds')
 
 
-run('docker', 'pull', service['image'], timeout=600)
+# CI builds the Wizard image from images/hermes-agent under the recipe's tag before this runs.
+if subprocess.run(['docker', 'image', 'inspect', service['image']], capture_output=True).returncode:
+    run('docker', 'pull', service['image'], timeout=600)
 try:
     run('docker', 'volume', 'create', VOLUME)
     args = ['docker', 'run', '-d', '--name', NAME, '--memory', '2g', '--cpus', '1',

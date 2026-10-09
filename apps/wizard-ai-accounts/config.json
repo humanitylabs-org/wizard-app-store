@@ -1,0 +1,36 @@
+{
+  "name": "AI Accounts",
+  "id": "wizard-ai-accounts",
+  "wizard_type": "external",
+  "available": true,
+  "short_desc": "External: Connect your Claude subscription once; your agents on this server use it.",
+  "author": "Humanity Labs",
+  "port": 8795,
+  "categories": [
+    "network"
+  ],
+  "description": "The one place to connect AI subscriptions for your Wizard server. Phase 1: your Claude Pro or Max subscription, signed in with Anthropic's official Claude Code login. Hermes Agent (Wizard build) then uses it through NousResearch's official Claude Subscription plugin. ChatGPT sign-in and API keys are coming later. Your sign-in stays in a private shared folder and is never shown or sent anywhere by this app.",
+  "tipi_version": 1,
+  "version": "0.1.0",
+  "source": "https://github.com/humanitylabs-org/wizard-app-store",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791557949142,
+  "updated_at": 1791557949142,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "password",
+      "label": "Page password (optional)",
+      "env_variable": "AI_ACCOUNTS_PASSWORD",
+      "required": false,
+      "hint": "Leave empty on a Tailscale-only server. If set (use 16+ characters), your browser asks for it (any username) before showing this page."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+name: Build AI Accounts and Hermes Agent (Wizard build)
+on:
+  push:
+    branches: [main]
+    paths: ['images/wizard-ai-accounts/**', 'images/hermes-agent/**', 'apps/wizard-ai-accounts/**', 'apps/hermes-agent/**',
+            'scripts/smoke-ai-accounts.py', 'scripts/translate-video-recipe.mjs', '__tests__/ai-accounts.test.ts',
+            '.github/workflows/ai-accounts.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  ai-accounts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Free runner disk (two Hermes images and a multi-arch build)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci && npm test && npx tsc --noEmit
+      - name: Build and test AI Accounts image (pinned Claude Code, logged-out login/test/logout paths, no credential surface)
+        run: sh images/wizard-ai-accounts/test-container.sh
+      - name: Build Hermes Agent Wizard image
+        run: docker build -t wizard-hermes-agent:test images/hermes-agent
+      - name: Provider discovery, plugin unit tests, two-app shared volume, /opt/data parity with the official image
+        run: TMPDIR="$RUNNER_TEMP" python3 scripts/smoke-ai-accounts.py
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested AI Accounts (amd64 and arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: images/wizard-ai-accounts
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ghcr.io/humanitylabs-org/wizard-ai-accounts:0.1.0
+      - name: Publish tested Hermes Agent Wizard build (amd64 and arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: images/hermes-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard1
+      - name: Published images pass the same checks
+        run: |
+          docker pull ghcr.io/humanitylabs-org/wizard-ai-accounts:0.1.0
+          SKIP_BUILD=1 AI_ACCOUNTS_IMAGE=ghcr.io/humanitylabs-org/wizard-ai-accounts:0.1.0 sh images/wizard-ai-accounts/test-container.sh
+          docker pull ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard1
+          docker run --rm --entrypoint sh ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard1 -c \
+            'claude --version | grep -q "^2.1.263 " && test -f /opt/hermes/plugins/model-providers/claude-subscription-directsdk-experimental/plugin.yaml'
+# Publishes only after store, container, provider, shared-volume and data-parity checks pass.

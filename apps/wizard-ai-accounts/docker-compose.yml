@@ -1,0 +1,28 @@
+services:
+  wizard-ai-accounts:
+    image: ghcr.io/humanitylabs-org/wizard-ai-accounts:0.1.0
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1
+    tmpfs: ["/tmp:rw,nosuid,size=64m,uid=1000,gid=1000"]
+    environment:
+      AI_ACCOUNTS_PORT: "8795"
+      AI_ACCOUNTS_PASSWORD: ${AI_ACCOUNTS_PASSWORD:-}
+    volumes:
+      # The Claude sign-in, shared with Hermes Agent under the same fixed name. Never under /media:
+      # the Files app serves that folder.
+      - claude-login:/claude
+    x-runtipi:
+      is_main: true
+      internal_port: 8795
+volumes:
+  claude-login:
+    name: wizard-ai-accounts-claude
+x-runtipi:
+  schema_version: 2
+  overrides: []

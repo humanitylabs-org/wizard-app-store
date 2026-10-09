@@ -33,13 +33,25 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       const [label, category] = types[config.wizard_type]!;
       expect(config.short_desc.startsWith(`${label}: `)).toBe(true);
       expect(config.categories).toEqual([category]);
-      if (config.wizard_type === "service" || config.wizard_type === "external") expect(config.no_gui).toBe(true);
+      if (config.wizard_type === "service") expect(config.no_gui).toBe(true);
+      // External apps hold an outside account; they may have a page only to sign in to it (AI Accounts).
+      if (config.wizard_type === "external" && !config.no_gui) expect(id).toBe("wizard-ai-accounts");
       if (config.wizard_type === "view") expect(config.no_gui ?? false).toBe(false);
     });
     if (id === "hermes-agent") {
-    test("unmodified pinned image and supported startup", () => {
+    test("Wizard build of the pinned official image and supported startup", () => {
       const s = compose.services[id];
-      expect(s.image).toMatch(new RegExp(`^nousresearch/hermes-agent:${config.version.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`));
+      expect(s.image).toBe(`ghcr.io/humanitylabs-org/hermes-agent:${config.version}`);
+      const [upstream] = config.version.split("-wizard");
+      const dockerfile = readFileSync("images/hermes-agent/Dockerfile", "utf8");
+      expect(dockerfile).toMatch(new RegExp(`^FROM nousresearch/hermes-agent:${upstream.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`, "m"));
+      // Only additions: no entrypoint, user, cmd or HERMES_* override in the extended image.
+      for (const directive of ["ENTRYPOINT", "CMD", "USER", "VOLUME", "WORKDIR"]) expect(dockerfile).not.toMatch(new RegExp(`^${directive}\\b`, "m"));
+      expect(dockerfile).not.toMatch(/HERMES_[A-Z_]+=/);
+      // The OAuth login must only be used by the official claude binary, never adopted by Hermes core.
+      expect(dockerfile).not.toMatch(/^\s*CLAUDE_CONFIG_DIR=/m);
+      expect(dockerfile).toContain("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR=/claude");
+      expect(dockerfile).toContain("DISABLE_AUTOUPDATER=1");
       expect(s.command).toEqual(["gateway", "run"]);
       expect(s.entrypoint).toBeUndefined();
       expect(s.user).toBeUndefined();
@@ -48,7 +60,8 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
     test("isolated data, no host privileges or auth bypass", () => {
       const s = compose.services[id];
       expect(Object.keys(compose.services)).toEqual([id]);
-      expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data"]);
+      expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data", "claude-login:/claude"]);
+      expect(compose.volumes).toEqual({"claude-login": {name: "wizard-ai-accounts-claude"}});
       for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build"]) expect(s[key]).toBeUndefined();
       expect(s.environment.HERMES_DASHBOARD_INSECURE).toBeUndefined();
       expect(s.environment.HERMES_UMBREL_APP_PROXY_AUTH).toBeUndefined();

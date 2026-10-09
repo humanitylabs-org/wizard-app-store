@@ -1,0 +1,4 @@
+*
+!Dockerfile
+!fetch-claude-code.py
+!fetch-directsdk-plugin.py

@@ -9,9 +9,9 @@
   "categories": [
     "ai"
   ],
-  "description": "Vanilla Hermes Agent with its official dashboard and persistent data.",
-  "tipi_version": 3,
-  "version": "v2026.9.24",
+  "description": "Hermes Agent with its official dashboard and persistent data, plus Anthropic's official Claude Code and NousResearch's Claude Subscription DirectSDK (Experimental) plugin, so it can use the Claude subscription you connect in AI Accounts. Your current model stays as it is until you pick Claude yourself.",
+  "tipi_version": 4,
+  "version": "v2026.9.24-wizard1",
   "source": "https://github.com/NousResearch/hermes-agent",
   "website": "https://hermes-agent.nousresearch.com",
   "exposable": false,
@@ -20,7 +20,7 @@
     "arm64"
   ],
   "created_at": 1791168277431,
-  "updated_at": 1791168277431,
+  "updated_at": 1791557949142,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,

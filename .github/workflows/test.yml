@@ -20,7 +20,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npx tsc --noEmit
-      - name: Official image startup, authentication, and persistence
+      - name: Build the Hermes Agent Wizard image under its recipe tag (published by ai-accounts.yml)
+        run: docker build -t "ghcr.io/humanitylabs-org/hermes-agent:$(node -p 'require("./apps/hermes-agent/config.json").version')" images/hermes-agent
+      - name: Hermes Agent startup, authentication, and persistence
         run: python3 scripts/smoke.py
       - name: Files app - Runtipi media folder permissions, starter folders, 300 MB tus upload/download, optional login
         run: python3 scripts/smoke-files.py
