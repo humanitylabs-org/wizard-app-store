@@ -147,11 +147,15 @@ def review_artifacts(source, target, plan, metadata, native, input_args, digest)
             "protected_region_basis": "caller assertion; geometry checked, no face detection or tracking"}
 
 
-def cut_regions(words, blocks, duration):
+def cut_regions(words, blocks, duration, timed=False):
     """Keep/drop regions for James' speech_cut_audit.py built from the ASSEMBLED blocks (sample-exact edit-map
     segments), so every region's retained time equals what it claims. A word crossing a block edge is split into
     a keep part and a drop part; drop regions for the cuts are the exact gaps between blocks. Returns
-    (regions, removed_words, kept_words) where a word counts as removed when most of it lies outside the blocks."""
+    (regions, removed_words, kept_words) where a word counts as removed when most of it lies outside the blocks.
+
+    timed=True: kept_words are {word, start, end, index} dicts with the SOURCE timing (index into `words`), and words
+    whose alignment collapsed to (near) zero length are kept when their instant lies inside a block: they were spoken,
+    so the re-transcription will hear them (they get no audit region; their timing is unusable)."""
     spans = sorted((float(b["start_s"]), float(b["end_s"])) for b in blocks)
     gaps, cursor = [], 0.0
     for a, b in spans:
@@ -161,9 +165,16 @@ def cut_regions(words, blocks, duration):
     if duration - cursor > 1e-9:
         gaps.append((cursor, float(duration)))
     regions, removed, kept = [], [], []
-    for w in words:
+    for index, w in enumerate(words):
         s, e = float(w["start"]), float(w["end"])
         if e - s < 0.005:
+            if timed:
+                t = (s + e) / 2
+                inside_block = any(a <= t <= b for a, b in spans)
+                if inside_block:
+                    kept.append({"word": w["word"], "start": s, "end": e, "index": index})
+                else:
+                    removed.append(w["word"])
             continue
         inside = 0.0
         for a, b in spans:
@@ -175,7 +186,10 @@ def cut_regions(words, blocks, duration):
             lo, hi = max(s, a), min(e, b)
             if hi - lo >= 0.001:
                 regions.append({"mode": "drop", "start_s": lo, "end_s": hi, "word": str(w["word"])[:100], "reason": "inside an approved cut"})
-        (kept if inside >= (e - s) / 2 else removed).append(w["word"])
+        if inside >= (e - s) / 2:
+            kept.append({"word": w["word"], "start": s, "end": e, "index": index} if timed else w["word"])
+        else:
+            removed.append(w["word"])
     for a, b in gaps:
         regions.append({"mode": "drop", "start_s": a, "end_s": b, "reason": "approved cut (exact assembled gap)"})
     regions.sort(key=lambda r: (r["start_s"], r["end_s"]))
@@ -321,6 +335,25 @@ def quiet_span(env, level, a, b, lead=False, trail=False):
     return (round(lo, 3), round(hi, 3)) if hi - lo >= 0.1 else None
 
 
+# start_edit's duration is the decoded AUDIO length; the project's video duration can be a few ms shorter
+# (owner's iPhone file: 121.728 vs 121.726 s). Spans may end this far past the end and are clamped to it.
+DURATION_TOLERANCE_S = 0.05
+NEIGHBOUR_MARGIN_S = 0.01  # a word cut stays this far inside the neighbours' aligned edges
+
+
+def _inside_neighbours(lo, hi, w, prev_end, next_start, duration):
+    """Clamp a padded word cut [lo, hi] to [prev_end, next_start]: padding may use a gap but never eat a neighbour.
+    With adjacent neighbours the cut is pulled NEIGHBOUR_MARGIN_S inside them (trimming the word's own edge) rather
+    than padded into them; if that leaves nothing, the word's own aligned span clamped to the neighbours is used."""
+    floor = 0.0 if prev_end is None else prev_end + NEIGHBOUR_MARGIN_S
+    ceil = duration if next_start is None else next_start - NEIGHBOUR_MARGIN_S
+    a, b = max(0.0, lo, floor), min(duration, hi, ceil)
+    if b - a < 0.01:
+        a = max(w["start"], 0.0 if prev_end is None else prev_end)
+        b = min(w["end"], duration if next_start is None else next_start)
+    return round(a, 3), round(b, 3)
+
+
 def candidates_from(words, duration, env=None):
     """Filler / repeat / pause candidates, the default cut proposal, and gaps with untranscribed sound.
 
@@ -337,7 +370,8 @@ def candidates_from(words, duration, env=None):
         prev_end = words[i - 1]["end"] if i else 0.0
         next_start = words[i + 1]["start"] if i + 1 < len(words) else duration
         if n in FILLERS:
-            cut = [round(max(0.0, w["start"] - 0.02), 3), round(min(duration, w["end"] + 0.02), 3)]
+            cut = list(_inside_neighbours(w["start"] - 0.02, w["end"] + 0.02, w, prev_end if i else None,
+                                          next_start if i + 1 < len(words) else None, duration))
             if env:  # extend into the measured-silent part of the gaps around the filler, never into a neighbour's tail
                 left = quiet_span(env, level, prev_end, w["start"], lead=i == 0)
                 right = quiet_span(env, level, w["end"], next_start, trail=i + 1 == len(words))
@@ -349,7 +383,8 @@ def candidates_from(words, duration, env=None):
                           "cut": cut, "reason": f"filler '{w['word']}'"})
         if i + 1 < len(words) and n and n == _norm(words[i + 1]["word"]) and n not in FILLERS:
             cands.append({"kind": "repeat", "word": w["word"], "word_index": i, "start_s": w["start"], "end_s": w["end"],
-                          "cut": [round(max(0.0, w["start"] - 0.02), 3), round(max(w["start"], words[i + 1]["start"] - 0.02), 3)],
+                          "cut": list(_inside_neighbours(w["start"] - 0.02, max(w["start"], words[i + 1]["start"] - 0.02), w,
+                                                         prev_end if i else None, words[i + 1]["start"], duration)),
                           "reason": f"repeated word '{w['word']}' (possible restart; check meaning)"})
     edges = [(0.0, words[0]["start"] if words else duration, "leading silence")]
     edges += [(words[i]["end"], words[i + 1]["start"], "long pause") for i in range(len(words) - 1)]
@@ -377,7 +412,9 @@ def candidates_from(words, duration, env=None):
     for c in cands:
         if c["kind"] == "repeat":
             continue  # repeats are review items, not default cuts
-        if merged and c["cut"][0] <= merged[-1]["end_s"] + 0.05:
+        bridged = merged and any(_norm(w["word"]) not in FILLERS and w["end"] > merged[-1]["end_s"] and w["start"] < c["cut"][0]
+                                 for w in words)
+        if merged and c["cut"][0] <= merged[-1]["end_s"] + 0.05 and not bridged:
             merged[-1]["end_s"] = max(merged[-1]["end_s"], c["cut"][1])
             merged[-1]["reason"] += "; " + c["reason"]
         else:
@@ -450,8 +487,15 @@ def diff_words(expected, got, variants=False):
     transcript can never pair with, or hide, a real content word. An aligned substitution between near-identical
     spellings (spelling_variant) is an ASR spelling variant, not a lost word. Returns (lost, added,
     fillers_only_in_expected, fillers_only_in_got) and, with variants=True, a fifth list of [expected, got] pairs."""
+    out, pairs, _ = _diff_core(expected, got)
+    return (*out, pairs) if variants else out
+
+
+def _diff_core(expected, got):
+    """diff_words plus the positions in `expected` of every lost token."""
     from collections import Counter
-    ce, cg = [w for w in expected if w not in REPORT_FILLERS], [w for w in got if w not in REPORT_FILLERS]
+    pos = [k for k, w in enumerate(expected) if w not in REPORT_FILLERS]
+    ce, cg = [expected[k] for k in pos], [w for w in got if w not in REPORT_FILLERS]
     li, ai = align_words(ce, cg, indices=True)
     pairs, lost_set, added_set = [], set(li), set(ai)
     # align_words emits a substitution as a lost/added pair with equal running position; pair them in order.
@@ -461,7 +505,88 @@ def diff_words(expected, got, variants=False):
             if j in added_set and (i - sum(1 for x in li if x < i)) == (j - sum(1 for y in ai if y < j)) and spelling_variant(ce[i], cg[j]):
                 pairs.append([ce[i], cg[j]]); lost_set.discard(i); added_set.discard(j)
                 break
-    lost, added = [ce[i] for i in li if i in lost_set], [cg[j] for j in ai if j in added_set]
+    lost_pos = [pos[i] for i in li if i in lost_set]
+    lost, added = [expected[k] for k in lost_pos], [cg[j] for j in ai if j in added_set]
     fe, fg = Counter(w for w in expected if w in REPORT_FILLERS), Counter(w for w in got if w in REPORT_FILLERS)
-    out = (lost, added, sorted((fe - fg).elements()), sorted((fg - fe).elements()))
-    return (*out, pairs) if variants else out
+    return (lost, added, sorted((fe - fg).elements()), sorted((fg - fe).elements())), pairs, lost_pos
+
+
+# A kept word whose source audio lies wholly inside one assembled block, at least this far from every cut edge, is
+# byte-identical PCM in the edit (assemble_pcm.py copies sample ranges). If the re-transcription misses it, that is
+# ASR variance (a second Whisper pass segments real speech differently), not something the edit removed.
+CUT_PROXIMITY_S = 0.5
+USABLE_WORD_S = 0.005
+
+
+def edit_word_review(kept, got, blocks, duration, words):
+    """Lost/added kept words between the source-aligned transcript and the re-transcribed edit, each lost word located.
+
+    kept: cut_regions(..., timed=True) dicts (source timing + index into `words`). got: tokens of the edited ASR.
+    A lost word fails the gate when it is within CUT_PROXIMITY_S of a cut edge or its source span is not provably
+    inside one block. A word with collapsed (zero-length) alignment is located by its nearest usable neighbours in
+    the source; with none, it is unusable and fails. Everything is reported; nothing is dropped from the lists."""
+    toks = [(_norm(k["word"]), k) for k in kept]
+    toks = [(t, k) for t, k in toks if t]
+    (lost, added, f_src, f_edit), variants, lost_pos = _diff_core([t for t, _ in toks], [t for t in map(_norm, got) if t])
+    spans = sorted((float(b["start_s"]), float(b["end_s"])) for b in blocks)
+    edges = sorted({x for a, b in spans for x in (a, b) if 1e-6 < x < float(duration) - 1e-6})
+    usable = lambda w: float(w["end"]) - float(w["start"]) >= USABLE_WORD_S
+    near, far = [], []
+    for p in lost_pos:
+        k = toks[p][1]
+        row = {"word": k["word"], "source_index": k.get("index"), "source_start_s": round(float(k["start"]), 3),
+               "source_end_s": round(float(k["end"]), 3)}
+        if usable(k):
+            lo, hi, row["timing"] = float(k["start"]), float(k["end"]), "aligned"
+        else:
+            i = k.get("index")
+            prev = next((w for w in reversed(words[:i]) if usable(w)), None) if i is not None else None
+            nxt = next((w for w in words[i + 1:] if usable(w)), None) if i is not None else None
+            if prev is None and nxt is None:
+                near.append({**row, "timing": "unusable (zero length, no timed neighbours)", "nearest_cut_edge_s": None})
+                continue
+            lo = float(prev["end"]) if prev else 0.0
+            hi = float(nxt["start"]) if nxt else float(duration)
+            row.update(timing="collapsed alignment; bounded by neighbours", bounded_start_s=round(lo, 3), bounded_end_s=round(hi, 3))
+        gap = min((max(e - hi, lo - e, 0.0) for e in edges), default=None)
+        inside = any(a <= lo and hi <= b for a, b in spans)
+        row["nearest_cut_edge_s"] = None if gap is None else round(gap, 3)
+        if inside and (gap is None or gap >= CUT_PROXIMITY_S):
+            far.append(row)
+        else:
+            near.append(row)
+    return {"lost": lost, "added": added, "fillers_source_only": f_src, "fillers_edit_only": f_edit, "variants": variants,
+            "lost_near_cuts": near, "asr_variance_far_from_cuts": far, "fail": bool(near),
+            "basis": (f"A lost word fails the gate when its source span is within {CUT_PROXIMITY_S} s of a cut edge, crosses a "
+                      "cut, or has unusable timing. A kept word wholly inside one assembled block and further than that from "
+                      "every cut is sample-identical audio in the edit (assemble_pcm copies PCM ranges), so a second ASR pass "
+                      "missing it is ASR variance; it is listed under asr_variance_far_from_cuts and does not fail the gate.")}
+
+
+DELIVERY_CLUSTER_WORDS = 3   # this many lost words ...
+DELIVERY_CLUSTER_S = 2.0     # ... within this many seconds of edited time look like an audio dropout, not ASR variance
+
+
+def delivery_word_review(edited_words, final_tokens):
+    """Edited-audio ASR vs final-video ASR. The final audio is the edited WAV re-encoded (its custody is proven by the
+    source-region correlation check), so a few scattered lost words are ASR variance. Fail when more than
+    max(3, 5% of words) are lost, or when DELIVERY_CLUSTER_WORDS lost words fall within DELIVERY_CLUSTER_S."""
+    rows = [(t, w) for t, w in ((_norm(w["word"]), w) for w in edited_words) if t]
+    (lost, added, f_src, f_final), variants, lost_pos = _diff_core([t for t, _ in rows], [t for t in map(_norm, final_tokens) if t])
+    located = [{"word": rows[p][1]["word"], "edited_start_s": round(float(rows[p][1]["start"]), 3),
+                "edited_end_s": round(float(rows[p][1]["end"]), 3)} for p in lost_pos]
+    limit = max(3, int(0.05 * len(rows)))
+    times = sorted(r["edited_start_s"] for r in located)
+    cluster = next(([times[i], times[i + DELIVERY_CLUSTER_WORDS - 1]] for i in range(len(times) - DELIVERY_CLUSTER_WORDS + 1)
+                    if times[i + DELIVERY_CLUSTER_WORDS - 1] - times[i] <= DELIVERY_CLUSTER_S), None)
+    reason = ""
+    if len(located) > limit:
+        reason = f"{len(located)} words of the edited audio missing from the final video (limit {limit}: max(3, 5% of {len(rows)}))"
+    elif cluster:
+        reason = (f"{DELIVERY_CLUSTER_WORDS}+ lost words cluster within {DELIVERY_CLUSTER_S} s at edited "
+                  f"{cluster[0]:.2f}-{cluster[1]:.2f} s (possible audio dropout)")
+    return {"lost": lost, "added": added, "fillers_edited_only": f_src, "fillers_final_only": f_final, "variants": variants,
+            "lost_located": located, "asr_variance": [] if reason else located, "fail": bool(reason), "reason": reason,
+            "limit": limit, "basis": ("The final audio is the edited WAV re-encoded; custody is proven separately by source-region "
+                                      "correlation. Scattered lost words are ASR variance; fail on more than max(3, 5%) lost or "
+                                      f"{DELIVERY_CLUSTER_WORDS} within {DELIVERY_CLUSTER_S} s.")}

@@ -25,7 +25,7 @@ from typing import Any
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # run with -I: make the app's pure helpers importable
 from editing import (FILLERS, HANDLE_S, PAUSE_S, REPORT_FILLERS, align_words, candidates_from,  # noqa: E402,F401
-                     cut_regions, cut_sound_check, diff_words)
+                     cut_regions, cut_sound_check, delivery_word_review, diff_words, edit_word_review)
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -93,7 +93,7 @@ RULES = [
     "apply_cuts measures every cut you send (including hand-written ones); a cut with speech-like sound the transcript does not explain fails the reported gate unless the owner listened and you mark it owner_approved_sound: true.",
     "Fillers (um/uh/er/oh/ah) heard in only one transcript are reported separately (ASR can omit them); they are not lost content.",
     "Infer the language from ASR; ask the owner when it is uncertain.",
-    "After assembly, re-transcribe the edited audio and check that no kept word was lost (apply_cuts does this and reports it).",
+    "After assembly, re-transcribe the edited audio and check that no kept word was lost (apply_cuts does this and reports it). A word lost within 0.5 s of a cut fails the gate; a word missed far from every cut is identical audio, so it is listed under asr_variance_far_from_cuts (ASR variance) and does not fail.",
     "The dialogue gate checks evidence completeness and custody. It is not human listening approval: tell the owner to listen before using the edit.",
 ]
 
@@ -110,8 +110,8 @@ GUIDE = {
         "2. Get the video. Normal path: the owner puts it in the Files app (Files -> Videos) and tells you the file name. Call list_files() to find it, then import_file(path) - it returns the project id ('id'). Fallback only (no Files app): create_upload gives a one-time upload URL, curl command and /upload page. Video bytes never travel through MCP.",
         "3. start_edit(project_id) - transcribes and aligns; call get_status(run_id) until state is 'done' to get the transcript, word timings, filler/pause candidates, proposed cuts and editorial rules.",
         "4. Show the owner the proposed cut list (time, words, reason) and any untranscribed_sound gaps (sound with no transcript: maybe a skipped sentence; not proposed), and get approval or changes. Do not skip this.",
-        "5. apply_cuts(project_id, segments) with the approved ranges TO REMOVE; call get_status(run_id) until 'done' for the report: seconds removed, words lost/added, gate pass/fail and download URLs.",
-        "6. Tell the owner the apply_cuts result. If words were lost or the dialogue gate failed, adjust the cuts with them and run apply_cuts again.",
+        "5. apply_cuts(project_id, segments) with the approved ranges TO REMOVE; call get_status(run_id) until 'done' for the report: seconds removed, words lost/added, gate pass/fail and download URLs. An empty list (segments=[]) means no cuts: keep the whole source (captions/framing only); use it to go back to an uncut edit.",
+        "6. Tell the owner the apply_cuts result. If words_lost_near_cuts is non-empty or the dialogue gate failed, adjust the cuts with them and run apply_cuts again. asr_variance_far_from_cuts are words the second ASR pass missed in untouched audio: mention them, they are not lost.",
         "7. Optional framing: preview_framing(project_id, framing) shows the fixed crop per setup with face evidence images. For a two-person shot pass framing={'targets': {'<kept segment index>': 'left'|'right'|'center'|'largest'}} (a change of target starts a new setup); 'new_setup_at': [index] forces a new setup.",
         "8. Optional motion graphics (James' piece 3; read motion_contract below): submit_motion -> capture_motion 'smoke' -> look at the frames -> capture_motion 'proof' -> look again. Skip this for a plain captioned talking-head video.",
         "9. render_final(project_id, options) - options {} for live footage + captions, {'motion': true} after a passing proof capture, plus 'framing' if you previewed one. It does the face audit and fixed crops, full motion capture if requested, burned captions, James' 1080x1920 encode, full decode, pixel checks, final re-transcription and James' delivery gate; call get_status(run_id) until 'done'.",
@@ -323,8 +323,8 @@ def do_start_edit(run: dict) -> dict:
 # ---------- apply_cuts ----------
 
 def clean_cuts(segments: Any, duration: float) -> list[dict]:
-    if not isinstance(segments, list) or not 1 <= len(segments) <= 300:
-        raise ToolError("segments must be a list of 1..300 {start_s, end_s, reason} ranges to REMOVE")
+    if not isinstance(segments, list) or len(segments) > 300:
+        raise ToolError("segments must be a list of 0..300 {start_s, end_s, reason} ranges to REMOVE ([] = no cuts, keep the whole source)")
     rows = []
     for s in segments:
         if not isinstance(s, dict):
@@ -369,6 +369,23 @@ def keeps_from(cuts: list[dict], duration: float) -> list[dict]:
     return keeps
 
 
+PREVIEW_MAX_S = 60.0  # service.submit's low-resolution preview limit
+
+
+def preview_keeps(keeps: list[dict]) -> list[dict]:
+    """The kept spans the 270x480 preview can show: the first PREVIEW_MAX_S seconds of the edit."""
+    out, total = [], 0.0
+    for k in keeps:
+        room = PREVIEW_MAX_S - total
+        if room < 0.1:
+            break
+        end = round(min(k["end_s"], k["start_s"] + room), 6)
+        if end - k["start_s"] >= 0.1:
+            out.append({"start_s": k["start_s"], "end_s": end, "reason": k["reason"]})
+            total += end - k["start_s"]
+    return out
+
+
 def in_cut(t: float, cuts: list[dict]) -> bool:
     return any(c["start_s"] <= t <= c["end_s"] for c in cuts)
 
@@ -382,8 +399,7 @@ def do_apply_cuts(run: dict) -> dict:
     asm = stage(run, "pcm-assemble", {"audio_job": edit["jobs"]["source_audio"], "segments": keeps})
     # Regions come from the assembled (sample-exact) segments, the same list the audio was built from.
     blocks = artifact(asm["id"], "edit-map.json")["segments"]
-    regions, removed, kept_words = cut_regions(words, blocks, duration)
-    expected = [norm(w) for w in kept_words]
+    regions, removed, kept_words = cut_regions(words, blocks, duration, timed=True)
     audit = stage(run, "speech-cut-audit", {"assemble_job": asm["id"], "regions": regions[:2000]})
     cut_receipt = artifact(audit["id"], "cut-regression.json")
     scan = stage(run, "acoustic-scan", {"assemble_job": asm["id"]})
@@ -391,8 +407,10 @@ def do_apply_cuts(run: dict) -> dict:
     easr = stage(run, "asr", {"audio_job": asm["id"], "language": lang})
     edited_words = [w for w in artifact(easr["id"], "asr.json")["words"]]
     got = [norm(w["word"]) for w in edited_words if norm(w["word"])]
-    expected = [e for e in expected if e]
-    lost, added, fillers_source_only, fillers_edit_only, variants = diff_words(expected, got, variants=True)
+    review_words = edit_word_review(kept_words, got, blocks, duration, words)
+    lost, added, variants = review_words["lost"], review_words["added"], review_words["variants"]
+    fillers_source_only, fillers_edit_only = review_words["fillers_source_only"], review_words["fillers_edit_only"]
+    lost_near = review_words["lost_near_cuts"]
     fillers_left = [w for w in got if w in FILLERS]
     sound = cut_sound_check(cuts, artifact(edit["jobs"]["source_audio"], "energy.json"), words)
 
@@ -443,19 +461,20 @@ def do_apply_cuts(run: dict) -> dict:
     if "edit-map.json" not in names:
         downloads.pop("edit_map_json")
     preview_note = "skipped: the preview renderer supports at most 8 kept segments of at least 0.1 s"
-    if len(keeps) <= 8 and all(k["end_s"] - k["start_s"] >= 0.1 for k in keeps):
+    pkeeps = preview_keeps(keeps)
+    if pkeeps and len(pkeeps) <= 8 and all(k["end_s"] - k["start_s"] >= 0.1 for k in pkeeps):
         run["step"] = "preview"
         save(run)
         try:
-            job = api("POST", f"/v1/projects/{run['project']}/previews",
-                      {"segments": [{"start_s": k["start_s"], "end_s": k["end_s"], "reason": k["reason"]} for k in keeps]})
+            job = api("POST", f"/v1/projects/{run['project']}/previews", {"segments": pkeeps})
             end = time.monotonic() + 600
             while job["state"] in ("queued", "running") and time.monotonic() < end:
                 time.sleep(0.5)
                 job = api("GET", f"/v1/jobs/{job['id']}")
             if job["state"] == "needs_review":
                 downloads["preview_9x16_mp4"] = f"{base}/v1/jobs/{job['id']}/preview"
-                preview_note = "low-resolution 9:16 letterboxed preview of the cut (not the final 1080x1920 encode)"
+                preview_note = ("low-resolution 9:16 letterboxed preview of the cut (not the final 1080x1920 encode)"
+                                + (f"; shows the first {PREVIEW_MAX_S:.0f} s of the edit" if pkeeps != keeps else ""))
             else:
                 preview_note = f"preview failed: {job.get('error')}"
         except ToolError as e:
@@ -466,8 +485,12 @@ def do_apply_cuts(run: dict) -> dict:
         "seconds_removed": round(duration - float(edit_map["duration"]), 3),
         "source_duration_s": round(duration, 3), "edited_duration_s": round(float(edit_map["duration"]), 3),
         "cuts_applied": cuts, "kept_segments": len(keeps),
+        "no_cuts": not cuts,
         "words_removed_by_cuts": removed,
         "words_lost_vs_source": lost, "words_added_vs_source": added,
+        "words_lost_near_cuts": lost_near,
+        "asr_variance_far_from_cuts": review_words["asr_variance_far_from_cuts"],
+        "lost_word_basis": review_words["basis"],
         "fillers_still_heard": fillers_left,
         "fillers_heard_in_edit_only": fillers_edit_only, "fillers_in_source_only": fillers_source_only,
         "asr_spelling_variants": variants,
@@ -476,9 +499,14 @@ def do_apply_cuts(run: dict) -> dict:
         "cut_audit_pass": bool(audit["result"]["summary"].get("pass")),
         "cut_audit_failures": failed_regions[:20],
         # The app's reported pass also requires no lost words; James' audio_gate.py itself checks evidence only.
-        "dialogue_gate": {"pass": bool(gsum["dialogue_gate_pass"]) and not lost and sound["pass"],
+        "dialogue_gate": {"pass": bool(gsum["dialogue_gate_pass"]) and not review_words["fail"] and sound["pass"],
                           "reason": "; ".join(x for x in (
-                              f"{len(lost)} kept word(s) missing from the re-transcribed edit: {' '.join(lost[:20])}" if lost else "",
+                              (f"{len(lost_near)} kept word(s) near a cut missing from the re-transcribed edit: "
+                               + " ".join(f"{r['word']}@{r['source_start_s']:.2f}s" for r in lost_near[:20])) if lost_near else "",
+                              (f"{len(review_words['asr_variance_far_from_cuts'])} word(s) missed by the second ASR pass far from "
+                               f"every cut (identical audio; ASR variance, not a gate failure): "
+                               + " ".join(r["word"] for r in review_words["asr_variance_far_from_cuts"][:20]))
+                              if review_words["asr_variance_far_from_cuts"] and not lost_near else "",
                               "; ".join(sound["failures"][:10]) + (" (listen; if the owner approves removing it, resend that cut with "
                                                                    "owner_approved_sound: true)" if sound["failures"] else ""),
                               gsum.get("error") or "") if x) or "all required evidence present and fresh",
@@ -590,7 +618,9 @@ def do_render_final(run: dict) -> dict:
                  "where_to_tell_the_owner": "It's in Files -> Videos -> Edited -> " + saved["name"]}
     except ToolError as e:
         files = {"saved": False, "error": str(e), "where_to_tell_the_owner": "Not saved to Files; use the final_mp4 download link."}
-    lost = gs.get("words_lost_vs_edited")
+    lost = gs.get("words_lost_vs_edited") or []
+    # Older gate summaries (no lost_words_fail) keep the strict rule: any lost word fails.
+    words_fail = bool(gs.get("lost_words_fail", bool(lost)))
     failed_checks = [k for k, v in rs["checks"].items() if v is False]
     mg = rs.get("motion_layer")
     if isinstance(mg, dict):
@@ -609,13 +639,18 @@ def do_render_final(run: dict) -> dict:
         "captions": {"cues": rs["captions"]["cues"], "words": rs["captions"]["words"], "frames_with_caption": rs["captions"]["frames_with_cue"],
                      "font": rs["captions"]["font"], "caption_band_changes_with_cues": rs["checks"]["caption_bounds_and_band"],
                      "word_source": "Transcriber ASR of the edited audio (apply_cuts)"},
-        "delivery_gate": {"pass": bool(gs.get("delivery_gate_pass")) and not lost and not failed_checks,
+        "delivery_gate": {"pass": bool(gs.get("delivery_gate_pass")) and not words_fail and not failed_checks,
                           "audio_gate_script_pass": bool(gs.get("delivery_gate_pass")),
-                          "reason": (f"{len(lost)} word(s) of the edited audio missing from the final video: {' '.join(lost[:20])}; " if lost else "")
+                          "reason": ((f"{gs.get('lost_words_reason') or str(len(lost or [])) + ' word(s) lost'}: {' '.join(lost[:20])}; ") if words_fail else
+                                     (f"{len(lost)} word(s) missed by the final ASR pass, scattered (ASR variance; the final audio is the "
+                                      f"edited WAV re-encoded, custody by source-region correlation): {' '.join(lost[:20])}; " if lost else ""))
                                     + (gate_error or gs.get("error") or "all delivery evidence present and fresh")
                                     + (f" (failing picture checks: {', '.join(failed_checks)}; see pixel_check_json)" if failed_checks else ""),
                           "failed_checks": failed_checks,
                           "words_lost_vs_edited_audio": lost, "words_added_vs_edited_audio": gs.get("words_added_vs_edited"),
+                          "words_lost_located": gs.get("words_lost_located") or [],
+                          "asr_variance": gs.get("asr_variance") or [],
+                          "lost_words_rule": f"fail when more than {gs.get('lost_words_limit', 3)} (max(3, 5% of words)) are lost or 3 lost words fall within 2 s",
                           "asr_spelling_variants": gs.get("asr_spelling_variants") or [],
                           "fillers_heard_in_final_only": gs.get("fillers_heard_in_final_only") or [],
                           "min_source_region_correlation": rs["checks"]["min_source_region_correlation"],
@@ -795,7 +830,8 @@ def start_edit(project_id: str, language: str | None = None) -> dict:
     "each {start_s, end_s, reason} in source seconds (start_edit's proposed_cuts already has this shape). Runs sample-exact "
     "audio assembly, per-edge cut audit, acoustic scan, re-transcription of the edited audio and the dialogue gate in the "
     "background; returns a run_id immediately. Keep calling get_status(run_id) until 'done' for the report: seconds removed, "
-    "words lost/added vs the source, gate pass/fail with reasons and download URLs."))
+    "words lost/added vs the source, gate pass/fail with reasons and download URLs. segments=[] means NO cuts (keep the whole "
+    "source, captions/framing only); use it to return to an uncut edit."))
 def apply_cuts(project_id: str, segments: list[dict], ctx: Context) -> dict:
     def go():
         if not ID.fullmatch(project_id or ""):

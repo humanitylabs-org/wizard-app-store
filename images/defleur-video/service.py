@@ -29,9 +29,9 @@ import http.client
 import urllib.parse
 import secrets
 from typing import cast
-from editing import Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
+from editing import DURATION_TOLERANCE_S, Rejected, validate_options, validate_transcript, visual_filters, review_artifacts
 
-VERSION = "0.6.3-testing"
+VERSION = "0.6.4-testing"
 UPSTREAM = "30768288eb1308b18216a5df5eb4648fbce3e55b"
 MAX_UPLOAD = 8 * 1024 * 1024 * 1024
 MAX_PROJECTS = 8
@@ -308,18 +308,23 @@ def edit_plan(value, duration, metadata=None):
     rows = value["segments"]
     if not isinstance(rows, list) or not 1 <= len(rows) <= 8:
         raise Rejected("one to eight ordered retained spans required")
-    end = 0.0
+    end, clamped = 0.0, []
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"start_s", "end_s", "reason"}:
             raise Rejected("segment needs start_s, end_s, reason")
         start, stop = row["start_s"], row["end_s"]
         if type(start) not in (int, float) or type(stop) not in (int, float) or not math.isfinite(start) or not math.isfinite(stop):
             raise Rejected("finite numeric span required")
+        if duration < stop <= duration + DURATION_TOLERANCE_S:
+            stop = duration  # audio-derived end a few ms past the video's end (see editing.DURATION_TOLERANCE_S)
         if not end <= start < stop <= duration or stop - start < 0.1:
             raise Rejected("invalid, overlapping, or out-of-source span")
+        clamped.append({**row, "end_s": stop})
         if not isinstance(row["reason"], str) or not row["reason"].strip() or len(row["reason"]) > 1000:
             raise Rejected("truthful editorial reason required")
         end = stop
+    if clamped != rows:
+        value = {**value, "segments": clamped}
     validate_options(value, metadata)
     return value
 

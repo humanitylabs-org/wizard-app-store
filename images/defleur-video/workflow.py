@@ -18,7 +18,7 @@ import sys
 import time
 import wave
 
-from editing import Rejected
+from editing import DURATION_TOLERANCE_S, Rejected
 import motion
 import transcriber
 
@@ -293,7 +293,9 @@ def _segments(rows, duration):
     for row in rows:
         _obj(row, {"start_s", "end_s", "reason"})
         start, stop = _num(row["start_s"], "start_s"), _num(row["end_s"], "end_s")
-        if not end <= start < stop <= duration + 1e-6 or stop - start < 0.01:
+        if duration < stop <= duration + DURATION_TOLERANCE_S:
+            stop = row["end_s"] = duration  # same tolerance and clamp as service.edit_plan
+        if not end <= start < stop <= duration or stop - start < 0.01:
             raise Rejected("segments must be ordered, non-overlapping, inside the source and at least 10 ms")
         _text(row["reason"], "segment reason", 1000)
         end = stop
@@ -1166,12 +1168,17 @@ def _delivery_gate(ctx, value, source, metadata):
                                                             f"final ASR: '{heard}'. Not human listening."),
                      "waveform_sha256": sha(wave_path), "spectrogram_sha256": sha(spec_path)})
     ctx.write("final-acoustic-scan.json", rows)
-    lost, added, f_lost, f_added, variants = _words_diff([w["word"] for w in edited_words], [w["word"] for w in final_words], True)
+    from editing import delivery_word_review
+    wr = delivery_word_review(edited_words, [w["word"] for w in final_words])
+    lost, added, f_added, variants = wr["lost"], wr["added"], wr["fillers_final_only"], wr["variants"]
     ctx.write("final-asr-compare.json", {"edited_words": len(edited_words), "final_words": len(final_words),
-                                         "words_lost": lost, "words_added": added,
-                                         "fillers_in_edited_only": f_lost, "fillers_heard_in_final_only": f_added,
+                                         "words_lost": lost, "words_added": added, "words_lost_located": wr["lost_located"],
+                                         "asr_variance": wr["asr_variance"], "lost_words_fail": wr["fail"],
+                                         "lost_words_reason": wr["reason"], "lost_words_limit": wr["limit"],
+                                         "fillers_in_edited_only": wr["fillers_edited_only"], "fillers_heard_in_final_only": f_added,
                                          "asr_spelling_variants": variants,
-                                         "basis": "Transcriber ASR of the edited WAV vs the decoded final MP4 audio, normalized word sequence diff"})
+                                         "basis": "Transcriber ASR of the edited WAV vs the decoded final MP4 audio, normalized word "
+                                                  "sequence diff. " + wr["basis"]})
     receipt = dict(base)
     for key, name in [("final", "final.mp4"), ("decoded_final", "decoded-final.json"), ("final_asr", "final-asr.json"),
                       ("final_acoustic_scan", "final-acoustic-scan.json"), ("final_integrity", "final-integrity.json")]:
@@ -1180,11 +1187,14 @@ def _delivery_gate(ctx, value, source, metadata):
     code, out, err = ctx.run("audio_gate", [root, "--stage", "delivery"], timeout=120, check=False, as_limit=2 * 1024**3)
     result = {"pass": code == 0, "exit_code": code, "stage": "delivery", "output": json.loads(out) if code == 0 else None,
               "error": None if code == 0 else _tail(err), "receipt_sha256": sha(root / "audio-gate.json"),
-              "words_lost_vs_edited": lost, "words_added_vs_edited": added,
+              "words_lost_vs_edited": lost, "words_added_vs_edited": added, "words_lost_located": wr["lost_located"],
+              "lost_words_fail": wr["fail"], "lost_words_reason": wr["reason"], "asr_variance": wr["asr_variance"],
               "scope": "Evidence completeness and custody per audio_gate.py --stage delivery; not human listening approval."}
     ctx.write("delivery-gate-result.json", result)
     del dialogue
     return {"delivery_gate_pass": result["pass"], "error": result["error"], "words_lost_vs_edited": lost,
+            "words_lost_located": wr["lost_located"], "lost_words_fail": wr["fail"], "lost_words_reason": wr["reason"],
+            "asr_variance": wr["asr_variance"], "lost_words_limit": wr["limit"],
             "words_added_vs_edited": added, "asr_spelling_variants": variants, "fillers_heard_in_final_only": f_added,
             "final_scan_windows": len(rows), "render_job": rj}
 

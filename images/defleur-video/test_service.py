@@ -1225,6 +1225,128 @@ print(json.dumps([a, b]))
         self.assertEqual(diff_words(a, b), ([], [], ["um"] * 4, []))
         self.assertEqual(diff_words(a, b[:-2] + b[-1:])[:2], (["video"], []))
 
+    def test_filler_cut_never_overlaps_adjacent_words(self):
+        """Owner's real file: 'means' 38.12-38.38, 'um' 38.38-39.18, 'right' 39.18 (and 'be' .. 'um' 33.44-33.60 'friends')."""
+        from editing import candidates_from
+        words = [{"word": "be", "start": 31.8, "end": 32.08}, {"word": "um", "start": 33.44, "end": 33.6},
+                 {"word": "friends", "start": 33.6, "end": 34.0}, {"word": "it", "start": 37.8, "end": 38.0},
+                 {"word": "means", "start": 38.12, "end": 38.38}, {"word": "um", "start": 38.38, "end": 39.18},
+                 {"word": "right", "start": 39.18, "end": 39.5}, {"word": "right", "start": 39.5, "end": 39.8},
+                 {"word": "now", "start": 39.8, "end": 40.1}]
+        cands, proposed, _, _ = candidates_from(words, 41.0)
+        for c in cands:
+            i = c["word_index"]
+            lo, hi = c["cut"]
+            if i:
+                self.assertGreaterEqual(lo, words[i - 1]["end"], c)
+            nxt = words[i + 1]["start"] if c["kind"] == "filler" else words[i + 1]["start"]
+            self.assertLessEqual(hi, nxt, c)
+            self.assertLess(lo, hi, c)
+        for p in proposed:
+            for w in words:
+                if w["word"] != "um":
+                    self.assertFalse(p["start_s"] < w["end"] and p["end_s"] > w["start"], (p, w))
+        self.assertEqual([(p["start_s"], p["end_s"]) for p in proposed], [(33.42, 33.59), (38.39, 39.17)])
+
+    def _kept(self, text, start=0.0, step=0.4):
+        return [{"word": w, "start": round(start + i * step, 3), "end": round(start + i * step + 0.3, 3)} for i, w in enumerate(text.split())]
+
+    def test_edit_asr_variance_far_from_cuts_does_not_fail_the_gate(self):
+        from editing import cut_regions, edit_word_review
+        sr = 48000
+        words = self._kept("we decided to ship the plan um and it worked well for every single customer we had")
+        um = words[6]  # 2.4-2.7 s; cut it out exactly
+        blocks = [{"start_s": 0.0, "end_s": round(2.35 * sr) / sr}, {"start_s": round(2.75 * sr) / sr, "end_s": 7.0}]
+        _, removed, kept = cut_regions(words, blocks, 7.0, timed=True)
+        self.assertEqual(removed, ["um"])
+        got = [w["word"] for w in kept if w["word"] != "customer"]  # ASR dropped 'customer' at 5.6 s, far from the cut
+        rev = edit_word_review(kept, got, blocks, 7.0, words)
+        self.assertEqual(rev["lost"], ["customer"])
+        self.assertFalse(rev["fail"], rev)
+        self.assertEqual([r["word"] for r in rev["asr_variance_far_from_cuts"]], ["customer"])
+        self.assertEqual(rev["asr_variance_far_from_cuts"][0]["source_start_s"], 5.6)
+        self.assertEqual(rev["lost_near_cuts"], [])
+
+    def test_edit_real_lost_word_next_to_a_cut_fails_the_gate(self):
+        from editing import cut_regions, edit_word_review
+        sr = 48000
+        words = self._kept("we decided to ship the plan um and it worked well for every single customer we had")
+        blocks = [{"start_s": 0.0, "end_s": round(2.35 * sr) / sr}, {"start_s": round(2.75 * sr) / sr, "end_s": 7.0}]
+        _, _, kept = cut_regions(words, blocks, 7.0, timed=True)
+        got = [w["word"] for w in kept if w["word"] != "and"]  # 'and' 2.8-3.1 s starts 0.05 s after the cut edge
+        rev = edit_word_review(kept, got, blocks, 7.0, words)
+        self.assertTrue(rev["fail"], rev)
+        self.assertEqual([r["word"] for r in rev["lost_near_cuts"]], ["and"])
+        self.assertEqual(rev["asr_variance_far_from_cuts"], [])
+
+    def test_collapsed_alignment_words_are_kept_and_bounded_by_neighbours(self):
+        """Owner's file: words 81-96 all aligned to 22.98-22.98. They are in the source, so they belong in the expected
+        list; a lost one is ASR variance only when its timed neighbours bound it far from every cut."""
+        from editing import cut_regions, edit_word_review
+        words = self._kept("so here is the thing about") + [
+            {"word": w, "start": 3.0, "end": 3.0} for w in "i mean somebody who cares".split()] + self._kept(
+            "about you is more valuable than this", start=4.0)
+        blocks = [{"start_s": 0.0, "end_s": 6.0}, {"start_s": 6.5, "end_s": 8.0}]
+        _, _, kept = cut_regions(words, blocks, 8.0, timed=True)
+        self.assertIn("somebody", [w["word"] for w in kept])
+        got = [w["word"] for w in kept if w["word"] != "somebody"]
+        rev = edit_word_review(kept, got, blocks, 8.0, words)
+        self.assertFalse(rev["fail"], rev)
+        self.assertEqual(rev["asr_variance_far_from_cuts"][0]["timing"], "collapsed alignment; bounded by neighbours")
+        # Same collapsed word, but now a cut sits inside its neighbour-bounded span -> not provable -> fails.
+        blocks2 = [{"start_s": 0.0, "end_s": 3.2}, {"start_s": 3.6, "end_s": 8.0}]
+        _, _, kept2 = cut_regions(words, blocks2, 8.0, timed=True)
+        rev2 = edit_word_review(kept2, [w["word"] for w in kept2 if w["word"] != "somebody"], blocks2, 8.0, words)
+        self.assertTrue(rev2["fail"], rev2)
+
+    def test_delivery_asr_variance_passes_but_many_or_clustered_losses_fail(self):
+        from editing import delivery_word_review
+        edited = self._kept(" ".join(f"word{i}" for i in range(100)))
+        names = [w["word"] for w in edited]
+        ok = delivery_word_review(edited, [n for n in names if n not in ("word10", "word50", "word90")])
+        self.assertFalse(ok["fail"], ok)
+        self.assertEqual(len(ok["asr_variance"]), 3)
+        many = delivery_word_review(edited, [n for i, n in enumerate(names) if i % 15])
+        self.assertTrue(many["fail"], many)
+        cluster = delivery_word_review(edited, [n for i, n in enumerate(names) if not 40 <= i < 44])
+        self.assertTrue(cluster["fail"], cluster)
+        self.assertIn("cluster", cluster["reason"])
+
+    def test_edit_plan_tolerates_audio_slightly_longer_than_video(self):
+        """start_edit's duration is the audio (121.728 s); the project's video is 121.726 s."""
+        plan = {"segments": [{"start_s": 0.0, "end_s": 33.42, "reason": "kept"}, {"start_s": 33.59, "end_s": 121.728, "reason": "kept"}]}
+        out = service.edit_plan(plan, 121.726)
+        self.assertEqual(out["segments"][-1]["end_s"], 121.726)
+        self.assertEqual(plan["segments"][-1]["end_s"], 121.728)  # the caller's object is not mutated
+        with self.assertRaises(service.Rejected):
+            service.edit_plan({"segments": [{"start_s": 0.0, "end_s": 121.9, "reason": "kept"}]}, 121.726)
+        import workflow
+        rows = workflow._segments([{"start_s": 0.0, "end_s": 10.03, "reason": "kept"}], 10.0)
+        self.assertEqual(rows[-1]["end_s"], 10.0)
+        with self.assertRaises(service.Rejected):
+            workflow._segments([{"start_s": 0.0, "end_s": 10.2, "reason": "kept"}], 10.0)
+
+    def test_empty_cut_list_keeps_the_whole_source(self):
+        py = "/opt/venv/bin/python" if Path("/opt/venv/bin/python").exists() else os.environ.get("E2E_MCP_PYTHON", sys.executable)
+        code = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import mcp_server
+cuts = mcp_server.clean_cuts([], 121.728)
+print(json.dumps([cuts, mcp_server.keeps_from(cuts, 121.728), mcp_server.preview_keeps(mcp_server.keeps_from(cuts, 121.728)),
+                  "empty" in json.dumps(mcp_server.GUIDE)]))
+"""
+        env = {**os.environ, "VIDEO_DATA_DIR": tempfile.mkdtemp()}
+        out = subprocess.run([py, "-I", "-c", code, str(Path(service.__file__).parent)], capture_output=True, text=True, env=env)
+        if out.returncode and "No module named 'mcp'" in out.stderr:
+            self.skipTest("MCP SDK not installed in this Python")
+        self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+        cuts, keeps, preview, guide = json.loads(out.stdout.strip().splitlines()[-1])
+        self.assertEqual(cuts, [])
+        self.assertEqual(keeps, [{"start_s": 0.0, "end_s": 121.728, "reason": "kept speech"}])
+        self.assertEqual(preview, [{"start_s": 0.0, "end_s": 60.0, "reason": "kept speech"}])
+        self.assertTrue(guide)
+
     def test_capabilities_report_browser_and_resources(self):
         os.environ["BROWSER_URL"] = "http://127.0.0.1:9"
         try:
@@ -1232,7 +1354,7 @@ print(json.dumps([a, b]))
         finally:
             del os.environ["BROWSER_URL"]
         self.assertEqual(status, 200)
-        self.assertEqual(caps["version"], "0.6.3-testing")
+        self.assertEqual(caps["version"], "0.6.4-testing")
         b = caps["workflow"]["motion"]["browser"]
         self.assertFalse(b["reachable"])
         self.assertIn("Browser app", b["fix"])
