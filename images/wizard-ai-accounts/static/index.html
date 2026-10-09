@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>AI Accounts</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>AI Accounts</h1>
+  <p class="lead">Connect your AI subscriptions here once. Your agents on this server use them from here.</p>
+  <ul id="accounts" aria-live="polite"><li class="row muted">Loading…</li></ul>
+  <section id="login" hidden>
+    <h2>Sign in to Claude</h2>
+    <ol>
+      <li><a id="login-url" href="#" target="_blank" rel="noopener noreferrer">Open the Claude sign-in page</a> on your phone or computer and sign in.</li>
+      <li>Claude then shows you a code. Copy it and paste it here.</li>
+    </ol>
+    <form id="code-form" autocomplete="off">
+      <label for="code">Code from Claude</label>
+      <input id="code" name="code" type="text" inputmode="text" autocapitalize="off" spellcheck="false" required>
+      <div class="buttons">
+        <button type="submit" class="primary">Finish connecting</button>
+        <button type="button" id="cancel">Cancel</button>
+      </div>
+    </form>
+  </section>
+  <p id="message" role="status"></p>
+  <p class="foot">Your sign-in stays on this server in a private folder that only your agent apps can open. This page never shows it.</p>
+</main>
+</body>
+</html>
