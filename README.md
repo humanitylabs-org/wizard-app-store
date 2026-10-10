@@ -1,5 +1,8 @@
 # Wizard App Store
 
+> **Replaced (10 Oct 2026).** Every app here now lives in its own repo and is listed at [aiwizards.com/wizard-apps](https://www.aiwizards.com/wizard-apps). Install with the [Wizard App Manager](https://github.com/humanitylabs-org/wizard-app-manager): `./install.sh`, then `wam install <app>`. This store stays up only until existing boxes have moved; it gets no new apps.
+
+
 A small [Runtipi](https://runtipi.io/) community app store by Humanity Labs. Upstream software, standard Runtipi packaging, no custom Hermes fork.
 
 ## Add the store
