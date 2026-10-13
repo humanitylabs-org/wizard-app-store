@@ -26,3 +26,5 @@ input { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid #c8c8c
 #message { min-height: 1.5em; }
 #message.bad { color: #b3261e; }
 #message.ok { color: #12722f; }
+.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 22px; letter-spacing: 2px; }
+section + section { margin-top: 12px; }

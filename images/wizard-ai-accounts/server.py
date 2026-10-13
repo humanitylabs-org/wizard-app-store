@@ -1,14 +1,20 @@
 """AI Accounts: the owner connects AI subscriptions once; agent apps on the same server reuse them.
 
-Phase 1: Claude subscription through the unmodified official Claude Code CLI. This process never
-reads, copies, prints or serves the credential files: it only runs `claude auth login|logout|status`
-and one tiny `claude -p` test, and reports plan/account labels.
+Claude subscription: through the unmodified official Claude Code CLI. This process never reads, copies,
+prints or serves the credential files: it only runs `claude auth login|logout|status` and one tiny
+`claude -p` test, and reports plan/account labels.
+
+ChatGPT subscription: through stock Hermes Agent's own ChatGPT sign-in (its dashboard's device-code login).
+This app signs in to the Hermes Agent dashboard with that app's own dashboard login and uses only the
+ChatGPT sign-in and model routes. The ChatGPT tokens are created and kept inside Hermes; this app never
+sees them.
 """
 from __future__ import annotations
 
 import base64
 import fcntl
 import hmac
+import http.cookiejar
 import json
 import os
 import re
@@ -22,11 +28,13 @@ import sys
 import termios
 import threading
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("AI_ACCOUNTS_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("AI_ACCOUNTS_CLAUDE_DIR", "/claude")
@@ -36,14 +44,18 @@ PORT = int(os.environ.get("AI_ACCOUNTS_PORT", "8795"))
 PASSWORD = os.environ.get("AI_ACCOUNTS_PASSWORD", "")
 LOGIN_TTL = 15 * 60
 SIGN_IN_HOSTS = {"claude.com", "claude.ai", "console.anthropic.com", "platform.claude.com"}
+# Hermes Agent app (same server): its dashboard, reached on the Runtipi network by the app's name.
+HERMES_URL = os.environ.get("AI_ACCOUNTS_HERMES_URL", "http://hermes-agent:9119").rstrip("/")
+HERMES_USER = os.environ.get("AI_ACCOUNTS_HERMES_USER", "") or "hermes"
+HERMES_PASSWORD = os.environ.get("AI_ACCOUNTS_HERMES_PASSWORD", "")
+CODEX = "openai-codex"   # Hermes' provider id for a ChatGPT subscription
+CHATGPT_HOSTS = {"auth.openai.com"}
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]")
 URL = re.compile(r"https://[^\s\"'<>]+")
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/app.css": ("app.css", "text/css; charset=utf-8"), "/SKILL.md": ("SKILL.md", "text/markdown; charset=utf-8")}
 # Later rows plug in here; the page renders whatever this list says.
 COMING_SOON = [
-    {"id": "chatgpt-subscription", "name": "ChatGPT subscription", "kind": "subscription",
-     "detail": "Sign in with ChatGPT.", "status": "coming_soon"},
     {"id": "api-keys", "name": "API keys", "kind": "api-key-gateway",
      "detail": "OpenRouter, Tinfoil, OpenAI and Anthropic keys, shared through one gateway.", "status": "coming_soon"},
 ]
@@ -281,16 +293,215 @@ def run_test() -> tuple[int, dict]:
         State.busy.release()
 
 
+class HermesError(Exception):
+    pass
+
+
+class Hermes:
+    """The Hermes Agent dashboard, signed in with that app's dashboard login (session cookies, kept in memory).
+    Only the ChatGPT sign-in and model routes are called. Error text never carries a token."""
+    lock = threading.Lock()
+    opener = None
+
+    @classmethod
+    def configured(cls) -> bool:
+        return bool(HERMES_PASSWORD)
+
+    @classmethod
+    def _login(cls):
+        jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        body = json.dumps({"provider": "basic", "username": HERMES_USER, "password": HERMES_PASSWORD}).encode()
+        req = urllib.request.Request(HERMES_URL + "/auth/password-login", data=body, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with opener.open(req, timeout=20) as res:
+                res.read()
+        except urllib.error.HTTPError as e:
+            raise HermesError("Hermes Agent did not accept this app's sign-in. Reinstall AI Accounts so it "
+                              "gets the Hermes Agent dashboard login." if e.code in (401, 404)
+                              else f"Hermes Agent answered {e.code}.") from None
+        except OSError:
+            raise HermesError("Hermes Agent is not reachable from AI Accounts. Is it running?") from None
+        cls.opener = opener
+
+    @classmethod
+    def call(cls, method: str, path: str, body: dict | None = None, timeout: int = 40) -> dict:
+        if not cls.configured():
+            raise HermesError("Needs the Hermes Agent app from Wizard Apps on this server.")
+        for attempt in (0, 1):
+            with cls.lock:
+                if cls.opener is None:
+                    cls._login()
+                opener = cls.opener
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(HERMES_URL + path, data=data, method=method,
+                                         headers={"Content-Type": "application/json"} if data is not None else {})
+            try:
+                with opener.open(req, timeout=timeout) as res:
+                    return json.loads(res.read() or b"{}")
+            except urllib.error.HTTPError as e:
+                if e.code == 401 and attempt == 0:   # the dashboard session expired: sign in once more
+                    with cls.lock:
+                        cls.opener = None
+                    continue
+                try:
+                    detail = str(json.loads(e.read() or b"{}").get("detail") or "")
+                except (ValueError, AttributeError):
+                    detail = ""
+                raise HermesError(URL.sub("[link]", detail)[:200] or f"Hermes Agent answered {e.code}.") from None
+            except (OSError, ValueError):
+                raise HermesError("Hermes Agent is not reachable from AI Accounts. Is it running?") from None
+        raise HermesError("Hermes Agent did not accept this app's sign-in.")
+
+
+def chatgpt_status() -> dict:
+    """Connected or not (from Hermes' own sign-in status) and whether the agent uses it now. No token data."""
+    if not Hermes.configured():
+        return {"status": "unavailable", "detail": "Needs the Hermes Agent app from Wizard Apps on this server."}
+    try:
+        rows = Hermes.call("GET", "/api/providers/oauth").get("providers") or []
+        row = next((p for p in rows if isinstance(p, dict) and p.get("id") == CODEX), None)
+        info = Hermes.call("GET", "/api/model/info")
+    except HermesError as e:
+        return {"status": "error", "detail": str(e)}
+    if row is None:
+        return {"status": "error", "detail": "This Hermes Agent has no ChatGPT sign-in."}
+    in_use = info.get("provider") == CODEX
+    if not (row.get("status") or {}).get("logged_in"):
+        return {"status": "not_connected", "in_use": in_use}
+    return {"status": "connected", "plan": "ChatGPT", "account": "", "in_use": in_use,
+            "model": str(info.get("model") or "")[:80] if in_use else ""}
+
+
+def use_chatgpt(force: bool) -> bool:
+    """Point the agent's main model at ChatGPT. Without force, only when its current account doesn't work,
+    so connecting ChatGPT never silently moves an agent off a working account. True when switched."""
+    rows = Hermes.call("GET", "/api/model/options?include_unconfigured=true", timeout=90).get("providers") or []
+    current = next((p for p in rows if p.get("is_current")), None)
+    if current and current.get("slug") == CODEX:
+        return False
+    if not force and current and current.get("authenticated"):
+        return False
+    codex = next((p for p in rows if p.get("slug") == CODEX), {})
+    models = [m for m in (codex.get("featured_models") or []) + (codex.get("models") or []) if isinstance(m, str)]
+    if not models:
+        raise HermesError("ChatGPT is connected, but Hermes lists no ChatGPT models yet. Press Use ChatGPT in a minute.")
+    res = Hermes.call("POST", "/api/model/set", {"scope": "main", "provider": CODEX, "model": models[0],
+                                                 "confirm_expensive_model": True}, timeout=90)
+    if res.get("ok") is False:
+        raise HermesError(str(res.get("confirm_message") or res.get("detail") or "Hermes did not switch the model.")[:200])
+    return True
+
+
+class ChatGPT:
+    lock = threading.Lock()
+    session = ""     # Hermes' sign-in session id (never sent to the browser)
+    login_id = ""    # this page's handle for it
+    started = 0.0
+
+
+def _end_chatgpt():
+    sid, ChatGPT.session, ChatGPT.login_id = ChatGPT.session, "", ""
+    if sid:
+        try:
+            Hermes.call("DELETE", f"/api/providers/oauth/sessions/{sid}")
+        except HermesError:
+            pass
+
+
+def chatgpt_connect() -> tuple[int, dict]:
+    with ChatGPT.lock:
+        _end_chatgpt()
+        try:
+            d = Hermes.call("POST", f"/api/providers/oauth/{CODEX}/start", {}, timeout=40)
+        except HermesError as e:
+            return 502, {"ok": False, "message": str(e)}
+        url, code, sid = str(d.get("verification_url") or ""), str(d.get("user_code") or ""), str(d.get("session_id") or "")
+        parts = urlsplit(url)
+        if not sid or parts.scheme != "https" or parts.hostname not in CHATGPT_HOSTS \
+                or not re.fullmatch(r"[A-Za-z0-9-]{4,24}", code):
+            ChatGPT.session = sid
+            _end_chatgpt()
+            return 502, {"ok": False, "message": "ChatGPT did not give a sign-in code. Try again in a minute."}
+        ChatGPT.session, ChatGPT.login_id, ChatGPT.started = sid, secrets.token_urlsafe(16), time.monotonic()
+        return 200, {"ok": True, "login_id": ChatGPT.login_id, "url": url, "code": code,
+                     "expires_in": int(d.get("expires_in") or 900)}
+
+
+def chatgpt_poll(login_id: str) -> tuple[int, dict]:
+    with ChatGPT.lock:
+        if not ChatGPT.login_id or not hmac.compare_digest(login_id.encode(), ChatGPT.login_id.encode()):
+            return 409, {"ok": False, "status": "expired", "message": "This sign-in expired. Press Connect again."}
+        sid = ChatGPT.session
+    try:
+        d = Hermes.call("GET", f"/api/providers/oauth/{CODEX}/poll/{sid}")
+    except HermesError as e:
+        with ChatGPT.lock:
+            ChatGPT.session = ChatGPT.login_id = ""
+        return 409, {"ok": False, "status": "expired", "message": "This sign-in expired. Press Connect again."
+                     if "not found" in str(e).lower() else str(e)}
+    status = d.get("status")
+    if status == "pending":
+        return 200, {"ok": True, "status": "pending"}
+    with ChatGPT.lock:
+        ChatGPT.session = ChatGPT.login_id = ""
+    if status != "approved":
+        return 400, {"ok": False, "status": status or "error",
+                     "message": "The code expired before it was approved. Press Connect again." if status == "expired"
+                     else "ChatGPT sign-in did not finish. Press Connect to try again."}
+    try:
+        switched = use_chatgpt(force=False)
+        message = ("Connected. Your agent now uses ChatGPT." if switched else
+                   "Connected. Your agent keeps its current account; press Use ChatGPT to switch.")
+    except HermesError as e:
+        message = f"Connected, but the agent was not switched: {e}"
+    return 200, {"ok": True, "status": "approved", "message": message, "chatgpt": chatgpt_status()}
+
+
+def chatgpt_cancel() -> tuple[int, dict]:
+    with ChatGPT.lock:
+        _end_chatgpt()
+    return 200, {"ok": True}
+
+
+def chatgpt_use() -> tuple[int, dict]:
+    if chatgpt_status().get("status") != "connected":
+        return 409, {"ok": False, "message": "Connect ChatGPT first."}
+    try:
+        switched = use_chatgpt(force=True)
+    except HermesError as e:
+        return 502, {"ok": False, "message": str(e)}
+    return 200, {"ok": True, "message": "Your agent now uses ChatGPT for new chats." if switched
+                 else "Your agent already uses ChatGPT.", "chatgpt": chatgpt_status()}
+
+
+def chatgpt_logout() -> tuple[int, dict]:
+    with ChatGPT.lock:
+        _end_chatgpt()
+    before = chatgpt_status()
+    try:
+        Hermes.call("DELETE", f"/api/providers/oauth/{CODEX}")
+    except HermesError as e:
+        return 502, {"ok": False, "message": str(e)}
+    status = chatgpt_status()
+    ok = status.get("status") == "not_connected"
+    message = "Disconnected." if ok else "Still connected."
+    if ok and before.get("in_use"):
+        message = "Disconnected. Your agent was using ChatGPT: connect it again, or connect another account."
+    return (200 if ok else 500), {"ok": ok, "message": message, "chatgpt": status}
+
+
 def card(host: str) -> dict:
     base = f"http://{host}" if host else f"http://wizard-ai-accounts:{PORT}"
     return {
         "name": "wizard-ai-accounts", "version": VERSION, "title": "AI Accounts",
-        "description": "Connect AI subscriptions once (phase 1: Claude subscription via the official Claude Code login). "
-                       "Agent apps on this server reuse the login through a shared private volume.",
+        "description": "Connect AI subscriptions once: Claude (official Claude Code login, shared with agent apps "
+                       "through a private volume) and ChatGPT (Hermes Agent's own ChatGPT sign-in).",
         "remotes": [],
         "x-wizard": {
             "kind": "system-agent-app",
-            "provides": ["claude-subscription"],
+            "provides": ["claude-subscription", "chatgpt-subscription"],
             "skill": f"{base}/SKILL.md",
             "status_api": f"{base}/api/accounts",
             "shared_volume": {"name": "wizard-ai-accounts-claude", "mount": "/claude", "uid": 1000, "gid": 1000,
@@ -361,7 +572,10 @@ class Handler(BaseHTTPRequestHandler):
             claude = {"id": "claude-subscription", "name": "Claude subscription", "kind": "subscription",
                       "detail": "Pro or Max plan, signed in with the official Claude Code app.", **claude_status(),
                       "signing_in": bool(login and login.alive())}
-            return self.json(200, {"accounts": [claude, *COMING_SOON], "version": VERSION})
+            chatgpt = {"id": "chatgpt-subscription", "name": "ChatGPT subscription", "kind": "subscription",
+                       "detail": "Plus or Pro plan, signed in through Hermes Agent's own ChatGPT sign-in.",
+                       **chatgpt_status(), "signing_in": bool(ChatGPT.login_id)}
+            return self.json(200, {"accounts": [claude, chatgpt, *COMING_SOON], "version": VERSION})
         if path in STATIC:
             name, ctype = STATIC[path]
             return self.send(200, (APP / "static" / name).read_bytes() if name != "SKILL.md" else
@@ -398,6 +612,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(*logout())
         if path == "/api/claude/test":
             return self.json(*run_test())
+        if path == "/api/chatgpt/connect":
+            return self.json(*chatgpt_connect())
+        if path == "/api/chatgpt/poll":
+            return self.json(*chatgpt_poll(str(body.get("login_id", ""))))
+        if path == "/api/chatgpt/cancel":
+            return self.json(*chatgpt_cancel())
+        if path == "/api/chatgpt/use":
+            return self.json(*chatgpt_use())
+        if path == "/api/chatgpt/logout":
+            return self.json(*chatgpt_logout())
         self.json(404, {"ok": False, "message": "not found"})
 
 
@@ -423,6 +647,8 @@ def main():
     finally:
         with State.lock:
             end_login()
+        with ChatGPT.lock:
+            _end_chatgpt()
         server.server_close()
 
 

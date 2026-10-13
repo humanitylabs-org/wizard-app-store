@@ -1,6 +1,6 @@
 services:
   wizard-ai-accounts:
-    image: ghcr.io/humanitylabs-org/wizard-ai-accounts:0.1.1
+    image: ghcr.io/humanitylabs-org/wizard-ai-accounts:0.2.0
     user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
@@ -13,6 +13,9 @@ services:
     environment:
       AI_ACCOUNTS_PORT: "8795"
       AI_ACCOUNTS_PASSWORD: ${AI_ACCOUNTS_PASSWORD:-}
+      AI_ACCOUNTS_HERMES_URL: http://hermes-agent:9119
+      AI_ACCOUNTS_HERMES_USER: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-hermes}
+      AI_ACCOUNTS_HERMES_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
     volumes:
       # The Claude sign-in, shared with Hermes Agent under the same fixed name. Never under /media:
       # the Files app serves that folder.
