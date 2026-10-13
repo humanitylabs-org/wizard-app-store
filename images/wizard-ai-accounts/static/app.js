@@ -1,6 +1,8 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let loginId = "";
+let chatgptId = "";
+let chatgptTimer = 0;
 let busy = false;
 
 function say(text, kind) {
@@ -44,6 +46,8 @@ function render(accounts) {
     li.append(el("div", "name", a.name), el("div", "detail", a.detail || ""));
     if (a.status === "coming_soon") {
       li.append(el("p", "state", "Coming soon"));
+    } else if (a.id === "chatgpt-subscription") {
+      renderChatGPT(li, a);
     } else if (a.status === "connected") {
       const who = a.account ? ` (${a.account})` : "";
       li.append(el("p", "state ok", `Connected as ${a.plan}${who}`));
@@ -61,6 +65,22 @@ function render(accounts) {
     }
     list.append(li);
   }
+}
+
+function renderChatGPT(li, a) {
+  const row = el("div", "buttons");
+  if (a.status === "connected") {
+    const model = a.model ? ` (${a.model})` : "";
+    li.append(el("p", "state ok", a.in_use ? `Connected. Your agent uses it${model}.` : "Connected. Your agent uses another account right now."));
+    if (!a.in_use) row.append(button("Use ChatGPT", useChatGPT, true));
+    row.append(button("Disconnect", disconnectChatGPT));
+  } else if (a.status === "not_connected") {
+    li.append(el("p", "state off", a.signing_in ? "Waiting for you to sign in" : "Not connected"));
+    row.append(button("Connect", connectChatGPT, true));
+  } else {
+    li.append(el("p", "state bad", a.detail || "ChatGPT sign-in is not available here."));
+  }
+  if (row.childElementCount) li.append(row);
 }
 
 async function refresh() {
@@ -105,6 +125,61 @@ function test() {
     else say(`Test failed: ${data.message}`, "bad");
   });
 }
+
+function stopChatGPT() {
+  clearTimeout(chatgptTimer);
+  chatgptId = "";
+  $("chatgpt-login").hidden = true;
+}
+
+function connectChatGPT() {
+  return run("Starting ChatGPT sign-in…", async () => {
+    const data = await call("/api/chatgpt/connect", {});
+    if (!data.ok) return say(data.message, "bad");
+    chatgptId = data.login_id;
+    const link = $("chatgpt-url");
+    link.href = data.url;
+    $("chatgpt-code").textContent = data.code;
+    $("chatgpt-login").hidden = false;
+    say("");
+    $("chatgpt-login").scrollIntoView({ behavior: "smooth" });
+    chatgptTimer = setTimeout(pollChatGPT, 5000);
+  });
+}
+
+async function pollChatGPT() {
+  if (!chatgptId) return;
+  const data = await call("/api/chatgpt/poll", { login_id: chatgptId });
+  if (data.status === "pending") {
+    chatgptTimer = setTimeout(pollChatGPT, 5000);
+    return;
+  }
+  stopChatGPT();
+  say(data.message || "ChatGPT sign-in did not finish.", data.ok ? "ok" : "bad");
+  await refresh();
+}
+
+function useChatGPT() {
+  return run("Switching your agent to ChatGPT…", async () => {
+    const data = await call("/api/chatgpt/use", {});
+    say(data.message, data.ok ? "ok" : "bad");
+  });
+}
+
+function disconnectChatGPT() {
+  if (!confirm("Disconnect ChatGPT? Your agents will stop using your ChatGPT subscription until you connect again.")) return;
+  return run("Disconnecting…", async () => {
+    const data = await call("/api/chatgpt/logout", {});
+    say(data.message, data.ok ? "ok" : "bad");
+  });
+}
+
+$("chatgpt-cancel").addEventListener("click", async () => {
+  stopChatGPT();
+  await call("/api/chatgpt/cancel", {});
+  say("");
+  await refresh();
+});
 
 $("code-form").addEventListener("submit", (ev) => {
   ev.preventDefault();

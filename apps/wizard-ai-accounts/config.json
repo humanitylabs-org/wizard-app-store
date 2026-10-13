@@ -3,15 +3,15 @@
   "id": "wizard-ai-accounts",
   "wizard_type": "external",
   "available": true,
-  "short_desc": "External: Connect your Claude subscription once; your agents on this server use it.",
+  "short_desc": "External: connect your Claude or ChatGPT subscription once; every agent on the server uses it.",
   "author": "Humanity Labs",
   "port": 8795,
   "categories": [
     "network"
   ],
   "description": "The one place to connect AI subscriptions for your Wizard server. Phase 1: your Claude Pro or Max subscription, signed in with Anthropic's official Claude Code login. Hermes Agent (Wizard build) then uses it through NousResearch's official Claude Subscription plugin. ChatGPT sign-in and API keys are coming later. Your sign-in stays in a private shared folder and is never shown or sent anywhere by this app.",
-  "tipi_version": 2,
-  "version": "0.1.1",
+  "tipi_version": 3,
+  "version": "0.2.0",
   "source": "https://github.com/humanitylabs-org/wizard-app-store",
   "exposable": false,
   "supported_architectures": [
@@ -31,6 +31,22 @@
       "env_variable": "AI_ACCOUNTS_PASSWORD",
       "required": false,
       "hint": "Leave empty on a Tailscale-only server. If set (use 16+ characters), your browser asks for it (any username) before showing this page."
+    },
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard username",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
+      "required": true,
+      "default": "hermes",
+      "hint": "Filled in automatically from your Hermes Agent app. Used only for ChatGPT sign-in."
+    },
+    {
+      "type": "password",
+      "label": "Hermes Agent dashboard password",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
+      "required": true,
+      "min": 16,
+      "hint": "Filled in automatically from your Hermes Agent app (the same dashboard password). Used only for ChatGPT sign-in: ChatGPT signs in inside Hermes, so this app never sees that token."
     }
   ]
 }

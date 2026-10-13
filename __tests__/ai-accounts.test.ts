@@ -18,9 +18,16 @@ test("private, versioned, own port, optional page password", () => {
   }
   expect(service.image).toBe(`ghcr.io/humanitylabs-org/wizard-ai-accounts:${config.version}`);
   expect(service["x-runtipi"]).toEqual({ is_main: true, internal_port: 8795 });
-  expect(config.form_fields).toHaveLength(1);
+  expect(config.form_fields).toHaveLength(3);
   expect(config.form_fields[0]).toMatchObject({ type: "password", env_variable: "AI_ACCOUNTS_PASSWORD", required: false });
   expect(service.environment.AI_ACCOUNTS_PASSWORD).toBe("${AI_ACCOUNTS_PASSWORD:-}");
+  // ChatGPT: Hermes Agent's own dashboard login, same variable names so the App Manager fills them from that app.
+  const hermesFields = JSON.parse(readFileSync("apps/hermes-agent/config.json", "utf8")).form_fields.map((f: { env_variable: string }) => f.env_variable);
+  for (const v of ["HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"]) {
+    expect(hermesFields).toContain(v);
+    expect(config.form_fields.find((f: { env_variable: string }) => f.env_variable === v)).toMatchObject({ required: true });
+  }
+  expect(service.environment.AI_ACCOUNTS_HERMES_URL).toBe("http://hermes-agent:9119");
 });
 
 test("bounded, unprivileged, read-only; only the shared login volume", () => {

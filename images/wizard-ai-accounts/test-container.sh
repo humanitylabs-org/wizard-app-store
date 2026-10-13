@@ -37,11 +37,11 @@ health = json.loads(body); assert health["status"] == "ok" and health["claude_co
 code, body = req("/"); assert code == 200 and b"AI Accounts" in body
 for f in ("/app.js", "/app.css", "/SKILL.md"): assert req(f)[0] == 200, f
 code, body = req("/.well-known/mcp/server-cards.json"); cardj = json.loads(body)
-assert cardj["x-wizard"]["kind"] == "system-agent-app" and cardj["x-wizard"]["provides"] == ["claude-subscription"], cardj
+assert cardj["x-wizard"]["kind"] == "system-agent-app" and cardj["x-wizard"]["provides"] == ["claude-subscription", "chatgpt-subscription"], cardj
 accounts = json.loads(req("/api/accounts")[1])["accounts"]
 assert [a["id"] for a in accounts] == ["claude-subscription", "chatgpt-subscription", "api-keys"], accounts
 assert accounts[0]["status"] == "not_connected", accounts[0]
-assert all(a["status"] == "coming_soon" for a in accounts[1:])
+assert accounts[1]["status"] == "unavailable" and accounts[2]["status"] == "coming_soon", accounts
 # No credential surface: traversal and credential paths are 404.
 for path in ("/.credentials.json", "/claude/.credentials.json", "/../claude/.credentials.json", "/static/../server.py", "/api/claude/credentials"):
     assert req(path)[0] == 404, path

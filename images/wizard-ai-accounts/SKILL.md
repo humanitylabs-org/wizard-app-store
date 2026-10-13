@@ -1,12 +1,12 @@
 ---
 name: wizard-ai-accounts
-description: Use when the owner wants an agent on this Wizard server to use his Claude subscription, or asks whether Claude is connected. AI Accounts holds the one shared sign-in; agents never handle it.
+description: Use when the owner wants an agent on this Wizard server to use his Claude or ChatGPT subscription, or asks whether one is connected. AI Accounts holds the sign-ins; agents never handle them.
 ---
 
 # AI Accounts (Wizard system app)
 
-AI Accounts is where the owner connects AI subscriptions once for the whole server. Phase 1 has the
-Claude subscription (Pro or Max) only. ChatGPT sign-in and an API-key gateway come later.
+AI Accounts is where the owner connects AI subscriptions once for the whole server: a Claude subscription
+(Pro or Max) and a ChatGPT subscription (Plus or Pro). An API-key gateway comes later.
 
 ## What the agent must know
 
@@ -27,6 +27,16 @@ picker, or runs `hermes model`. Don't change the provider or model unless the ow
 
 If a request fails with "not logged in", tell the owner: open AI Accounts, press **Connect** on
 "Claude subscription", sign in, paste the code, then press **Test**.
+
+## ChatGPT
+
+- The owner presses **Connect** next to "ChatGPT subscription", opens OpenAI's page, enters the short code
+  shown, and approves. The page finishes by itself. The sign-in is Hermes Agent's own ChatGPT login, so the
+  token stays inside Hermes.
+- If the agent had no working account, it switches to ChatGPT automatically. If it already works on Claude,
+  it stays there until the owner presses **Use ChatGPT**. Don't switch models unless the owner asks.
+- Status: the `chatgpt-subscription` row in `/api/accounts` (`connected` + `in_use`, `not_connected`, or
+  `unavailable` when Hermes Agent isn't installed).
 
 ## Limits
 
