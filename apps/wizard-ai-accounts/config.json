@@ -3,7 +3,7 @@
   "id": "wizard-ai-accounts",
   "wizard_type": "external",
   "available": true,
-  "short_desc": "Connect your Claude or ChatGPT subscription once; every agent on the server uses it.",
+  "short_desc": "External: connect your Claude or ChatGPT subscription once; every agent on the server uses it.",
   "author": "Humanity Labs",
   "port": 8795,
   "categories": [
