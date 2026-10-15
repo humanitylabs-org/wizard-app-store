@@ -29,11 +29,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 CONTRACT = "wizard.ai-connection/1"
 APP = Path(__file__).resolve().parent
 BIND = os.environ.get("WIZARD_CHATGPT_BIND", "0.0.0.0")
-PORT = int(os.environ.get("WIZARD_CHATGPT_PORT", "8800"))
+PORT = int(os.environ.get("WIZARD_CHATGPT_PORT", "8801"))
 PASSWORD = os.environ.get("WIZARD_CHATGPT_PASSWORD", "")
 # The agent's dashboard: by default the Hermes Agent app on the Runtipi main network.
 HERMES_URL = (os.environ.get("WIZARD_CHATGPT_HERMES_URL", "") or "http://hermes-agent:9119").rstrip("/")

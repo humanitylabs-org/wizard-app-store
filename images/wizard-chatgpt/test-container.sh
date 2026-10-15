@@ -8,13 +8,13 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TAG=${WIZARD_CHATGPT_IMAGE:-wizard-chatgpt:test}
 [ -n "${SKIP_BUILD:-}" ] || docker build -t "$TAG" "$ROOT"
 docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --memory 128m --pids-limit 64 \
-  --network none -e WIZARD_CHATGPT_PORT=8800 --entrypoint python3 "$TAG" -c '
+  --network none -e WIZARD_CHATGPT_PORT=8801 --entrypoint python3 "$TAG" -c '
 import json, os, pathlib, subprocess, sys, time, urllib.request, urllib.error
 assert os.getuid() == 1000 and os.getgid() == 1000, "must run as 1000:1000"
 files = sorted(str(p.relative_to("/app")) for p in pathlib.Path("/app").rglob("*") if p.is_file())
 assert files == ["LICENSE", "SKILL.md", "server.py", "static/app.css", "static/app.js", "static/index.html"], files
 p = subprocess.Popen([sys.executable, "/app/server.py"])
-B = "http://127.0.0.1:8800"
+B = "http://127.0.0.1:8801"
 def req(path, body=None, headers=None):
     h = {"Content-Type": "application/json"} if body is not None else {}
     h.update(headers or {})
@@ -29,7 +29,7 @@ while time.monotonic() - t0 < 10:
     try:
         code, body = req("/health"); break
     except OSError: time.sleep(0.1)
-assert json.loads(body) == {"status": "ok", "version": "0.1.0"}, body
+assert json.loads(body) == {"status": "ok", "version": "0.1.1"}, body
 code, body = req("/"); assert code == 200 and b"<title>ChatGPT</title>" in body
 for f in ("/app.js", "/app.css", "/SKILL.md"): assert req(f)[0] == 200, f
 cardj = json.loads(req("/.well-known/mcp/server-cards.json")[1])

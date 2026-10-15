@@ -10,14 +10,14 @@ server (decision #61: one connection app per AI provider). It replaces the ChatG
 
 ## What the agent must know
 
-- The sign-in is done **by the owner, on the ChatGPT app's page** (`http://<server>:8800`): press
+- The sign-in is done **by the owner, on the ChatGPT app's page** (`http://<server>:8801`): press
   **Connect**, open the ChatGPT link, enter the short code shown, approve. The page finishes by itself.
   Never ask the owner for a code, token or password in chat, and never try to sign in yourself.
 - The sign-in runs inside Hermes Agent (its own ChatGPT device-code login), so Hermes keeps and renews
   the tokens. Never read, copy, print or send Hermes' `auth.json` or any ChatGPT token: ChatGPT refresh
   tokens are single-use, so a copy signs the agent out.
 - Status (read-only, never a token): the MCP tool `connection_status`, or
-  `GET http://wizard-chatgpt:8800/api/connection` from the app network. It returns the
+  `GET http://wizard-chatgpt:8801/api/connection` from the app network. It returns the
   `wizard.ai-connection/1` shape: `status` (`connected`, `not_connected`, `expired`, `error`), `account`
   when known, `usage: null` (usage limits come from Wizard's Resources screen, which reads them from the
   agent's own sign-in) and `error` with a plain message.
