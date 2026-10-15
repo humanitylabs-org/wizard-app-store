@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>ChatGPT</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>ChatGPT</h1>
+  <p class="lead">Connect your ChatGPT subscription here once. Your agent on this server uses it from here.</p>
+  <ul id="accounts" aria-live="polite"><li class="row muted">Loading…</li></ul>
+  <section id="login" hidden>
+    <h2>Sign in to ChatGPT</h2>
+    <ol>
+      <li><a id="login-url" href="#" target="_blank" rel="noopener noreferrer">Open the ChatGPT sign-in page</a> on your phone or computer and sign in.</li>
+      <li>Enter this code there: <strong id="code" class="code"></strong></li>
+      <li>Come back here. This page finishes by itself.</li>
+    </ol>
+    <div class="buttons"><button type="button" id="cancel">Cancel</button></div>
+  </section>
+  <p id="message" role="status"></p>
+  <p class="foot">Your ChatGPT sign-in is kept by your agent on this server. This page never sees or shows it.</p>
+</main>
+</body>
+</html>
