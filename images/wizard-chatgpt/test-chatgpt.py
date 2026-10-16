@@ -33,6 +33,7 @@ class Fake:
     calls: list = []
     expire_cookie_once = False
     model_set: list = []
+    usage_route = False   # the Wizard OS plugin route (absent on an agent without the plugin)
 
 
 class Stub(BaseHTTPRequestHandler):
@@ -74,6 +75,13 @@ class Stub(BaseHTTPRequestHandler):
             if Fake.logged_in:
                 st["source"] = "pool:owner@example.com"
             return self.reply(200, {"providers": [{"id": "openai-codex", "status": st}]})
+        if method == "GET" and path == "/api/plugins/wizard-os/ai-usage/chatgpt":
+            if not Fake.usage_route:
+                return self.reply(404, {"detail": "Not Found"})
+            return self.reply(200, {"ok": True, "plan": "Pro", "usage": {
+                "fetchedAt": "2026-10-16T04:48:23.362Z", "paid": None,
+                "limits": [{"id": "weekly:0", "label": "Weekly", "usedPercent": 6.0, "remainingPercent": 94,
+                            "resetsAt": "2026-10-22T06:13:23.000Z"}]}})
         if method == "GET" and path == "/api/model/info":
             return self.reply(200, {"provider": Fake.current, "model": "gpt-6-sol" if Fake.current == "openai-codex" else "opus"})
         if method == "GET" and path.startswith("/api/model/options"):
@@ -197,6 +205,7 @@ def main():
         assert req("/api/chatgpt/poll", {"login_id": d["login_id"]})[1]["status"] == "pending"
 
         # Approved while the agent's other account works: connected, NOT switched; the cache is cleared.
+        # Without the Wizard OS plugin route on the agent's dashboard, usage stays null (checked below).
         Fake.sessions["s0"], Fake.logged_in = "approved", True
         code, d3 = req("/api/chatgpt/poll", {"login_id": d["login_id"]})
         assert code == 200 and d3["status"] == "approved" and "keeps its current account" in d3["message"], d3
@@ -204,6 +213,7 @@ def main():
         code, conn = req("/api/connection")
         assert conn["status"] == "connected" and conn["usage"] is None and conn["error"] is None, conn
         assert conn["account"] == "owner@example.com" and conn["plan"] is None, conn
+
         c = row()
         assert c["status"] == "connected" and c["in_use"] is False and not c["signing_in"], c
 
@@ -225,6 +235,15 @@ def main():
         Fake.sessions[max(Fake.sessions)], Fake.logged_in = "approved", True
         d6 = req("/api/chatgpt/poll", {"login_id": d["login_id"]})[1]
         assert "now uses ChatGPT" in d6["message"] and Fake.current == "openai-codex", d6
+
+        # With the Wizard OS plugin route, plan and usage come from the agent's own read; still no token here.
+        Fake.usage_route = True
+        code, conn = req("/api/connection")
+        assert conn["status"] == "connected" and conn["plan"] == "Pro" and conn["error"] is None, conn
+        assert conn["usage"]["limits"][0] == {"id": "weekly:0", "label": "Weekly", "usedPercent": 6.0,
+                                              "remainingPercent": 94, "resetsAt": "2026-10-22T06:13:23.000Z"}, conn
+        assert "GET /api/plugins/wizard-os/ai-usage/chatgpt" in Fake.calls
+        Fake.usage_route = False
 
         # Cancel ends Hermes' own session too.
         Fake.logged_in = False

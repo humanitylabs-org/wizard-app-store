@@ -29,7 +29,7 @@ while time.monotonic() - t0 < 10:
     try:
         code, body = req("/health"); break
     except OSError: time.sleep(0.1)
-assert json.loads(body) == {"status": "ok", "version": "0.1.1"}, body
+assert json.loads(body) == {"status": "ok", "version": "0.1.2"}, body
 code, body = req("/"); assert code == 200 and b"<title>ChatGPT</title>" in body
 for f in ("/app.js", "/app.css", "/SKILL.md"): assert req(f)[0] == 200, f
 cardj = json.loads(req("/.well-known/mcp/server-cards.json")[1])
