@@ -63,7 +63,7 @@ function render(accounts) {
 }
 
 async function refresh() {
-  const data = await call("/api/accounts");
+  const data = await call("api/accounts");
   if (data.accounts) render(data.accounts);
 }
 
@@ -81,7 +81,7 @@ function stopPolling() {
 
 async function pollOnce() {
   if (!loginId) return;
-  const data = await call("/api/chatgpt/poll", { login_id: loginId });
+  const data = await call("api/chatgpt/poll", { login_id: loginId });
   if (data.status === "pending") { timer = setTimeout(pollOnce, 3000); return; }
   stopPolling();
   loginId = "";
@@ -92,7 +92,7 @@ async function pollOnce() {
 
 function connect() {
   return run("Asking ChatGPT for a sign-in code…", async () => {
-    const data = await call("/api/chatgpt/connect", {});
+    const data = await call("api/chatgpt/connect", {});
     if (!data.ok) return say(data.message, "bad");
     loginId = data.login_id;
     $("login-url").href = data.url;
@@ -107,7 +107,7 @@ function connect() {
 function useIt() {
   if (!confirm("Switch your agent to ChatGPT for new chats?")) return;
   return run("Switching…", async () => {
-    const data = await call("/api/chatgpt/use", {});
+    const data = await call("api/chatgpt/use", {});
     say(data.message, data.ok ? "ok" : "bad");
   });
 }
@@ -115,7 +115,7 @@ function useIt() {
 function disconnect() {
   if (!confirm("Disconnect ChatGPT? Your agent stops using your ChatGPT subscription until you connect again.")) return;
   return run("Disconnecting…", async () => {
-    const data = await call("/api/chatgpt/logout", {});
+    const data = await call("api/chatgpt/logout", {});
     say(data.message, data.ok ? "ok" : "bad");
   });
 }
@@ -124,7 +124,7 @@ $("cancel").addEventListener("click", async () => {
   stopPolling();
   $("login").hidden = true;
   loginId = "";
-  await call("/api/chatgpt/cancel", {});
+  await call("api/chatgpt/cancel", {});
   say("");
 });
 

@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 import usage
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
