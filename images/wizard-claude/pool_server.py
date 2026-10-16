@@ -114,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/connection':
                 result = {**result, 'contract': 'wizard.ai-connection/1', 'status': 'connected' if result['accounts'] else 'not_connected', 'plan': None, 'usage': None, 'account': None}
             return self.send(200, result)
-        assets = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/app.css': ('app.css', 'text/css; charset=utf-8')}
+        assets = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/app.css': ('app.css', 'text/css; charset=utf-8'), '/boot.js': ('boot.js', 'text/javascript; charset=utf-8'), '/theme-client.js': ('theme-client.js', 'text/javascript; charset=utf-8'), '/wizard-ui.css': ('wizard-ui.css', 'text/css; charset=utf-8')}
         if path in assets:
             name, ctype = assets[path]
             return self.send(200, (ROOT / name).read_bytes(), ctype)

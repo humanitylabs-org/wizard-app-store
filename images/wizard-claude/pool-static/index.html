@@ -1,1 +1,44 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Subscriptions</title><link rel="stylesheet" href="app.css"><script src="app.js" defer></script></head><body><main><header><h1 id="title">Subscriptions</h1><button id="refresh">Refresh</button></header><p id="summary" role="status">Loading Hermes subscriptions…</p><ul id="accounts"></ul><button id="add">Add subscription</button><p id="message" role="status"></p><dialog id="manage"><h2>Manage subscription</h2><p id="instructions"></p><div id="command"></div><input id="code" type="password" autocomplete="off" aria-label="Claude authorization code" hidden><button id="submit-code" hidden>Submit authorization code</button><button id="cancel" hidden>Cancel sign-in</button><button id="close">Close</button></dialog><footer>Hermes owns your credentials. Quotas are per subscription, never combined.</footer></main></body></html>
+<!doctype html>
+<html lang="en" data-app="ai-subscriptions">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>Subscriptions</title>
+<script src="boot.js"></script>
+<link rel="stylesheet" href="wizard-ui.css">
+<link rel="stylesheet" href="app.css">
+<script defer src="theme-client.js"></script>
+<script defer src="app.js"></script>
+</head>
+<body>
+<div class="wz-app">
+  <header class="wz-head"><h1 id="title">Subscriptions</h1><p id="updated"></p></header>
+  <main class="wz-scroll">
+    <section class="wz-sec" aria-labelledby="subs-h">
+      <h2 class="wz-sec-h" id="subs-h">Subscriptions <span id="count" class="wz-count" hidden></span><button id="refresh" class="icon-btn" type="button" aria-label="Refresh"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></h2>
+      <ul id="accounts" class="wz-list" aria-label="Subscriptions"></ul>
+      <div id="empty" class="wz-empty" hidden>
+        <div class="wz-tile" aria-hidden="true">+</div>
+        <strong>No subscriptions yet</strong>
+        <p>Add one below. Each subscription shows its own usage.</p>
+      </div>
+    </section>
+  </main>
+  <p id="message" class="wz-status" role="status" aria-live="polite"></p>
+  <div class="add-bar"><button id="add" class="primary" type="button">Add subscription</button></div>
+</div>
+<dialog id="manage" aria-labelledby="dlg-title">
+  <h2 id="dlg-title"></h2>
+  <p id="dlg-text" class="dlg-text"></p>
+  <label id="nick-wrap" class="field" hidden><span>Nickname <small>(optional)</small></span><input id="nick" class="wz-input" maxlength="40" autocomplete="off" placeholder="e.g. Work"></label>
+  <ol id="steps" class="steps" hidden>
+    <li id="signin-step"><span>Open the sign-in page</span><a id="signin" class="primary" target="_blank" rel="noopener noreferrer" href="#">Open sign-in</a></li>
+    <li id="code-step" hidden><span>Enter this code</span><div class="code-row"><output id="user-code" class="code"></output><button id="copy" type="button" class="ghost">Copy</button></div></li>
+    <li id="paste-step" hidden><span>Paste the code it gives you</span><div class="code-row"><input id="code" class="wz-input" type="password" autocomplete="off" aria-label="Authorization code"><button id="submit-code" type="button" class="primary">Submit</button></div></li>
+  </ol>
+  <p id="dlg-status" class="dlg-status" role="status" aria-live="polite"></p>
+  <div class="dlg-actions"><button id="cancel" type="button" class="ghost">Cancel</button><button id="go" type="button" class="primary">Continue</button><button id="close" type="button" class="primary" hidden>Done</button></div>
+</dialog>
+</body>
+</html>
