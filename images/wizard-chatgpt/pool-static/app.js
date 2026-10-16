@@ -36,6 +36,7 @@ async function manage(action, account, credential) {
 }
 function render(data) {
   snapshot=data; $('title').textContent=data.name; document.title=data.name;
+  $('add').disabled=busy || data.management?.status==='blocked';
   $('summary').textContent=`${data.accounts.length} subscription source${data.accounts.length===1?'':'s'}`;
   const rows=data.accounts.map(a=>{
     const row=el('li','','account'); row.dataset.accountId=a.id;
@@ -49,7 +50,7 @@ function render(data) {
     if(!a.usage?.limits?.length) row.append(el('p','Usage unavailable — not zero.','meta'));
     for(const c of a.credentials || []) {
       const actions=el('div','','actions'); actions.append(el('small',`${c.name} · grant ${c.id}`));
-      if(c.managed) for(const action of ['reconnect','remove']) {const b=el('button',action==='reconnect'?'Reconnect…':'Remove…'); b.disabled=busy; b.addEventListener('click',()=>manage(action,a,c)); actions.append(b);}
+      if(c.managed) for(const action of ['reconnect','remove']) {const b=el('button',action==='reconnect'?'Reconnect…':'Remove…'); b.disabled=busy || data.management?.status==='blocked'; b.addEventListener('click',()=>manage(action,a,c)); actions.append(b);}
       else actions.append(el('small','External source — managed separately'));
       row.append(actions);
     }
@@ -61,7 +62,7 @@ function render(data) {
 }
 async function refresh() {
   $('refresh').disabled=true;
-  try {const data=await api('api/accounts'); render(data); $('message').textContent=data.error || ''; }
+  try {const data=await api('api/accounts'); render(data); $('message').textContent=data.error || (data.management?.status==='blocked' ? data.management.message : ''); }
   catch {$('message').textContent='Hermes inventory unavailable. Any displayed rows are the last reading.';}
   finally {$('refresh').disabled=false;}
 }
