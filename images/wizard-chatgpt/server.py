@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 CONTRACT = "wizard.ai-connection/1"
 APP = Path(__file__).resolve().parent
 BIND = os.environ.get("WIZARD_CHATGPT_BIND", "0.0.0.0")
@@ -52,6 +52,12 @@ NO_AGENT = ("ChatGPT signs in inside the Hermes Agent app, and this app can't re
             "Install Hermes Agent from Wizard Apps, then reinstall ChatGPT. If your own Hermes runs on this "
             "server outside Wizard Apps, sign in there with `hermes auth add openai-codex`; Wizard still "
             "shows your ChatGPT usage from that sign-in.")
+
+
+_ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$")
+FRAME_ANCESTORS = " ".join(["'self'"] + [o for o in (x.strip().rstrip("/") for x in
+                                         os.environ.get("WIZARD_TRUSTED_ORIGINS", "").split(","))
+                                         if _ORIGIN.match(o)])
 
 
 class HermesError(Exception):
@@ -361,9 +367,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("X-Frame-Options", "DENY")
+        # Framing: only this page itself and the Wizard shell origins the App Manager trusts (WIZARD_TRUSTED_ORIGINS),
+        # so the page opens inside a Wizard window and no other site can frame its Connect buttons.
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; "
-                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+                         "img-src 'self' data:; connect-src 'self'; frame-ancestors " + FRAME_ANCESTORS +
+                         "; base-uri 'none'; form-action 'none'")
+        if FRAME_ANCESTORS == "'self'":
+            self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)

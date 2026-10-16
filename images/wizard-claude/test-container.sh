@@ -35,6 +35,8 @@ while time.monotonic() - t0 < 10:
     except OSError: time.sleep(0.1)
 health = json.loads(body); assert health["status"] == "ok" and health["claude_code"] == os.environ["CLAUDE_CODE_VERSION"], health
 code, body = req("/"); assert code == 200 and b"<title>Claude</title>" in body
+h = urllib.request.urlopen(B + "/", timeout=30).headers
+assert h["Content-Security-Policy"].split("frame-ancestors ")[1].startswith(chr(39) + "self" + chr(39) + ";") and h["X-Frame-Options"] == "SAMEORIGIN", dict(h)
 for f in ("/app.js", "/app.css", "/SKILL.md"): assert req(f)[0] == 200, f
 code, body = req("/.well-known/mcp/server-cards.json"); cardj = json.loads(body)
 assert cardj["x-wizard"]["kind"] == "system-agent-app" and cardj["x-wizard"]["provides"] == ["ai-connection", "claude-subscription"], cardj
