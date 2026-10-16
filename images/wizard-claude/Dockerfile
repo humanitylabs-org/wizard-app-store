@@ -14,11 +14,14 @@ LABEL org.opencontainers.image.source="https://github.com/humanitylabs-org/wizar
 COPY --from=claude --chmod=0755 /claude /usr/local/bin/claude
 # /claude is the shared login volume. A fresh named volume copies this owner and mode, so the first
 # app to start (this one, AI Accounts or Hermes Agent) creates it as 1000:1000 0700.
-RUN mkdir -p /app/static /claude && chown 1000:1000 /claude && chmod 0700 /claude
+RUN mkdir -p /app/static /app/pool-static /claude && chown 1000:1000 /claude && chmod 0700 /claude
 COPY --chmod=0444 server.py usage.py SKILL.md LICENSE /app/
 COPY --chmod=0444 static/ /app/static/
 USER 1000:1000
 WORKDIR /app
 EXPOSE 8799
-CMD ["python3", "/app/server.py"]
+ENV WIZARD_POOL_PROVIDER=claude WIZARD_POOL_BIND=0.0.0.0 WIZARD_POOL_PORT=8799
+COPY --chmod=0444 pool_server.py pool_client.py /app/
+COPY --chmod=0444 pool-static/ /app/pool-static/
+CMD ["python3", "/app/pool_server.py"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8799/health', timeout=3).read()"]

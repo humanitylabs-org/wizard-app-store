@@ -1,6 +1,5 @@
-"""Candidate provider view. No credential volume and no provider login process.
-Lifecycle controls deliberately fail closed until stock account-scoped OAuth exists.
-"""
+"""Provider UI and narrow authenticated proxy to the Hermes lifecycle broker."""
+import re
 import base64
 import hmac
 import json
@@ -8,15 +7,39 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-from pool_client import Hermes
+from pool_client import Hermes, BridgeError
 
 PROVIDER = os.environ.get('WIZARD_POOL_PROVIDER', 'chatgpt')
 assert PROVIDER in ('chatgpt', 'claude')
 PREFIX = 'WIZARD_' + PROVIDER.upper()
 ROOT = Path(__file__).parent / 'pool-static'
 PASSWORD = os.environ.get(PREFIX + '_PASSWORD', '')
+LEGACY = None
+if PROVIDER == 'claude':
+    import usage
+    LEGACY = usage.ConnectionReader(os.environ.get('WIZARD_CLAUDE_CLAUDE_DIR', '/claude'), usage.USAGE_URL)
+
+
+def with_legacy(result):
+    if LEGACY is not None:
+        try:
+            old = LEGACY.read()  # read-only usage reader, never renew_if_expired/login
+            if old.get('status') != 'not_connected':
+                result['accounts'].append({'id': 'legacy-claude-code', 'name': 'Legacy Claude Code source',
+                    'source': 'legacy-claude-code', 'email': None, 'plan': old.get('plan'),
+                    'status': old['status'], 'usage': old.get('usage'), 'credentials': [],
+                    'actions': {'reconnect': False, 'remove': False}})
+            result['legacyStatus'] = old.get('status', 'unknown')
+        except Exception:
+            result['legacyStatus'] = 'unavailable'
+        result['accountCount'] = len(result['accounts'])
+    return result
 
 class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(60)
+
     def log_message(self, *args):
         pass
 
@@ -61,13 +84,33 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'status': 'ok', 'candidate': True})
         if not self.authorized():
             return
+        if path == '/.well-known/mcp/server-cards.json':
+            base = 'http://wizard-' + PROVIDER + ':' + ('8799' if PROVIDER == 'claude' else '8801')
+            return self.send(200, {'name': 'wizard-' + PROVIDER, 'version': '0.2.0', 'title': PROVIDER.title(),
+                'remotes': [], 'x-wizard': {'kind': 'system-agent-app', 'provides': ['ai-connection', PROVIDER + '-subscription'],
+                'contract': 'wizard.ai-connection/1', 'skill': base + '/SKILL.md', 'connection_api': base + '/api/connection',
+                'credential_owner': 'hermes', 'secrets_exposed': False}})
+        if path == '/SKILL.md':
+            return self.send(200, (ROOT.parent / 'SKILL.md').read_bytes(), 'text/markdown; charset=utf-8')
+        if re.fullmatch(r'/api/operations/[A-Za-z0-9_-]{20,64}', path):
+            if not PASSWORD:
+                return self.send(503, {'error': 'Configure app password before account management'})
+            try:
+                return self.send(200, Hermes.request(PROVIDER, '/operations/' + path.rsplit('/', 1)[1]))
+            except BridgeError as error:
+                return self.send(error.status, {'error': 'Operation status unavailable; check inventory'})
+            except Exception:
+                return self.send(503, {'error': 'Operation status unavailable; do not restart the operation'})
         if path in ('/api/accounts', '/api/connection'):
             if path == '/api/connection' and any(k.lower() in ('tailscale-user-login', 'x-forwarded-for', 'forwarded', 'x-real-ip') or k.lower().startswith('cf-') for k in self.headers):
                 return self.send(403, {'error': 'box-only'})
             try:
-                result = Hermes.accounts(PROVIDER)
+                result = with_legacy(Hermes.accounts(PROVIDER))
             except Exception:
-                return self.send(503, {'error': 'Hermes inventory unavailable; existing subscriptions are unchanged.'})
+                if LEGACY is None:
+                    return self.send(503, {'error': 'Hermes inventory unavailable; existing subscriptions are unchanged.'})
+                result = with_legacy({'provider': PROVIDER, 'name': 'Claude', 'owner': 'hermes', 'accounts': [],
+                    'inventoryStatus': 'unavailable', 'error': 'Hermes inventory unavailable; legacy source shown separately'})
             if path == '/api/connection':
                 result = {**result, 'contract': 'wizard.ai-connection/1', 'status': 'connected' if result['accounts'] else 'not_connected', 'plan': None, 'usage': None, 'account': None}
             return self.send(200, result)
@@ -80,7 +123,30 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             return
-        self.send(409, {'ok': False, 'message': 'Account-scoped lifecycle requires Hermes. No subscriptions were changed.'})
+        if not PASSWORD:
+            return self.send(503, {'error': 'Configure app password before account management'})
+        if urlsplit(self.path).path != '/api/operations':
+            return self.send(404, {'error': 'not found'})
+        if self.headers.get('X-Wizard-Account-Action') != '1' or self.headers.get('Content-Type', '').split(';')[0] != 'application/json' or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            return self.send(403, {'error': 'Cross-site action rejected'})
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= 4096:
+                return self.send(413, {'error': 'Request too large'})
+            body = json.loads(self.rfile.read(size))
+            if not isinstance(body, dict) or set(body) - {'action', 'target', 'label', 'confirmed', 'operation', 'code'}:
+                return self.send(400, {'error': 'Invalid request'})
+            return self.send(200, Hermes.request(PROVIDER, '/operations', body))
+        except Exception:
+            return self.send(503, {'error': 'Operation unavailable; refresh inventory before retrying'})
+
+class Server(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer's reverse-DNS lookup can stall an isolated container startup.
+        from socketserver import TCPServer
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
 
 if __name__ == '__main__':
-    ThreadingHTTPServer((os.environ.get('WIZARD_POOL_BIND', '127.0.0.1'), int(os.environ.get('WIZARD_POOL_PORT', '18801'))), Handler).serve_forever()
+    Server((os.environ.get('WIZARD_POOL_BIND', '127.0.0.1'), int(os.environ.get('WIZARD_POOL_PORT', '18801'))), Handler).serve_forever()
