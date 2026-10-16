@@ -2,7 +2,7 @@
 :root { --panel: var(--wz-surface-raised, rgba(28, 19, 58, .96)); --ok: #4fd18b; --warn: #f5b84a; }
 html[data-color-scheme="light"] { --ok: #12805c; --warn: #9a5b00; }
 
-.wz-sec-h #count[hidden] + .icon-btn { margin-left: auto; }
+.wz-sec-h .icon-btn { margin-left: auto; }
 .icon-btn { width: 30px; height: 30px; margin-left: 4px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-3); }
 .icon-btn:hover { background: var(--fill); color: var(--ink); }
 .icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -83,3 +83,10 @@ dialog h2 { margin: 0 0 14px; font-size: 18px; font-weight: 700; }
 .dlg-status.wait::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); vertical-align: 1px; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
 dialog::backdrop { background: rgba(0, 0, 0, .6); }
+
+.meter-reset, .muted, .manage summary, .acct-head .wz-main small { color: var(--ink-2); }
+.manage summary { color: var(--accent); font-weight: 600; }
+.bar { background: color-mix(in srgb, var(--ink) 16%, transparent); }
+.add-bar { padding-left: 18px; padding-right: 18px; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+.primary { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); }
+.primary.danger { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--ink); border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
