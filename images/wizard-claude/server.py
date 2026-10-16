@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 import usage
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
@@ -46,6 +46,33 @@ STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js",
 # Owner-data routes are box-only: the same port is published on the tailnet (Serve, tunnels and
 # proxies add these headers), while agents and the Agent Service call the app on the app network.
 PROXY_HEADERS = ("tailscale-user-login", "x-forwarded-for", "forwarded", "x-real-ip")
+_ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$")
+FRAME_ANCESTORS = " ".join(["'self'"] + [o for o in (x.strip().rstrip("/") for x in
+                                         os.environ.get("WIZARD_TRUSTED_ORIGINS", "").split(","))
+                                         if _ORIGIN.match(o)])
+
+
+class Renew:
+    """Auto-renew: an expired sign-in is renewed by the official Claude Code itself (a one-word Haiku turn, the same
+    as the page's Test button). This app never refreshes a token. At most one attempt per RENEW_GAP_S."""
+    lock = threading.Lock()
+    at = 0.0
+
+
+RENEW_GAP_S = 600
+
+
+def renew_if_expired(answer: dict) -> dict:
+    if answer.get("status") != "expired" or os.environ.get("WIZARD_CLAUDE_AUTO_RENEW", "1") == "0":
+        return answer
+    with Renew.lock:
+        if time.monotonic() - Renew.at < RENEW_GAP_S and Renew.at:
+            return answer
+        Renew.at = time.monotonic()
+    code, _ = run_test()
+    return CONNECTION.read() if code == 200 else answer
+
+
 CONNECTION = usage.ConnectionReader(CLAUDE_DIR, os.environ.get("WIZARD_CLAUDE_USAGE_URL", usage.USAGE_URL))
 
 
@@ -297,7 +324,7 @@ def card(host: str) -> dict:
             "shared_volume": {"name": "wizard-ai-accounts-claude", "mount": "/claude", "uid": 1000, "gid": 1000,
                               "consumer_env": {"CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR": "/claude"}},
             "claude_code": {"version": os.environ.get("CLAUDE_CODE_VERSION", ""), "auto_update": False},
-            "ai_calls": "owner-initiated test only",
+            "ai_calls": "owner test, and one Haiku renewal turn when the sign-in has expired (at most every 10 min)",
             "secrets_exposed": False,
         },
     }
@@ -317,9 +344,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("X-Frame-Options", "DENY")
+        # Framing: only this page itself and the Wizard shell origins the App Manager trusts (WIZARD_TRUSTED_ORIGINS),
+        # so the page opens inside a Wizard window and no other site can frame its Connect buttons.
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; "
-                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+                         "img-src 'self' data:; connect-src 'self'; frame-ancestors " + FRAME_ANCESTORS +
+                         "; base-uri 'none'; form-action 'none'")
+        if FRAME_ANCESTORS == "'self'":
+            self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -362,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/connection":
             if self.proxied():
                 return self.json(403, {"error": "box-only: call this from the server (app network or 127.0.0.1)"})
-            return self.json(200, CONNECTION.read())
+            return self.json(200, renew_if_expired(CONNECTION.read()))
         if path == "/api/accounts":
             login = State.login
             claude = {"id": "claude-subscription", "name": "Claude subscription", "kind": "subscription",
