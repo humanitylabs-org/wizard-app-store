@@ -5,9 +5,9 @@ Agent's own ChatGPT (Codex) device-code login, driven through that agent's dashb
 dashboard login this app was installed with. Hermes creates, stores and refreshes the ChatGPT tokens
 itself; Codex refresh tokens are single-use, so this app never sees, copies or holds one.
 
-Usage numbers: the stock dashboard exposes no usage route this app could normalize exactly like the
-Agent Service's Codex reader, and reading usage directly would mean holding a token. So `usage` is
-always null here; the Agent Service keeps reading ChatGPT usage from the agent's own sign-in.
+Usage numbers: read from the Wizard OS Hermes plugin's read-only dashboard route
+(/api/plugins/wizard-os/ai-usage/chatgpt), so Hermes reads its own sign-in and this app never holds a token.
+Without that plugin route `usage` stays null and the Agent Service keeps its own reader.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 CONTRACT = "wizard.ai-connection/1"
 APP = Path(__file__).resolve().parent
 BIND = os.environ.get("WIZARD_CHATGPT_BIND", "0.0.0.0")
@@ -145,6 +145,25 @@ def chatgpt_status() -> dict:
             "model": str(info.get("model") or "")[:80] if in_use else ""}
 
 
+USAGE_PATH = "/api/plugins/wizard-os/ai-usage/chatgpt"
+
+
+def chatgpt_usage() -> tuple[str | None, dict | None]:
+    """(plan, usage) from the Wizard OS plugin's read-only route on the agent's dashboard: Hermes reads its own
+    ChatGPT usage, so this app still never holds a token. (None, None) when the route is missing (an agent
+    without the plugin) or the read fails; the Agent Service then keeps its own reader."""
+    try:
+        d = Hermes.call("GET", USAGE_PATH, timeout=30)
+    except HermesError:
+        return None, None
+    usage = d.get("usage") if d.get("ok") is True else None
+    if not isinstance(usage, dict) or not isinstance(usage.get("limits"), list):
+        return None, None
+    plan = d.get("plan")
+    return (str(plan)[:40] if isinstance(plan, str) and plan else None), {
+        "fetchedAt": usage.get("fetchedAt"), "limits": usage["limits"][:20], "paid": usage.get("paid")}
+
+
 class Cache:
     lock = threading.Lock()
     at = 0.0
@@ -159,8 +178,10 @@ def connection(fresh: bool = False) -> dict:
     s = chatgpt_status()
     out = {"contract": CONTRACT, "provider": "chatgpt", "name": "ChatGPT", "status": s["status"],
            "plan": None, "account": s.get("account") if s["status"] == "connected" else None,
-           # No usage route on the stock dashboard; the Agent Service reads usage from the agent's sign-in.
            "usage": None, "error": None}
+    if s["status"] == "connected":
+        plan, usage = chatgpt_usage()
+        out["plan"], out["usage"] = plan, usage
     if s["status"] == "not_connected":
         out["error"] = {"code": "signed_out", "message": "ChatGPT is not connected. Open the ChatGPT app and press Connect."}
     elif s["status"] == "error":
@@ -319,7 +340,7 @@ def card(host: str) -> dict:
             "skill": f"{base}/SKILL.md",
             "connection_api": f"{base}/api/connection",
             "agent_dashboard": "configured" if Hermes.configured() else "missing",
-            "usage": "not reported (no usage route on the agent's dashboard); the Agent Service reads it",
+            "usage": "from the agent's dashboard (Wizard OS plugin route) when present",
             "ai_calls": False,
             "secrets_exposed": False,
         },
