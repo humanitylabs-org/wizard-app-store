@@ -64,7 +64,7 @@ function render(accounts) {
 }
 
 async function refresh() {
-  const data = await call("/api/accounts");
+  const data = await call("api/accounts");
   if (data.accounts) render(data.accounts);
 }
 
@@ -77,7 +77,7 @@ async function run(text, fn) {
 
 function connect() {
   return run("Starting Claude sign-in…", async () => {
-    const data = await call("/api/claude/connect", {});
+    const data = await call("api/claude/connect", {});
     if (!data.ok) return say(data.message, "bad");
     loginId = data.login_id;
     const link = $("login-url");
@@ -93,14 +93,14 @@ function connect() {
 function disconnect() {
   if (!confirm("Disconnect Claude? Your agents will stop using your Claude subscription until you connect again.")) return;
   return run("Disconnecting…", async () => {
-    const data = await call("/api/claude/logout", {});
+    const data = await call("api/claude/logout", {});
     say(data.message, data.ok ? "ok" : "bad");
   });
 }
 
 function test() {
   return run("Asking Claude for a one-word answer…", async () => {
-    const data = await call("/api/claude/test", {});
+    const data = await call("api/claude/test", {});
     if (data.ok) say(`${data.message} (${data.seconds}s${data.model ? ", " + data.model : ""})`, "ok");
     else say(`Test failed: ${data.message}`, "bad");
   });
@@ -111,7 +111,7 @@ $("code-form").addEventListener("submit", (ev) => {
   const code = $("code").value.trim();
   if (!code) return;
   run("Checking the code with Claude…", async () => {
-    const data = await call("/api/claude/code", { login_id: loginId, code });
+    const data = await call("api/claude/code", { login_id: loginId, code });
     $("login").hidden = true;
     loginId = "";
     $("code").value = "";
@@ -122,7 +122,7 @@ $("code-form").addEventListener("submit", (ev) => {
 $("cancel").addEventListener("click", async () => {
   $("login").hidden = true;
   loginId = "";
-  await call("/api/claude/cancel", {});
+  await call("api/claude/cancel", {});
   say("");
 });
 
