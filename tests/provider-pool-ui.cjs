@@ -3,11 +3,11 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'../images/wizard-chatgpt/pool-static');
 const shots=process.env.SHOTS||'';
-const account=(id,used)=>({id,name:`Test ${id}`,email:'t***@e***',plan:'Pro',status:'ready',credentials:[{id:id+'11bb',name:'openai-codex-oauth-2',managed:true}],usage:{limits:[{label:'Weekly',usedPercent:used,remainingPercent:100-used,resetsAt:new Date(Date.now()+3*86400e3).toISOString()}]}});
-let rows=[],calls=[],job,provider='chatgpt',sameAccount=false;
+const account=(id,used)=>({id,name:`Test ${id}`,email:'t***@e***',plan:'Pro',status:'ready',credentials:[{id:id+'11bb',name:'openai-codex-oauth-2',managed:true}],actions:{reconnect:true,remove:true},usage:{limits:[{label:'Weekly',usedPercent:used,remainingPercent:100-used,resetsAt:new Date(Date.now()+3*86400e3).toISOString()}]}});
+let rows=[],calls=[],job,provider='chatgpt',sameAccount=false,management={contract:'wizard.account-management/1',status:'available'},inventoryError=false;
 const server=http.createServer(async(req,res)=>{
  res.setHeader('Content-Type','application/json');
- if(req.url.endsWith('/api/accounts')) return res.end(JSON.stringify({provider,name:provider==='claude'?'Claude':'ChatGPT',accounts:rows,actions:{add:true},management:{status:'available'}}));
+ if(req.url.endsWith('/api/accounts')) { if(inventoryError){res.writeHead(503);return res.end('{}');} return res.end(JSON.stringify({provider,name:provider==='claude'?'Claude':'ChatGPT',accounts:rows,actions:{add:true},management})); }
  if(req.url.endsWith('/api/operations') && req.method==='POST') {
   assert.equal(req.headers['x-wizard-account-action'],'1');
   let raw='';for await(const c of req)raw+=c; const b=JSON.parse(raw);calls.push(b);
@@ -80,6 +80,21 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    await page.waitForFunction(()=>/already listed/.test(document.querySelector('#dlg-status').textContent));
    if(shots) await page.screenshot({path:`${shots}/ui-same-${width}.png`});
    await page.locator('#close').click();
+   // Missing, off, blocked, unavailable, unknown/future contracts all fail closed.
+   const refresh = async () => { await page.locator('#refresh').click(); await page.waitForFunction(()=>!document.querySelector('#refresh').classList.contains('spin')); };
+   for (const cap of [null, {}, {status:'available'}, {contract:'wizard.account-management/2',status:'available'}, ...['off','blocked','unavailable','unsupported'].map(status=>({contract:'wizard.account-management/1',status}))]) {
+     management=cap;await refresh();
+     assert.equal(await page.locator('#add').isVisible(),false);
+     assert.equal(await page.getByRole('button',{name:/^(Reconnect|Remove)$/}).count(),0);
+     assert.equal(await page.locator('.bar').count(),2);
+   }
+   management={contract:'wizard.account-management/1',status:'available'};await refresh();
+   assert.equal(await page.locator('#add').isVisible(),true);
+   inventoryError=true;await refresh();
+   assert.equal(await page.locator('#add').isVisible(),false);
+   assert.equal(await page.getByRole('button',{name:/^(Reconnect|Remove)$/}).count(),0);
+   assert.equal(await page.locator('.bar').count(),2);
+   inventoryError=false;
    rows=[];await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelectorAll('.acct').length===0 && !document.querySelector('#empty').hidden);
    assert.deepEqual(errors,[]);await page.close();
   }

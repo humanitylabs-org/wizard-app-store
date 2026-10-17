@@ -18,11 +18,12 @@ m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
 class HTTPTests(unittest.TestCase):
     def setUp(self):
-        m.PASSWORD='fixture-password';m.LEGACY=None
+        m.PASSWORD='fixture-password';m.LEGACY=None;m.LEGACY_RENEW=None
+        self.management={'contract':'wizard.account-management/1','status':'available'}
         self.calls=[]
         class Fake:
             @staticmethod
-            def accounts(provider):return {'owner':'hermes','provider':provider,'name':'Fixture','accounts':[]}
+            def accounts(provider):return {'owner':'hermes','provider':provider,'name':'Fixture','accounts':[{'id':'fixture','actions':{'remove':True,'reconnect':True},'credentials':[{'id':'aa11bb','managed':True}]}],'actions':{'add':True},'management':self.management}
             @staticmethod
             def request(provider,suffix,body=None):
                 self.calls.append((provider,suffix,body))
@@ -68,5 +69,40 @@ class HTTPTests(unittest.TestCase):
         out=json.loads(raw);self.assertEqual(out['accounts'][0]['id'],'legacy-claude-code')
         self.assertEqual(out['accounts'][0]['plan'],'Max 20x');self.assertEqual(out['inventoryStatus'],'unavailable')
         self.assertFalse(out['accounts'][0]['actions']['remove']);self.assertEqual(self.calls,[])
+
+    def test_capabilities_fail_closed_without_losing_read_only_inventory(self):
+        for cap in [None, {}, {'status':'available'}, {'contract':'wizard.account-management/2','status':'available'}, *[{'contract':'wizard.account-management/1','status':s} for s in ['off','blocked','unsupported','unavailable']]]:
+            self.management=cap
+            self.assertEqual(self.request('/api/accounts')[0],200)
+            self.assertEqual(self.request('/api/operations',{'action':'add'},headers={'X-Wizard-Account-Action':'1'})[0],403)
+        self.assertEqual(self.calls,[])
+
+    def test_exact_boolean_action_and_managed_target_are_required(self):
+        for inventory in [
+            {'actions':{'add':'true'},'accounts':[]},
+            {'actions':{'add':False},'accounts':[]},
+            {'actions':{'add':True},'accounts':[{'actions':{'remove':False},'credentials':[{'id':'aa11bb','managed':True}]}]},
+            {'actions':{'add':True},'accounts':[{'actions':{'remove':True},'credentials':[{'id':'aa11bb','managed':'true'}]}]},
+        ]:
+            m.Hermes.accounts=lambda _, i=inventory:{**i,'management':self.management}
+            action='remove' if inventory['accounts'] else 'add'
+            self.assertEqual(self.request('/api/operations',{'action':action,'target':'aa11bb'},headers={'X-Wizard-Account-Action':'1'})[0],403)
+        self.assertEqual(self.calls,[])
+
+    def test_legacy_expired_preserves_reason_and_renewal_readback(self):
+        class Legacy:
+            def read(self):return {'status':'expired','usage':None,'error':{'code':'expired','message':'Reconnect through Claude Code'}}
+        m.LEGACY=Legacy()
+        code,raw,_=self.request('/api/accounts')
+        out=json.loads(raw);self.assertEqual(code,200)
+        self.assertEqual(out['accounts'][-1]['error']['code'],'expired')
+        seen=[]
+        def renew(answer,reader):
+            seen.append(reader)
+            return {'status':'connected','usage':{'limits':[{'usedPercent':23}]}}
+        m.LEGACY_RENEW=renew
+        code,raw,_=self.request('/api/accounts')
+        self.assertEqual(json.loads(raw)['accounts'][-1]['usage']['limits'][0]['usedPercent'],23)
+        self.assertEqual(seen,[m.LEGACY])
 
 if __name__=='__main__':unittest.main()

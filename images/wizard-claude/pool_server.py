@@ -15,19 +15,23 @@ PREFIX = 'WIZARD_' + PROVIDER.upper()
 ROOT = Path(__file__).parent / 'pool-static'
 PASSWORD = os.environ.get(PREFIX + '_PASSWORD', '')
 LEGACY = None
+LEGACY_RENEW = None
 if PROVIDER == 'claude':
-    import usage
-    LEGACY = usage.ConnectionReader(os.environ.get('WIZARD_CLAUDE_CLAUDE_DIR', '/claude'), usage.USAGE_URL)
+    import server as claude_owner
+    LEGACY = claude_owner.CONNECTION
+    LEGACY_RENEW = claude_owner.renew_if_expired
 
 
 def with_legacy(result):
     if LEGACY is not None:
         try:
-            old = LEGACY.read()  # read-only usage reader, never renew_if_expired/login
+            old = LEGACY.read()
+            if LEGACY_RENEW is not None:
+                old = LEGACY_RENEW(old, reader=LEGACY)
             if old.get('status') != 'not_connected':
                 result['accounts'].append({'id': 'legacy-claude-code', 'name': 'Legacy Claude Code source',
                     'source': 'legacy-claude-code', 'email': None, 'plan': old.get('plan'),
-                    'status': old['status'], 'usage': old.get('usage'), 'credentials': [],
+                    'status': old['status'], 'usage': old.get('usage'), 'error': old.get('error'), 'credentials': [],
                     'actions': {'reconnect': False, 'remove': False}})
             result['legacyStatus'] = old.get('status', 'unknown')
         except Exception:
@@ -136,6 +140,21 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict) or set(body) - {'action', 'target', 'label', 'confirmed', 'operation', 'code'}:
                 return self.send(400, {'error': 'Invalid request'})
+            inventory = Hermes.accounts(PROVIDER)
+            management = inventory.get('management') or {}
+            if management.get('contract') != 'wizard.account-management/1' or management.get('status') != 'available':
+                return self.send(403, {'error': 'Account changes unavailable; subscriptions are unchanged'})
+            action = body.get('action')
+            if action == 'add':
+                permitted = (inventory.get('actions') or {}).get('add') is True
+            elif action in ('reconnect', 'remove'):
+                permitted = any((row.get('actions') or {}).get(action) is True and
+                    any(c.get('id') == body.get('target') and c.get('managed') is True for c in row.get('credentials', []))
+                    for row in inventory.get('accounts', []))
+            else:
+                permitted = action in ('submit', 'cancel')
+            if not permitted:
+                return self.send(403, {'error': 'Account action unsupported'})
             return self.send(200, Hermes.request(PROVIDER, '/operations', body))
         except Exception:
             return self.send(503, {'error': 'Operation unavailable; refresh inventory before retrying'})

@@ -4,6 +4,8 @@ const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'needs_
 const STATUS = {ready: 'Ready', connected: 'Ready', expired: 'Sign in again', cooldown: 'Cooling down', exhausted: 'Limit reached', error: 'Problem'};
 let snapshot = null, active = null, busy = false, timer = null, intent = null, before = 0;
 const openManage = new Set();
+const manageable = () => snapshot?.management?.contract === 'wizard.account-management/1' && snapshot.management.status === 'available';
+const allowed = (action, account, credential) => manageable() && (action === 'add' ? snapshot.actions?.add === true : account?.actions?.[action] === true && credential?.managed === true);
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const provider = () => snapshot?.provider || (location.pathname.includes('claude') ? 'claude' : 'chatgpt');
@@ -66,7 +68,7 @@ function renderAccount(a) {
   } else li.append(el('p', 'muted', 'Usage not available yet'));
 
   if (legacy) {
-    li.append(el('p', 'muted', 'Existing sign-in, left as is. Use Add subscription to manage Claude accounts here.'));
+    li.append(el('p', 'muted', 'Existing Claude Code sign-in. Renewal uses only its owning official CLI; if expired, reconnect through Claude Code.'));
     return li;
   }
   const creds = a.credentials || [];
@@ -78,14 +80,15 @@ function renderAccount(a) {
     for (const c of creds) {
       const r = el('div', 'grant');
       r.append(el('span', 'grant-name', grantName(c)));
-      if (c.managed && snapshot?.management?.status !== 'off') {
+      if (manageable() && c.managed === true) {
         for (const action of ['reconnect', 'remove']) {
+          if (!allowed(action, a, c)) continue;
           const b = el('button', 'link' + (action === 'remove' ? ' danger' : ''), action === 'reconnect' ? 'Reconnect' : 'Remove');
           b.type = 'button'; b.disabled = busy;
           b.addEventListener('click', () => ask(action, a, c));
           r.append(b);
         }
-      } else r.append(el('small', null, 'Managed outside Wizard'));
+      } else r.append(el('small', null, c.managed === true ? 'Account changes unavailable' : 'Managed outside Wizard'));
       det.append(r);
     }
     li.append(det);
@@ -101,8 +104,8 @@ function render(data) {
   $('count').textContent = String(n); $('count').hidden = !n;
   $('accounts').replaceChildren(...data.accounts.map(renderAccount));
   $('empty').hidden = n > 0;
-  $('add').hidden = data.management?.status === 'off';
-  $('add').disabled = busy || data.management?.status === 'blocked' || data.actions?.add === false;
+  $('add').hidden = !allowed('add');
+  $('add').disabled = busy || !allowed('add');
   $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
 }
 
@@ -111,9 +114,11 @@ async function refresh() {
   try {
     const data = await api('api/accounts');
     render(data);
-    $('message').textContent = ['blocked', 'off'].includes(data.management?.status) ? data.management.message : (data.error || '');
+    $('message').textContent = !manageable() ? (data.management?.message || 'Account changes unavailable; subscriptions remain read-only.') : (data.error || '');
   } catch {
-    $('message').textContent = 'Could not reach Hermes. Showing the last reading.';
+    if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
+    $('add').hidden = true;
+    $('message').textContent = 'Could not reach Hermes. Showing the last reading. Account changes unavailable.';
   } finally { $('refresh').classList.remove('spin'); }
 }
 
@@ -126,7 +131,7 @@ function showButtons({go = false, goLabel = 'Continue', danger = false, cancel =
 }
 
 function ask(action, account, credential) {
-  if (busy) return;
+  if (busy || !allowed(action, account, credential)) return;
   intent = {action, account, credential}; active = null;
   const b = brand();
   $('steps').hidden = true; $('nick').value = ''; setStatus('');
@@ -150,7 +155,8 @@ function ask(action, account, credential) {
 }
 
 async function start() {
-  const {action, credential} = intent;
+  const {action, account, credential} = intent;
+  if (!allowed(action, account, credential)) return;
   busy = true; $('add').disabled = true; $('go').disabled = true; $('cancel').disabled = true;
   before = hermesAccounts().length;
   setStatus(action === 'remove' ? 'Removing…' : 'Starting sign-in…');

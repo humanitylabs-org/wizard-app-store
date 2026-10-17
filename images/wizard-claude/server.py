@@ -62,15 +62,24 @@ class Renew:
 RENEW_GAP_S = 600
 
 
-def renew_if_expired(answer: dict) -> dict:
+def renew_if_expired(answer: dict, reader=None) -> dict:
     if answer.get("status") != "expired" or os.environ.get("WIZARD_CLAUDE_AUTO_RENEW", "1") == "0":
         return answer
-    with Renew.lock:
-        if time.monotonic() - Renew.at < RENEW_GAP_S and Renew.at:
-            return answer
+    # Hold the single-flight lock through the bounded CLI run and readback.
+    if not Renew.lock.acquire(blocking=False):
+        return answer
+    if time.monotonic() - Renew.at < RENEW_GAP_S and Renew.at:
+        Renew.lock.release()
+        return answer
+    try:
         Renew.at = time.monotonic()
-    code, _ = run_test()
-    return CONNECTION.read() if code == 200 else answer
+        code, _ = run_test()
+        return (reader or CONNECTION).read() if code == 200 else answer
+    except Exception:
+        return answer  # Keep the precise expired state; never expose CLI output.
+    finally:
+        Renew.at = time.monotonic()  # cooldown also follows failure/challenge/timeout
+        Renew.lock.release()
 
 
 CONNECTION = usage.ConnectionReader(CLAUDE_DIR, os.environ.get("WIZARD_CLAUDE_USAGE_URL", usage.USAGE_URL))
