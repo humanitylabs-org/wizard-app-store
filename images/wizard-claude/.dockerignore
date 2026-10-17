@@ -6,3 +6,6 @@
 !SKILL.md
 !LICENSE
 !static/
+!pool_server.py
+!pool_client.py
+!pool-static/

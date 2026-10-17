@@ -36,10 +36,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/wizard-chatgpt:0.1.4
+          tags: ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.0
       - name: Published image passes the same checks
         run: |
-          docker pull ghcr.io/humanitylabs-org/wizard-chatgpt:0.1.4
-          SKIP_BUILD=1 WIZARD_CHATGPT_IMAGE=ghcr.io/humanitylabs-org/wizard-chatgpt:0.1.4 sh images/wizard-chatgpt/test-container.sh
-          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-chatgpt:0.1.4 | grep -q linux/arm64
-# Publishes only after store, unit and container checks pass. Never re-push 0.1.4: bump the tag.
+          docker pull ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.0
+          SKIP_BUILD=1 WIZARD_CHATGPT_IMAGE=ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.0 sh images/wizard-chatgpt/test-container.sh
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.0 | grep -q linux/arm64
+# Publishes only after store, unit and container checks pass. Never re-push 0.2.0: bump the tag.
