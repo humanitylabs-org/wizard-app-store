@@ -78,7 +78,7 @@ function renderAccount(a) {
     for (const c of creds) {
       const r = el('div', 'grant');
       r.append(el('span', 'grant-name', grantName(c)));
-      if (c.managed) {
+      if (c.managed && snapshot?.management?.status !== 'off') {
         for (const action of ['reconnect', 'remove']) {
           const b = el('button', 'link' + (action === 'remove' ? ' danger' : ''), action === 'reconnect' ? 'Reconnect' : 'Remove');
           b.type = 'button'; b.disabled = busy;
@@ -101,6 +101,7 @@ function render(data) {
   $('count').textContent = String(n); $('count').hidden = !n;
   $('accounts').replaceChildren(...data.accounts.map(renderAccount));
   $('empty').hidden = n > 0;
+  $('add').hidden = data.management?.status === 'off';
   $('add').disabled = busy || data.management?.status === 'blocked' || data.actions?.add === false;
   $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
 }
@@ -110,7 +111,7 @@ async function refresh() {
   try {
     const data = await api('api/accounts');
     render(data);
-    $('message').textContent = data.management?.status === 'blocked' ? data.management.message : (data.error || '');
+    $('message').textContent = ['blocked', 'off'].includes(data.management?.status) ? data.management.message : (data.error || '');
   } catch {
     $('message').textContent = 'Could not reach Hermes. Showing the last reading.';
   } finally { $('refresh').classList.remove('spin'); }
