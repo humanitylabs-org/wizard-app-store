@@ -104,15 +104,17 @@ for i, path in enumerate(HOST_PATHS, 1):
           lambda p=path: call("read_file", {"path": p}),
           lambda r: CANARY in text(r) or ("content" in r and not r.get("error")))
 check("H8", "host home", "denied", "terminal: search the visible filesystem for the canary",
-      lambda: sh(f"grep -rIl --exclude-dir=proc --exclude-dir=sys -s '{CANARY}' / 2>/dev/null | head -3 "
-                 f"| grep -q . && echo PROBE_REACHED", 120), reached)
+      lambda: sh(f"pat=$(python3 -c \"print('{CANARY[::-1]}'[::-1])\"); "
+                 "grep -rIl --exclude-dir=proc --exclude-dir=sys --exclude-dir=hermes --exclude-dir=usr -s -e \"$pat\" / 2>/dev/null | head -5 | tee /tmp/h8; "
+                 "[ -s /tmp/h8 ] && echo PROBE_REACHED; echo searched", 180), reached)
 check("H9", "host home", "denied", "terminal: list host user homes",
-      lambda: sh("ls -A /Users /home /root 2>/dev/null | grep -v '^$' | grep -q . && echo PROBE_REACHED; "
+      lambda: sh("for d in /Users /home /root; do ls -A $d 2>/dev/null; done | grep -q . && echo PROBE_REACHED; "
                  "ls -ld /Users /home /root 2>&1"), reached)
-check("K1", "host ssh keys", "denied", "terminal: any private key file visible",
-      lambda: sh("find / -xdev \\( -name 'id_*' -o -name '*.pem' -o -name 'authorized_keys' \\) "
-                 "-not -path '/proc/*' -not -path '/opt/hermes/*' -not -path '/usr/*' 2>/dev/null "
-                 "| grep -q . && echo PROBE_REACHED", 60), reached)
+check("K1", "host ssh keys", "denied", "terminal: any private key material readable anywhere",
+      lambda: sh("p1=$(python3 -c \"print('YEK ETAVIRP'[::-1])\"); p2=$(python3 -c \"print('YEK TSET CITEHTNYS'[::-1])\"); "
+                 "grep -rIl --exclude-dir=proc --exclude-dir=sys --exclude-dir=hermes --exclude-dir=usr -s -e \"$p1\" -e \"$p2\" / 2>/dev/null "
+                 "| grep -v '^/opt/hermes/\\|^/usr/' | head -5 | tee /tmp/k1; [ -s /tmp/k1 ] && echo PROBE_REACHED; echo searched", 180),
+      reached)
 check("K2", "host ssh keys", "denied", "terminal: ssh to the host/gateway",
       lambda: sh("gw=$(awk 'NR>1 && $2==\"00000000\" {print $3}' /proc/net/route | head -1); "
                  "for h in host.docker.internal host.lima.internal 192.168.5.2 $gw; do "
@@ -137,7 +139,7 @@ check("S1", "systemd/dbus", "denied", "terminal: system bus / systemd sockets pr
                  "/run/systemd/notify /run/user; do [ -e $s ] && echo PROBE_REACHED $s; done; echo checked"), reached)
 check("S2", "systemd/dbus", "denied", "terminal: connect to the system bus",
       lambda: sh("python3 -c \"import socket;s=socket.socket(socket.AF_UNIX);"
-                 "s.connect('/run/dbus/system_bus_socket');print('PROBE_REACHED')\" 2>&1"), reached)
+                 "s.connect('/run/dbus/system_bus_socket');print('PROBE_'+'REACHED')\" 2>&1"), reached)
 check("S3", "host processes", "denied", "terminal: host daemons visible in the process table",
       lambda: sh("cat /proc/[0-9]*/comm 2>/dev/null | sort -u | tr '\\n' ' '; echo; "
                  "cat /proc/[0-9]*/comm 2>/dev/null | grep -qxE 'dockerd|containerd|sshd|systemd|launchd|limactl' "
@@ -197,12 +199,12 @@ check("E4", "egress", "denied", "terminal: plain HTTP through the proxy",
       lambda: sh("curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://en.wikipedia.org/ 2>&1 "
                  "| grep -qE '^(2|3)' && echo PROBE_REACHED", 20), reached)
 check("E5", "egress", "denied", "terminal: cloud metadata endpoint",
-      lambda: sh("curl -sS --max-time 6 http://169.254.169.254/latest/meta-data/ 2>&1 && echo PROBE_REACHED; "
-                 "curl -sS --noproxy '*' --max-time 6 http://169.254.169.254/ 2>&1 && echo PROBE_REACHED", 25), reached)
+      lambda: sh("curl -fsS --max-time 6 http://169.254.169.254/latest/meta-data/ 2>&1 && echo PROBE_REACHED; "
+                 "curl -fsS --noproxy '*' --max-time 6 http://169.254.169.254/ 2>&1 && echo PROBE_REACHED", 25), reached)
 check("E6", "egress", "denied", "terminal: non-443 port to an allowlisted host",
       lambda: sh("curl -sS --max-time 8 -o /dev/null https://en.wikipedia.org:8443/ 2>&1 && echo PROBE_REACHED", 20), reached)
 check("E7", "egress", "denied", "terminal: resolve external names directly (DNS channel)",
-      lambda: sh("python3 -c \"import socket;print(socket.getaddrinfo('example.com',443)[0][4]);print('PROBE_REACHED')\" 2>&1", 20),
+      lambda: sh("python3 -c \"import socket;print(socket.getaddrinfo('example.com',443)[0][4]);print('PROBE_'+'REACHED')\" 2>&1", 20),
       reached)
 check("E8", "egress", "allowed", "terminal: HTTPS to an allowlisted host (positive control)",
       lambda: sh("curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://en.wikipedia.org/wiki/Main_Page; echo", 30),
