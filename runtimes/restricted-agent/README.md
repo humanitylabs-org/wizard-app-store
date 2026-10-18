@@ -26,6 +26,7 @@ It runs the stock Wizard Hermes image unmodified; all restriction comes from how
 | `EDGE_TOKEN_SHA256` | sha256 hex of the agent's gateway token (`WIZARD_MCP_TOKEN` in the home `.env`) |
 | `EDGE_UPSTREAM_HOST` / `EDGE_UPSTREAM_PORT` | The service's agent-only listener (VPS: the uplink gateway IP) |
 | `AGENT_UPLINK_SUBNET` | Unique /28 per agent from 10.250.0.0/16 (outside Docker's default pools) (default `10.250.0.0/28`) |
+| `AGENT_SANDBOX_SUBNET` | Unique /28 per agent from 10.251.0.0/16 for the agent-only network; the host has no address on it (default `10.251.0.0/28`) |
 | `AGENT_INGRESS_BIND` | Host loopback address:port for inbound (default `127.0.0.1:18642`) |
 | `EGRESS_ALLOWLIST_HOSTS` | Space-separated hostnames; `*.example.com` allows subdomains |
 | `AGENT_MEM_LIMIT`, `AGENT_CPUS`, `AGENT_PIDS_LIMIT` | Resource overrides |
@@ -44,3 +45,15 @@ Hermes' approval guard off so the container is what is tested. It also checks wh
 (`inspect_check.py`). It runs three phases: fresh, after `restart`, after `down`/`up` with the home kept.
 Expected result for each isolation item is denied; positive controls prove probes work. Receipts have
 synthetic values redacted. Exit 0 only on full pass.
+
+## Network guarantees and residual risks
+- The agent's network is `internal` with `inhibit_ipv4`: the host has no address on it, so the agent
+  cannot open a connection to any host service (sshd, Agent Service, Docker API). Conformance N1/K2/D3
+  scan every address of that /28 plus the usual host aliases.
+- Egress tunnels only TLS whose SNI equals the vetted allowlisted host; raw bytes and SNI mismatches are
+  closed (E9, E10). Residual: a client could still send a different HTTP `Host` inside a TLS session for
+  an allowed SNI (domain fronting at a CDN that permits it). Closing that needs TLS interception, which
+  this runtime deliberately does not do.
+- The edge rejects header names that are not HTTP tokens and values with CR/LF/control characters (A12).
+- The two sidecars are trusted components with uplink access. On the VPS, firewall the uplink range so
+  they reach only the Agent Service listener (see `requests/C-runtime-driver.md` in the migration notes).
