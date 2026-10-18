@@ -1,0 +1,18 @@
+# Test-only overlay: a stand-in Agent Service on the uplink network (never on the agent's network).
+# It plants the synthetic canaries in its own tmpfs at start; the agent must not be able to reach them.
+services:
+  fake-service:
+    build: ./conformance
+    image: restricted-agent-fake-service:local
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["python3", "-u", "/srv/fake_service.py"]
+    environment:
+      FAKE_CANARY: ${CONF_CANARY:?set CONF_CANARY}
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=16m,uid=65534
+    networks: [uplink]
+
+  edge:
+    depends_on: [fake-service]
