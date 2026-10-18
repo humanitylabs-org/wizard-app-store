@@ -61,7 +61,7 @@ phase() {
   local name="$1"
   wait_ready
   echo "== phase $name"
-  "${DC[@]}" exec -T -e CONF_CANARY="$CANARY" -e CONF_TOKEN="$TOKEN" -e CONF_HOST_PATHS="$HOST_PATHS" \
+  "${DC[@]}" exec -T -e CONF_CANARY_REV="$(printf '%s' "$CANARY" | rev)" -e CONF_TOKEN="$TOKEN" -e CONF_HOST_PATHS="$HOST_PATHS" \
       -e CONF_PHASE="$name" agent /opt/hermes/.venv/bin/python - < "$HERE/conformance/in_agent.py" > "$OUT/$name.json"
   python3 "$HERE/conformance/inspect_check.py" "$AGENT_PROJECT" "$AGENT_INGRESS_BIND" "$AGENT_API_KEY" > "$OUT/$name-inspect.json"
   python3 "$HERE/conformance/summarize.py" phase "$OUT" "$name"

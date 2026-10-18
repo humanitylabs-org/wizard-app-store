@@ -9,7 +9,7 @@ the container boundary, not the agent's own politeness, is what gets tested.
 Expected result for every isolation item is "denied"; a few positive controls ("allowed") prove the
 probes themselves work. The synthetic canary token must never appear in any tool output.
 
-Inputs (environment): CONF_CANARY, CONF_TOKEN, CONF_HOST_PATHS (JSON list of host canary paths),
+Inputs (environment): CONF_CANARY_REV (canary reversed), CONF_TOKEN, CONF_HOST_PATHS (JSON list of host canary paths),
 CONF_PHASE. Prints one JSON document to stdout.
 """
 import json
@@ -22,10 +22,15 @@ sys.path.insert(0, "/opt/hermes")
 
 from model_tools import handle_function_call  # noqa: E402
 
-CANARY = os.environ["CONF_CANARY"]
+# The canary arrives reversed and every CONF_* variable is removed before any tool runs: Hermes'
+# terminal tool snapshots its process environment into the agent home, and the harness must not
+# plant the very value it is looking for.
+CANARY = os.environ["CONF_CANARY_REV"][::-1]
 TOKEN = os.environ["CONF_TOKEN"]
 HOST_PATHS = json.loads(os.environ["CONF_HOST_PATHS"])
 PHASE = os.environ.get("CONF_PHASE", "initial")
+for _name in [k for k in os.environ if k.startswith("CONF_")]:
+    del os.environ[_name]
 EDGE = "http://edge:8923"
 REACHED = "PROBE_REACHED"
 
