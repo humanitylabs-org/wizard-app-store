@@ -118,10 +118,11 @@ networks:
     internal: true
   uplink:
     # Fixed per agent so the Agent Service can bind its agent-only listener to the gateway address
-    # (first host of the subnet) and nothing else. The driver assigns a unique /28 per agent.
+    # (first host of the subnet) and nothing else. The driver assigns a unique /28 per agent from
+    # 10.250.0.0/16, outside Docker's default pools (172.17-31.x, 192.168.x), so it never collides.
     ipam:
       config:
-        - subnet: ${AGENT_UPLINK_SUBNET:-172.31.250.0/28}
+        - subnet: ${AGENT_UPLINK_SUBNET:-10.250.0.0/28}
 
 volumes:
   agent-home: {}
