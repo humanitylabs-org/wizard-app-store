@@ -111,44 +111,67 @@ async def refuse(writer, code, reason, **fields):
         writer.close()
 
 
-def client_hello_sni(data):
-    """Return the SNI host name from a complete TLS ClientHello record, '' if it has none, or None if
-    `data` is not a TLS handshake. Raises ValueError when the record is incomplete or malformed."""
-    if len(data) < 5 or data[0] != 0x16 or data[1] != 0x03:
-        return None
-    end = 5 + int.from_bytes(data[3:5], "big")
-    if len(data) < end:
-        raise ValueError("incomplete record")
-    body = data[5:end]
-    if not body or body[0] != 0x01:  # handshake type ClientHello
-        return None
-    i = 4 + 2 + 32                  # handshake header, client version, random
-    i += 1 + body[i]                # session id
-    i += 2 + int.from_bytes(body[i:i + 2], "big")   # cipher suites
-    i += 1 + body[i]                # compression methods
-    if i + 2 > len(body):
+MAX_HELLO = 64 * 1024
+# TLS alert record (fatal, access_denied) sent into the tunnel when the gate refuses it, so the client
+# can tell the proxy refused it rather than the destination.
+DENY_ALERT = bytes([0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x31])
+
+
+def client_hello_sni(handshake):
+    """SNI host name from a complete ClientHello handshake message (4-byte header included); '' when it
+    carries none. Raises ValueError when the message is malformed."""
+    try:
+        if handshake[0] != 0x01:
+            raise ValueError("not a ClientHello")
+        body = handshake[4:4 + int.from_bytes(handshake[1:4], "big")]
+        i = 2 + 32                      # client version, random
+        i += 1 + body[i]                # session id
+        i += 2 + int.from_bytes(body[i:i + 2], "big")   # cipher suites
+        i += 1 + body[i]                # compression methods
+        if i > len(body):
+            raise ValueError("truncated ClientHello")
+        if i + 2 > len(body):
+            return ""
+        ext_end = i + 2 + int.from_bytes(body[i:i + 2], "big")
+        if ext_end > len(body):
+            raise ValueError("truncated extensions")
+        i += 2
+        while i + 4 <= ext_end:
+            ext_type, ext_len = int.from_bytes(body[i:i + 2], "big"), int.from_bytes(body[i + 2:i + 4], "big")
+            ext = body[i + 4:i + 4 + ext_len]
+            if len(ext) != ext_len:
+                raise ValueError("truncated extension")
+            if ext_type == 0:           # server_name: list length, then (type 0 = host_name, length, name)
+                if len(ext) < 5 or ext[2] != 0:
+                    raise ValueError("bad server_name")
+                name = ext[5:5 + int.from_bytes(ext[3:5], "big")]
+                return name.decode("ascii", "strict").lower().rstrip(".")
+            i += 4 + ext_len
         return ""
-    ext_end = i + 2 + int.from_bytes(body[i:i + 2], "big")
-    i += 2
-    while i + 4 <= min(ext_end, len(body)):
-        ext_type, ext_len = int.from_bytes(body[i:i + 2], "big"), int.from_bytes(body[i + 2:i + 4], "big")
-        ext = body[i + 4:i + 4 + ext_len]
-        if ext_type == 0 and len(ext) >= 5 and ext[2] == 0:   # server_name, host_name entry
-            name_len = int.from_bytes(ext[3:5], "big")
-            return ext[5:5 + name_len].decode("ascii", "strict").lower().rstrip(".")
-        i += 4 + ext_len
-    return ""
+    except IndexError as exc:
+        raise ValueError("truncated ClientHello") from exc
 
 
 async def read_client_hello(reader):
-    """Read the first TLS record from the client (one ClientHello fits in one record)."""
-    data = await asyncio.wait_for(reader.readexactly(5), 15)
-    if data[0] != 0x16:
-        return data
-    length = int.from_bytes(data[3:5], "big")
-    if length > 16384 + 2048:
-        raise ValueError("oversized record")
-    return data + await asyncio.wait_for(reader.readexactly(length), 15)
+    """Read TLS handshake records until one complete ClientHello is assembled (TLS may split it across
+    records). Returns (raw bytes exactly as received, handshake message), or (raw, None) when the client
+    did not start with a TLS handshake. Bounded to MAX_HELLO bytes and 15 seconds in total."""
+    async def read():
+        raw, hs = b"", b""
+        while True:
+            header = await reader.readexactly(5)
+            raw += header
+            if header[0] != 0x16 or header[1] != 0x03:
+                return raw, None
+            length = int.from_bytes(header[3:5], "big")
+            if length == 0 or length > 16384 or len(raw) + length > MAX_HELLO:
+                raise ValueError("bad or oversized record")
+            fragment = await reader.readexactly(length)
+            raw += fragment
+            hs += fragment
+            if len(hs) >= 4 and len(hs) >= 4 + int.from_bytes(hs[1:4], "big"):
+                return raw, hs
+    return await asyncio.wait_for(read(), 15)
 
 
 async def handle(reader, writer):
@@ -179,25 +202,30 @@ async def handle(reader, writer):
         return await refuse(writer, 403, "Destination not public", peer=peer, host=host, detail=str(exc))
     except OSError:
         return await refuse(writer, 502, "Resolve failed", peer=peer, host=host)
+    writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+    await writer.drain()
+    # The tunnel must carry TLS for the host that was vetted: the ClientHello's SNI has to name it.
+    # This stops raw non-TLS tunnels and asking a shared IP/CDN for a different (unlisted) site. The
+    # upstream connection is only opened after this check, so a refused tunnel never reaches it.
+    try:
+        hello, handshake = await read_client_hello(reader)
+        sni = client_hello_sni(handshake) if handshake is not None else None
+    except (ValueError, UnicodeDecodeError, asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError):
+        sni, hello, handshake = None, b"", None
+    if sni != host:
+        log(decision="deny", reason="tunnel is not TLS for the vetted host", peer=peer, host=host,
+            sni=(sni or "")[:255], tls=handshake is not None)
+        try:
+            writer.write(DENY_ALERT)
+            await writer.drain()
+        finally:
+            writer.close()
+        return
     try:
         # Connect to the address we vetted, not the name (no second resolution to rebind).
         up_reader, up_writer = await asyncio.wait_for(asyncio.open_connection(str(addrs[0]), 443), 15)
     except (OSError, asyncio.TimeoutError):
-        return await refuse(writer, 502, "Upstream connect failed", peer=peer, host=host)
-    writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-    await writer.drain()
-    # The tunnel must carry TLS for the host that was vetted: the ClientHello's SNI has to name it.
-    # This stops raw non-TLS tunnels and asking a shared IP/CDN for a different (unlisted) site.
-    try:
-        hello = await read_client_hello(reader)
-        sni = client_hello_sni(hello)
-    except (ValueError, UnicodeDecodeError, IndexError, asyncio.IncompleteReadError, asyncio.TimeoutError,
-            ConnectionError):
-        sni, hello = None, b""
-    if sni != host:
-        log(decision="deny", reason="tunnel is not TLS for the vetted host", peer=peer, host=host,
-            sni=(sni or "")[:255], tls=sni is not None)
-        up_writer.close()
+        log(decision="error", reason="upstream connect failed", peer=peer, host=host)
         writer.close()
         return
     log(decision="allow", peer=peer, host=host, addr=addrs[0])

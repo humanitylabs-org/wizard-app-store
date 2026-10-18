@@ -314,15 +314,24 @@ def tunnel_probe(payload):
               + payload + "\nPY", 40)
 
 
-SNI_MISMATCH = ("ctx=ssl.create_default_context();ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE\n"
-                "try:\n  t=ctx.wrap_socket(s,server_hostname='example.com')\n"
-                "  t.sendall(b'GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n')\n"
-                "  print(t.recv(64)); print('PROBE_'+'REACHED')\n"
-                "except Exception as e: print('blocked', type(e).__name__)")
-RAW_BYTES = ("s.sendall(b'GET / HTTP/1.1\\r\\nHost: en.wikipedia.org\\r\\nConnection: close\\r\\n\\r\\n')\n"
-             "try:\n  d=s.recv(64)\n  print(d); print('PROBE_'+'REACHED' if d else 'blocked closed')\n"
-             "except Exception as e: print('blocked', type(e).__name__)")
-tunnel_judge = lambda r: True if REACHED in out(r) else False if ("proxy: HTTP/1.1 200" in out(r) and "blocked" in out(r)) else None  # noqa: E731
+# The egress gate answers a refused tunnel with one TLS alert record (fatal access_denied) and closes.
+# Only that exact reply counts as denial; anything else (a server response, a TLS session, a bare close,
+# a timeout) means the gate did not provably refuse it.
+GATE_DENY = "PROBE_GATE_DENY"
+READ_REPLY = ("def reply():\n  d=b''\n  try:\n    while len(d)<64:\n      c=s.recv(64)\n      if not c: break\n      d+=c\n"
+              "  except Exception as e: print('recv', type(e).__name__)\n  return d\n")
+SNI_MISMATCH = (READ_REPLY +
+                "ctx=ssl.create_default_context();ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE\n"
+                "i,o=ssl.MemoryBIO(),ssl.MemoryBIO();t=ctx.wrap_bio(i,o,server_hostname='example.com')\n"
+                "try: t.do_handshake()\nexcept ssl.SSLWantReadError: pass\n"
+                "s.sendall(o.read());d=reply();print('reply', d.hex())\n"
+                "print('PROBE_'+'GATE_DENY' if d==bytes.fromhex('15030300020231') else 'PROBE_'+'REACHED')")
+RAW_BYTES = (READ_REPLY +
+             "s.sendall(b'GET / HTTP/1.1\\r\\nHost: en.wikipedia.org\\r\\nConnection: close\\r\\n\\r\\n')\n"
+             "d=reply();print('reply', d.hex())\n"
+             "print('PROBE_'+'GATE_DENY' if d==bytes.fromhex('15030300020231') else 'PROBE_'+'REACHED')")
+tunnel_judge = lambda r: (True if REACHED in out(r) else False  # noqa: E731
+                          if ("proxy: HTTP/1.1 200" in out(r) and GATE_DENY in out(r)) else None)
 check("E9", "egress", "denied", "terminal: CONNECT to an allowlisted host, TLS for an unlisted site (SNI mismatch)",
       lambda: tunnel_probe(SNI_MISMATCH), tunnel_judge)
 check("E10", "egress", "denied", "terminal: CONNECT to an allowlisted host, then non-TLS bytes",

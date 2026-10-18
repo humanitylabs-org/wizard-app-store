@@ -4,7 +4,8 @@
 # 1. Plants synthetic canaries (fake host-home file, fake SSH key, fake control-plane secret) on the
 #    Docker host and inside a stand-in Agent Service, starts a synthetic host-only service that greets
 #    with the canary, and mints a fresh agent token and API key. Nothing real is read or copied.
-# 2. Self-tests the outside-in mount/env rules against bad layouts (host home, /, sockets, ...).
+# 2. Self-tests the outside-in mount/env rules against bad layouts (host home, /, sockets, ...) and
+#    the egress TLS gate against a local recording upstream (fragmented hello, refused tunnels).
 # 3. Starts the runtime with an empty agent home.
 # 4. Each phase: conformance/in_agent.py inside the agent (Hermes' own tool dispatcher, normal tools),
 #    outside-in `docker inspect` checks, and the stand-in service's request log for that phase.
@@ -59,6 +60,7 @@ wait_ready() {
 phase() {
   local name="$1"
   wait_ready
+  local since=$(( $(date +%s) - 5 ))
   echo "== phase $name"
   "${DC[@]}" exec -T -e CONF_CANARY_REV="$(printf '%s' "$CANARY" | rev)" -e CONF_TOKEN="$TOKEN" -e CONF_HOST_PATHS="$HOST_PATHS" \
       -e CONF_PHASE="$name" -e CONF_HOST_PORT="$CONF_HOST_PORT" \
@@ -67,11 +69,14 @@ phase() {
   # The stand-in service's log lives in its tmpfs: capture it now, before restart/recreate wipes it.
   "${DC[@]}" exec -T fake-service cat /tmp/requests.jsonl > "$OUT/$name-service-requests.jsonl"
   "${DC[@]}" logs --no-color > "$OUT/$name-compose-logs.txt" 2>&1
+  # Gate decisions made during this phase only: the summary requires the refusals to be attributable.
+  "${DC[@]}" logs --no-color --no-log-prefix --since "$since" egress edge > "$OUT/$name-gate-logs.txt" 2>&1
   python3 "$HERE/conformance/summarize.py" phase "$OUT" "$name"
 }
 
 echo "project=$AGENT_PROJECT receipts=$OUT"
-python3 "$HERE/conformance/inspect_check.py" --selftest > "$OUT/inspect-selftest.json"
+python3 "$HERE/conformance/inspect_check.py" --selftest > "$OUT/inspect-selftest.json" || true
+python3 "$HERE/conformance/egress_selftest.py" > "$OUT/egress-selftest.json" || true
 "${DC[@]}" build -q 2>&1 | tail -3
 "${DC[@]}" up -d 2>&1 | tail -3
 phase initial

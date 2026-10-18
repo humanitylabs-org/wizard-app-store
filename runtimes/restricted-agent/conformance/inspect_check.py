@@ -60,6 +60,19 @@ def mount_problems(mounts, project, home_source=None):
     return problems
 
 
+def init_problems(init_mounts, agent_home):
+    """home-init runs as root with CHOWN/FOWNER/DAC_OVERRIDE: its only mount must be the very home the
+    agent was validated to use (same type and source), writable."""
+    if agent_home is None:
+        return ["agent home unknown"]
+    if len(init_mounts) != 1:
+        return [f"home-init must have exactly one mount, has {len(init_mounts)}"]
+    m = init_mounts[0]
+    same = (m["dest"] == "/opt/data" and m["rw"] and m["type"] == agent_home["type"]
+            and os.path.normpath(str(m["src"])) == os.path.normpath(str(agent_home["src"])))
+    return [] if same else [f"home-init mount {m} differs from agent home {agent_home}"]
+
+
 def env_problems(env_names, image_env_names):
     extra = sorted(set(env_names) - set(image_env_names) - COMPOSE_ENV)
     return [f"environment not granted by image or compose: {extra}"] if extra else []
@@ -91,6 +104,20 @@ def selftest():
     results = []
     for name, (mounts, src, expect_ok) in cases.items():
         ok = not mount_problems(mounts, p, src)
+        results.append({"case": name, "expected_ok": expect_ok, "ok": ok, "pass": ok == expect_ok})
+    home = good[0]
+    init_cases = {
+        "init: same home volume": ([dict(home)], home, True),
+        "init: same dedicated dir": ([home_bind("/srv/wizard/agents/npa/home")], home_bind("/srv/wizard/agents/npa/home"), True),
+        "init: host home bind": ([home_bind("/home/telos")], home, False),
+        "init: root bind": ([home_bind("/")], home, False),
+        "init: foreign volume": ([dict(home, src="other_agent-home")], home, False),
+        "init: different dedicated dir": ([home_bind("/srv/wizard/agents/other/home")], home_bind("/srv/wizard/agents/npa/home"), False),
+        "init: extra mount": ([dict(home), {"type": "bind", "dest": "/host", "rw": True, "src": "/home/telos"}], home, False),
+        "init: read-only home": ([dict(home, rw=False)], home, False),
+    }
+    for name, (mounts, agent_home, expect_ok) in init_cases.items():
+        ok = not init_problems(mounts, agent_home)
         results.append({"case": name, "expected_ok": expect_ok, "ok": ok, "pass": ok == expect_ok})
     env_cases = [(["PATH", "HOME", "LANG"], ["PATH", "LANG"], True), (["PATH", "ANTHROPIC_API_KEY"], ["PATH"], False),
                  (["PATH", "WIZARD_MCP_TOKEN"], ["PATH"], False)]
@@ -196,12 +223,17 @@ for svc in ("egress", "edge"):
 
 init = inspect("home-init", all_states=True)
 ihc = init[0]["HostConfig"] if init else {}
-check("I19", "home-init: exited 0, no network, only CHOWN/FOWNER/DAC_OVERRIDE, read-only, no-new-privileges",
-      bool(init) and init[0]["State"].get("Status") == "exited" and init[0]["State"].get("ExitCode") == 0
+agent_home = next((m for m in mounts if m["dest"] == "/opt/data"), None) if not problems else None
+init_mounts = [{"type": m["Type"], "dest": m["Destination"], "rw": m["RW"], "src": m.get("Name") or m.get("Source")}
+               for m in (init[0].get("Mounts", []) if init else [])]
+init_bad = init_problems(init_mounts, agent_home)
+check("I19", "exactly one home-init: exited 0, no network, only CHOWN/FOWNER/DAC_OVERRIDE, read-only, "
+             "no-new-privileges, sole mount = the agent's validated home",
+      len(init) == 1 and not init_bad and init[0]["State"].get("Status") == "exited" and init[0]["State"].get("ExitCode") == 0
       and ihc.get("NetworkMode") == "none" and drops_all(ihc) and no_new_privs(ihc) and ihc.get("ReadonlyRootfs") is True
       and sorted(c.upper().removeprefix("CAP_") for c in ihc.get("CapAdd") or []) == ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
-      and [m["Destination"] for m in init[0].get("Mounts", [])] == ["/opt/data"],
-      {"state": init[0]["State"].get("Status") if init else None, "exit": init[0]["State"].get("ExitCode") if init else None,
+      ,
+      {"mount_problems": init_bad, "state": init[0]["State"].get("Status") if init else None, "exit": init[0]["State"].get("ExitCode") if init else None,
        "network": ihc.get("NetworkMode"), "add": ihc.get("CapAdd"),
        "mounts": [m["Destination"] for m in init[0].get("Mounts", [])] if init else None})
 
