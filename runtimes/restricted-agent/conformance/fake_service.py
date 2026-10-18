@@ -47,6 +47,23 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("fake-service " + (args[0] % args[1:]) + "\n")
 
 
+def host_listener(port):
+    """Synthetic host service on the Docker host's own network stack (network_mode: host), on every
+    host address. It greets each connection with the canary, so any connection the agent manages to
+    open is visible in the receipts."""
+    import socketserver
+
+    class Greeter(socketserver.BaseRequestHandler):
+        def handle(self):
+            sys.stderr.write(f"host-listener connection from {self.client_address[0]}\n")
+            self.request.sendall(f"synthetic host service {os.environ.get('FAKE_CANARY', '')}\n".encode())
+
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+    socketserver.ThreadingTCPServer(("0.0.0.0", port), Greeter).serve_forever()
+
+
 if __name__ == "__main__":
+    if os.environ.get("FAKE_MODE") == "host-listener":
+        host_listener(int(os.environ.get("FAKE_PORT", "18923")))
     plant_canaries()
     ThreadingHTTPServer(("0.0.0.0", 8923), Handler).serve_forever()

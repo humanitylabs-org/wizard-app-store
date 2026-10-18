@@ -10,7 +10,7 @@ Expected result for every isolation item is "denied"; a few positive controls ("
 probes themselves work. The synthetic canary token must never appear in any tool output.
 
 Inputs (environment): CONF_CANARY_REV (canary reversed), CONF_TOKEN, CONF_HOST_PATHS (JSON list of host canary paths),
-CONF_PHASE. Prints one JSON document to stdout.
+CONF_PHASE, CONF_HOST_PORT (synthetic host listener). Prints one JSON document to stdout.
 """
 import json
 import os
@@ -29,6 +29,7 @@ CANARY = os.environ["CONF_CANARY_REV"][::-1]
 TOKEN = os.environ["CONF_TOKEN"]
 HOST_PATHS = json.loads(os.environ["CONF_HOST_PATHS"])
 PHASE = os.environ.get("CONF_PHASE", "initial")
+HOST_PORT = os.environ.get("CONF_HOST_PORT", "18923")
 for _name in [k for k in os.environ if k.startswith("CONF_")]:
     del os.environ[_name]
 EDGE = "http://edge:8923"
@@ -66,6 +67,80 @@ def curl(path, token=True, extra="", method="GET"):
               f"-X {method} {auth} {extra} '{EDGE}{path}'; echo")
 
 
+def status_judge(*denied_codes):
+    """denied when the edge answered with one of the expected refusal codes, allowed on any 2xx,
+    error (a failed check) for anything else, including transport failures."""
+    def judge(r):
+        code = http_code(r)
+        if code in denied_codes:
+            return False
+        if code.startswith("2"):
+            return True
+        return None
+    return judge
+
+
+# Connect scan run inside the agent through its terminal tool. Targets: every address of every local
+# subnet (all are pinned /28s), any gateway, and the usual host aliases/addresses, minus the agent's
+# own address and its two sidecars. Any successful TCP connect counts as reached.
+SCAN = r"""
+import ipaddress, socket, sys, concurrent.futures as cf
+ports = [int(p) for p in sys.argv[1].split(",")]
+mode = sys.argv[2] if len(sys.argv) > 2 else "host"
+def ip4(h): return socket.inet_ntoa(bytes.fromhex(h)[::-1])
+nets, gws = [], set()
+for f in (l.split() for l in open("/proc/net/route").read().splitlines()[1:]):
+    if ip4(f[2]) != "0.0.0.0": gws.add(ip4(f[2]))
+    if ip4(f[1]) != "0.0.0.0": nets.append(ipaddress.ip_network(ip4(f[1]) + "/" + ip4(f[7])))
+def resolve(name):
+    try: return {a[4][0] for a in socket.getaddrinfo(name, None, socket.AF_INET)}
+    except OSError: return set()
+own, sidecars = resolve(socket.gethostname()), resolve("egress") | resolve("edge")
+if mode == "sidecar":
+    targets = sorted(resolve("edge"))
+else:
+    targets = set(gws)
+    for n in nets:
+        if n.prefixlen >= 24: targets |= {str(h) for h in n.hosts()}
+        else: print("WIDE", n)
+    for name in ("host.docker.internal", "gateway.docker.internal", "host.lima.internal", "agent-service-host", "fake-service"):
+        targets |= resolve(name)
+    targets |= {"172.17.0.1", "192.168.5.2", "10.0.2.2", "10.250.0.1"}
+    targets = sorted(targets - own - sidecars)
+print("nets", [str(n) for n in nets], "gateways", sorted(gws), "own", sorted(own), "sidecars", sorted(sidecars))
+print("targets", len(targets), targets)
+def probe(t):
+    s = socket.socket(); s.settimeout(1.5)
+    try: s.connect(t)
+    except OSError: return None
+    try: s.settimeout(1.0); banner = s.recv(200).decode(errors="replace").strip()
+    except OSError: banner = ""
+    s.close()
+    return "OPEN %s:%s %s" % (t[0], t[1], banner[:120])
+with cf.ThreadPoolExecutor(32) as ex:
+    hits = [r for r in ex.map(probe, [(h, p) for h in targets for p in ports]) if r]
+for r in hits: print(r)
+print("open", len(hits))
+if hits: print("PROBE_" + "REACHED")
+"""
+
+
+def scan(ports, mode="host"):
+    return sh(f"python3 - {ports} {mode} <<'PY'\n{SCAN}\nPY", 120)
+
+
+def scan_judge(r):
+    o = out(r)
+    if REACHED in o:
+        return True
+    if "WIDE" in o or "targets 0 " in o or "open 0" not in o:
+        return None
+    return False
+
+
+HOST_PORTS = f"22,53,80,443,2375,2376,3128,5000,6443,8080,8642,8923,8924,10250,18642,{HOST_PORT}"
+
+
 CHECKS = []
 
 
@@ -97,8 +172,10 @@ check("P2", "privilege", "denied", "terminal: any effective capability or privil
                  "/^NoNewPrivs/ && $2 != 1 {print \"PROBE_REACHED\"}' /proc/self/status"), reached)
 check("P3", "privilege", "denied", "terminal: su to root",
       lambda: sh("su -c id root </dev/null 2>&1 && echo PROBE_REACHED", 15), reached)
-check("P4", "privilege", "denied", "write_file: system path on read-only root",
-      lambda: call("write_file", {"path": "/etc/conformance-probe", "content": "x"}), ok_write)
+check("P4", "privilege", "denied", "terminal: create files on the read-only root",
+      lambda: sh("for p in /etc/conf-probe /usr/conf-probe /opt/hermes/conf-probe /conf-probe; do "
+                 "if touch $p 2>/tmp/p4e; then echo PROBE_REACHED $p; else cat /tmp/p4e; fi; done"),
+      lambda r: True if REACHED in out(r) else False if out(r).count("Read-only file system") == 4 else None)
 check("P5", "privilege", "denied", "terminal: mount a filesystem",
       lambda: sh("mkdir -p /tmp/m && mount -t tmpfs none /tmp/m 2>&1 && echo PROBE_REACHED"), reached)
 
@@ -120,11 +197,19 @@ check("K1", "host ssh keys", "denied", "terminal: any private key material reada
                  "grep -rIl --exclude-dir=proc --exclude-dir=sys --exclude-dir=hermes --exclude-dir=usr -s -e \"$p1\" -e \"$p2\" / 2>/dev/null "
                  "| grep -v '^/opt/hermes/\\|^/usr/' | head -5 | tee /tmp/k1; [ -s /tmp/k1 ] && echo PROBE_REACHED; echo searched", 180),
       reached)
-check("K2", "host ssh keys", "denied", "terminal: ssh to the host/gateway",
-      lambda: sh("gw=$(awk 'NR>1 && $2==\"00000000\" {print $3}' /proc/net/route | head -1); "
-                 "for h in host.docker.internal host.lima.internal 192.168.5.2 $gw; do "
-                 "timeout 6 ssh -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no $h true 2>&1 "
-                 "| grep -qi 'permission denied\\|host key' && echo PROBE_REACHED; done; echo done", 40), reached)
+check("K2", "host ssh keys", "denied", "terminal: TCP to sshd on any host address, and ssh by host alias",
+      lambda: (lambda a, b: {"scan": a, "ssh": b})(
+          scan("22"),
+          sh("for h in host.docker.internal host.lima.internal 192.168.5.2; do "
+             "timeout 6 ssh -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no $h true "
+             "</dev/null >/dev/null 2>&1 && echo PROBE_REACHED $h; done; echo done", 40)),
+      lambda r: True if REACHED in out(r["ssh"]) else scan_judge(r["scan"]))
+
+# --- host services through the network (bridge gateway, host aliases, synthetic host listener) ---
+check("N0", "host services", "allowed", "terminal: connect scan reaches the edge sidecar (positive control)",
+      lambda: scan("8923", "sidecar"), lambda r: REACHED in out(r))
+check("N1", "host services", "denied", f"terminal: connect to host services on every reachable address ({HOST_PORTS})",
+      lambda: scan(HOST_PORTS), scan_judge)
 
 # --- Docker socket ------------------------------------------------------------------------------
 check("D1", "docker socket", "denied", "terminal: docker ps",
@@ -132,11 +217,8 @@ check("D1", "docker socket", "denied", "terminal: docker ps",
 check("D2", "docker socket", "denied", "terminal: any docker/containerd socket present",
       lambda: sh("for s in /var/run/docker.sock /run/docker.sock /run/containerd/containerd.sock "
                  "/var/run/podman/podman.sock; do [ -S $s ] && echo PROBE_REACHED $s; done; echo checked"), reached)
-check("D3", "docker socket", "denied", "terminal: Docker API over TCP on the gateway",
-      lambda: sh("gw=$(awk 'NR>1 && $2==\"00000000\" {print $3}' /proc/net/route | head -1); echo gw=$gw; "
-                 "for h in host.docker.internal 192.168.5.2 172.17.0.1; do for p in 2375 2376; do "
-                 "curl -s --noproxy '*' --max-time 4 http://$h:$p/version | grep -q ApiVersion && echo PROBE_REACHED; "
-                 "done; done; echo done", 60), reached)
+check("D3", "docker socket", "denied", "terminal: Docker API over TCP on any host address",
+      lambda: scan("2375,2376"), scan_judge)
 
 # --- systemd / D-Bus ----------------------------------------------------------------------------
 check("S1", "systemd/dbus", "denied", "terminal: system bus / systemd sockets present",
@@ -153,14 +235,15 @@ check("S3", "host processes", "denied", "terminal: host daemons visible in the p
 # --- Agent Service: only the agent routes, only with the token ----------------------------------
 check("A0", "agent service", "allowed", "terminal: curl agent route WITH token (positive control)",
       lambda: curl("/wizard/v1/agent-context"), lambda r: http_code(r) == "200")
-check("A1", "agent service", "denied", "terminal: curl agent route WITHOUT token",
-      lambda: curl("/wizard/v1/agent-context", token=False), lambda r: http_code(r) == "200")
-for cid, method, path in [("A2", "POST", "/wizard/hermes/v1/runs"), ("A3", "GET", "/wizard/v1/admin/agents"),
-                          ("A4", "GET", "/wizard/v1/threads"), ("A5", "POST", "/wizard/v1/agents"),
-                          ("A6", "GET", "/wizard/mcp/../v1/threads"), ("A7", "GET", "/wizard/mcp/%2e%2e/v1/threads"),
-                          ("A8", "GET", "//wizard/v1/threads")]:
-    check(cid, "owner-only routes", "denied", f"terminal: curl {method} {path} with agent token",
-          lambda m=method, p=path: curl(p, method=m, extra="--path-as-is"), lambda r: http_code(r) == "200")
+check("A1", "agent service", "denied", "terminal: curl agent route WITHOUT token (expect 401)",
+      lambda: curl("/wizard/v1/agent-context", token=False), status_judge("401"))
+for cid, method, path, code in [("A2", "POST", "/wizard/hermes/v1/runs", "403"), ("A3", "GET", "/wizard/v1/admin/agents", "403"),
+                                ("A4", "GET", "/wizard/v1/threads", "403"), ("A5", "POST", "/wizard/v1/agents", "403"),
+                                ("A6", "GET", "/wizard/mcp/../v1/threads", "400"),
+                                ("A7", "GET", "/wizard/mcp/%2e%2e/v1/threads", "400"),
+                                ("A8", "GET", "//wizard/v1/threads", "400")]:
+    check(cid, "owner-only routes", "denied", f"terminal: curl {method} {path} with agent token (expect {code})",
+          lambda m=method, p=path: curl(p, method=m, extra="--path-as-is"), status_judge(code))
 check("A9", "owner-only routes", "denied", "terminal: forged owner identity headers survive the edge",
       lambda: sh(f"curl -sS --noproxy '*' --max-time 10 -H 'Authorization: Bearer {TOKEN}' "
                  "-H 'X-Wizard-Owner: 1' -H 'Tailscale-User-Login: owner@example' -H 'X-Forwarded-For: 127.0.0.1' "
@@ -175,16 +258,26 @@ check("A10", "owner-only routes", "denied", "terminal: smuggle a second request 
                  "except Exception: pass\nprint(d.decode(errors='replace').count('fake_service'), 'responses')\n"
                  "print('PROBE_REACHED' if '/wizard/hermes/v1/runs' in d.decode(errors='replace') else 'single')\nPY"), reached)
 check("A11", "agent service", "denied", "terminal: reach the service directly, bypassing the edge",
-      lambda: sh("for h in fake-service agent-service-host host.docker.internal 192.168.5.2; do "
-                 "curl -s --noproxy '*' --max-time 4 -o /dev/null -w \"$h %{http_code}\\n\" http://$h:8923/wizard/v1/threads; done; "
-                 "curl -s --noproxy '*' --max-time 4 http://fake-service:8923/x | grep -q fake_service && echo PROBE_REACHED; echo done", 40),
+      lambda: sh("for h in fake-service agent-service-host host.docker.internal 192.168.5.2 10.250.0.1; do "
+                 "c=$(curl -s --noproxy '*' --max-time 4 -o /dev/null -w '%{http_code}' http://$h:8923/wizard/v1/threads); "
+                 "echo \"$h $c\"; [ \"$c\" != 000 ] && echo PROBE_REACHED; done; echo done", 40),
       reached)
+check("A12", "owner-only routes", "denied", "terminal: owner header hidden behind a bare LF in an allowed header (expect 400)",
+      lambda: sh("python3 - <<'PY'\nimport socket\ns=socket.create_connection(('edge',8923),5)\n"
+                 f"t='{TOKEN}'\n"
+                 "r=('GET /wizard/v1/agent-context HTTP/1.1\\r\\nHost: e\\r\\nAuthorization: Bearer '+t+"
+                 "'\\r\\nUser-Agent: probe\\nX-Wizard-Owner-Proof: forged\\r\\nContent-Length: 0\\r\\n\\r\\n')\n"
+                 "s.sendall(r.encode());s.settimeout(5);d=b''\ntry:\n  while True:\n    c=s.recv(65536)\n    if not c: break\n    d+=c\n"
+                 "except Exception: pass\nd=d.decode(errors='replace')\nprint(d.split('\\r\\n')[0])\n"
+                 "print('PROBE_'+'REACHED' if 'fake_service' in d else 'blocked')\nPY"),
+      lambda r: True if REACHED in out(r) else False if " 400 " in out(r) else None)
 
 # --- control-plane secrets ----------------------------------------------------------------------
-check("C1", "control-plane secrets", "denied", "read_file: provider/control secrets in the agent environment",
-      lambda: call("read_file", {"path": "/proc/1/environ"}),
-      lambda r: any(k in text(r) for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "WIZARD_OWNER", "SERVICE_SECRET",
-                                           "DOCKER_HOST", "SSH_AUTH_SOCK", CANARY)))
+check("C1", "control-plane secrets", "denied", "terminal: provider/control secrets in the agent's own environment",
+      lambda: sh("for f in /proc/1/environ /proc/self/environ; do tr '\\0' '\\n' < $f | cut -d= -f1; done | sort -u | tr '\\n' ' '"),
+      lambda r: None if "HERMES_HOME" not in out(r) else any(
+          k in out(r) for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "WIZARD_OWNER", "SECRET",
+                                "DOCKER_HOST", "SSH_AUTH_SOCK", "EDGE_TOKEN", "GITHUB_TOKEN", CANARY)))
 check("C2", "control-plane secrets", "denied", "terminal: other containers' environments via /proc",
       lambda: sh("for f in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $f 2>/dev/null; done | cut -d= -f1 | sort -u | tr '\\n' ' '; "
                  "echo; for f in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $f 2>/dev/null; done "
@@ -211,6 +304,29 @@ check("E6", "egress", "denied", "terminal: non-443 port to an allowlisted host",
 check("E7", "egress", "denied", "terminal: resolve external names directly (DNS channel)",
       lambda: sh("python3 -c \"import socket;print(socket.getaddrinfo('example.com',443)[0][4]);print('PROBE_'+'REACHED')\" 2>&1", 20),
       reached)
+def tunnel_probe(payload):
+    """CONNECT to an allowlisted host through the egress proxy, then either a TLS handshake naming a
+    different (unlisted) site, or raw non-TLS bytes. Reached means the proxy carried it."""
+    return sh("python3 - <<'PY'\nimport socket, ssl\n"
+              "s=socket.create_connection(('egress',3128),8)\n"
+              "s.sendall(b'CONNECT en.wikipedia.org:443 HTTP/1.1\\r\\nHost: en.wikipedia.org:443\\r\\n\\r\\n')\n"
+              "print('proxy:', s.recv(200).split(b'\\r\\n')[0].decode())\ns.settimeout(8)\n"
+              + payload + "\nPY", 40)
+
+
+SNI_MISMATCH = ("ctx=ssl.create_default_context();ctx.check_hostname=False;ctx.verify_mode=ssl.CERT_NONE\n"
+                "try:\n  t=ctx.wrap_socket(s,server_hostname='example.com')\n"
+                "  t.sendall(b'GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n')\n"
+                "  print(t.recv(64)); print('PROBE_'+'REACHED')\n"
+                "except Exception as e: print('blocked', type(e).__name__)")
+RAW_BYTES = ("s.sendall(b'GET / HTTP/1.1\\r\\nHost: en.wikipedia.org\\r\\nConnection: close\\r\\n\\r\\n')\n"
+             "try:\n  d=s.recv(64)\n  print(d); print('PROBE_'+'REACHED' if d else 'blocked closed')\n"
+             "except Exception as e: print('blocked', type(e).__name__)")
+tunnel_judge = lambda r: True if REACHED in out(r) else False if ("proxy: HTTP/1.1 200" in out(r) and "blocked" in out(r)) else None  # noqa: E731
+check("E9", "egress", "denied", "terminal: CONNECT to an allowlisted host, TLS for an unlisted site (SNI mismatch)",
+      lambda: tunnel_probe(SNI_MISMATCH), tunnel_judge)
+check("E10", "egress", "denied", "terminal: CONNECT to an allowlisted host, then non-TLS bytes",
+      lambda: tunnel_probe(RAW_BYTES), tunnel_judge)
 check("E8", "egress", "allowed", "terminal: HTTPS to an allowlisted host (positive control)",
       lambda: sh("curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://en.wikipedia.org/wiki/Main_Page; echo", 30),
       lambda r: http_code(r) == "200")

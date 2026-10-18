@@ -2,13 +2,14 @@
 # Restricted-agent conformance run (acceptance test 6). Runs on a Docker host (Thales/colima or Linux).
 #
 # 1. Plants synthetic canaries (fake host-home file, fake SSH key, fake control-plane secret) on the
-#    Docker host and inside a stand-in Agent Service, and mints a fresh agent token and API key.
-#    Nothing real is read or copied.
-# 2. Starts the runtime with an empty agent home.
-# 3. Runs conformance/in_agent.py inside the agent (Hermes' own tool dispatcher, normal tools),
-#    outside-in `docker inspect` checks, and an inbound API reachability check.
-# 4. Restarts the containers and re-runs; recreates them (home volume kept) and re-runs.
-# 5. Writes receipts (synthetic values redacted) and tears everything down, volumes included.
+#    Docker host and inside a stand-in Agent Service, starts a synthetic host-only service that greets
+#    with the canary, and mints a fresh agent token and API key. Nothing real is read or copied.
+# 2. Self-tests the outside-in mount/env rules against bad layouts (host home, /, sockets, ...).
+# 3. Starts the runtime with an empty agent home.
+# 4. Each phase: conformance/in_agent.py inside the agent (Hermes' own tool dispatcher, normal tools),
+#    outside-in `docker inspect` checks, and the stand-in service's request log for that phase.
+# 5. Phases: fresh, after `restart`, after `down`/`up` with the home volume kept.
+# 6. Tears down, verifies nothing is left, scans every receipt for the canary, then redacts.
 #
 # Usage: run.sh <receipts-dir>
 set -euo pipefail
@@ -23,6 +24,7 @@ rand() { python3 -c 'import secrets;print(secrets.token_hex(24))'; }
 CANARY="CONFORMANCE-CANARY-$(rand)"
 TOKEN="agt_$(rand)"
 export CONF_CANARY="$CANARY"
+export CONF_HOST_PORT="${CONF_HOST_PORT:-18923}"
 export AGENT_API_KEY="$(rand)$(rand)"
 export EDGE_TOKEN_SHA256="$(printf '%s' "$TOKEN" | python3 -c 'import sys,hashlib;print(hashlib.sha256(sys.stdin.read().encode()).hexdigest())')"
 export EDGE_UPSTREAM_HOST=fake-service EDGE_UPSTREAM_PORT=8923
@@ -37,14 +39,11 @@ printf -- '-----BEGIN SYNTHETIC TEST KEY-----\n%s\n-----END SYNTHETIC TEST KEY--
 printf 'WIZARD_SERVICE_SECRET=%s\n' "$CANARY" > "$HOST_CANARY_DIR/controlplane-secrets.env"
 HOST_PATHS=$(python3 -c 'import json,sys;h=sys.argv[1];print(json.dumps([h+"/canary.txt",h+"/.ssh/id_ed25519",h+"/controlplane-secrets.env","/tmp/host-home/canary.txt","/tmp/host-home/.ssh/id_ed25519","/tmp/control-plane/secrets.env"]))' "$HOST_CANARY_DIR")
 
-REDACT="$HERE/conformance/redact.py"
 DC=(docker compose -f "$HERE/compose.yml" -f "$HERE/conformance/compose.test.yml" -p "$AGENT_PROJECT")
 cleanup() {
-  "${DC[@]}" logs --no-color > "$OUT/compose-logs.txt" 2>&1 || true
-  "${DC[@]}" exec -T fake-service cat /tmp/requests.jsonl > "$OUT/fake-service-requests.jsonl" 2>/dev/null || true
   "${DC[@]}" down -v --remove-orphans > /dev/null 2>&1 || true
   rm -rf "$HOST_CANARY_DIR"
-  python3 "$REDACT" "$OUT" "$CANARY" "$TOKEN" "$AGENT_API_KEY" || true
+  python3 "$HERE/conformance/redact.py" "$OUT" "$CANARY" "$TOKEN" "$AGENT_API_KEY" || true
 }
 trap cleanup EXIT
 
@@ -62,12 +61,17 @@ phase() {
   wait_ready
   echo "== phase $name"
   "${DC[@]}" exec -T -e CONF_CANARY_REV="$(printf '%s' "$CANARY" | rev)" -e CONF_TOKEN="$TOKEN" -e CONF_HOST_PATHS="$HOST_PATHS" \
-      -e CONF_PHASE="$name" agent /opt/hermes/.venv/bin/python - < "$HERE/conformance/in_agent.py" > "$OUT/$name.json"
+      -e CONF_PHASE="$name" -e CONF_HOST_PORT="$CONF_HOST_PORT" \
+      agent /opt/hermes/.venv/bin/python - < "$HERE/conformance/in_agent.py" > "$OUT/$name.json"
   python3 "$HERE/conformance/inspect_check.py" "$AGENT_PROJECT" "$AGENT_INGRESS_BIND" "$AGENT_API_KEY" > "$OUT/$name-inspect.json"
+  # The stand-in service's log lives in its tmpfs: capture it now, before restart/recreate wipes it.
+  "${DC[@]}" exec -T fake-service cat /tmp/requests.jsonl > "$OUT/$name-service-requests.jsonl"
+  "${DC[@]}" logs --no-color > "$OUT/$name-compose-logs.txt" 2>&1
   python3 "$HERE/conformance/summarize.py" phase "$OUT" "$name"
 }
 
 echo "project=$AGENT_PROJECT receipts=$OUT"
+python3 "$HERE/conformance/inspect_check.py" --selftest > "$OUT/inspect-selftest.json"
 "${DC[@]}" build -q 2>&1 | tail -3
 "${DC[@]}" up -d 2>&1 | tail -3
 phase initial
@@ -76,4 +80,17 @@ phase restart
 "${DC[@]}" down 2>&1 | tail -1          # containers removed, home volume kept
 "${DC[@]}" up -d 2>&1 | tail -2
 phase recreate
+
+# Teardown, verified.
+"${DC[@]}" down -v --remove-orphans 2>&1 | tail -1
+rm -rf "$HOST_CANARY_DIR"
+python3 - "$AGENT_PROJECT" "$HOST_CANARY_DIR" > "$OUT/teardown.json" <<'PY'
+import json, os, subprocess, sys
+project, canary_dir = sys.argv[1:]
+f = f"label=com.docker.compose.project={project}"
+left = {kind: subprocess.check_output(["docker", *cmd, "-q", "--filter", f], text=True).split()
+        for kind, cmd in (("containers", ["ps", "-a"]), ("volumes", ["volume", "ls"]), ("networks", ["network", "ls"]))}
+left["host_canary_dir_exists"] = os.path.exists(canary_dir)
+print(json.dumps({"clean": not any(left.values()), "left": left}))
+PY
 python3 "$HERE/conformance/summarize.py" final "$OUT" "$CANARY"

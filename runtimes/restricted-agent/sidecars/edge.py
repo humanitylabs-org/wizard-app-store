@@ -10,7 +10,8 @@ Two listeners:
     - it has a Content-Length body (no chunked/pipelined smuggling).
   Everything else is answered here (401/403/400) and never reaches the service. Owner/identity
   headers (X-Wizard-*, Tailscale-*, X-Forwarded-*, Forwarded, Cookie) are dropped; only a fixed set
-  of request headers is passed on. One request per connection (`Connection: close` both ways).
+  of request headers is passed on. Header names must be HTTP tokens and values may not contain CR,
+  LF or other control characters. One request per connection (`Connection: close` both ways).
 
 * INGRESS (default :8642): a plain TCP relay so the host-side Agent Service can reach the agent's
   API server. The agent is on an internal network and cannot publish ports itself.
@@ -47,6 +48,10 @@ ALLOW = [
 PASS_HEADERS = {"content-type", "content-length", "accept", "authorization", "mcp-session-id",
                 "mcp-protocol-version", "last-event-id", "user-agent", "idempotency-key"}
 SAFE_PATH = re.compile(r"^/[A-Za-z0-9._~/-]*$")
+# RFC 9110 token for header names and methods; header values may not carry CR, LF or other controls
+# (a bare LF would let a second, forbidden header ride inside an allowed one).
+TOKEN_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+BAD_VALUE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
 
 
 def log(**fields):
@@ -136,10 +141,12 @@ async def gateway(reader, writer):
     if len(request) != 3 or request[2] not in ("HTTP/1.1", "HTTP/1.0"):
         return await reply(writer, 400, "bad request line", peer=peer)
     method, target, _ = request
+    if not TOKEN_RE.match(method) or BAD_VALUE.search(target):
+        return await reply(writer, 400, "bad request line", peer=peer)
     headers = {}
     for line in lines[1:]:
         name, sep, value = line.partition(":")
-        if not sep or not name or name != name.strip():
+        if not sep or not TOKEN_RE.match(name) or BAD_VALUE.search(value):
             return await reply(writer, 400, "bad header", peer=peer)
         key = name.lower()
         if key in headers and key in ("authorization", "content-length", "transfer-encoding", "host"):
