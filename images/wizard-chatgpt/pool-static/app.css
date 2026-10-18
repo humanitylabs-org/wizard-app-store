@@ -91,3 +91,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); }
 .add-bar { padding-left: 18px; padding-right: 18px; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
 .primary { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); }
 .primary.danger { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--ink); border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
+
+/* Email titles stay on one line; long ones end in an ellipsis (full address on hover). */
+.acct-head .wz-main b, .acct-head .wz-main small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }

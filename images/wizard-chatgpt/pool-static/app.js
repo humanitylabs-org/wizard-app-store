@@ -42,9 +42,15 @@ function renderAccount(a) {
   const legacy = a.source === 'legacy-claude-code';
   const li = el('li', 'acct'); li.dataset.accountId = a.id;
   const head = el('div', 'wz-row acct-head');
-  const title = legacy ? 'Claude Code sign-in' : (a.name || a.email || 'Subscription');
+  // Label each subscription by its signed-in email; the nickname (if different) moves to the second line.
+  const nick = a.name && a.name !== a.email && !legacy ? a.name : '';
+  const at = a.email ? a.email.lastIndexOf('@') : -1;
+  // Readable on a phone: the name before @ is the title, the domain joins the plan line.
+  const title = at > 0 ? a.email.slice(0, at) : (a.email || a.name || (legacy ? 'Claude Code sign-in' : 'Subscription'));
+  const domain = at > 0 ? a.email.slice(at + 1) : '';
   const main = el('span', 'wz-main');
-  main.append(el('b', null, title), el('small', null, [a.plan, a.email].filter(Boolean).join(' · ') || 'Plan not reported'));
+  const tb = el('b', null, title); tb.title = a.email || title;
+  main.append(tb, el('small', null, [domain, a.plan, nick].filter(Boolean).join(' · ') || 'Plan not reported'));
   const ok = ['ready', 'connected'].includes(a.status);
   head.append(el('span', 'wz-tile', title.trim().charAt(0).toUpperCase() || '?'), main, el('span', 'pill ' + (ok ? 'ok' : 'warn'), STATUS[a.status] || a.status || 'Unknown'));
   li.append(head);

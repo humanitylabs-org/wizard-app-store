@@ -29,8 +29,8 @@ def with_legacy(result):
             if LEGACY_RENEW is not None:
                 old = LEGACY_RENEW(old, reader=LEGACY)
             if old.get('status') != 'not_connected':
-                result['accounts'].append({'id': 'legacy-claude-code', 'name': 'Legacy Claude Code source',
-                    'source': 'legacy-claude-code', 'email': None, 'plan': old.get('plan'),
+                result['accounts'].append({'id': 'legacy-claude-code', 'name': old.get('account') or 'Claude',
+                    'source': 'legacy-claude-code', 'email': old.get('account'), 'plan': old.get('plan'),
                     'status': old['status'], 'usage': old.get('usage'), 'error': old.get('error'), 'credentials': [],
                     'actions': {'reconnect': False, 'remove': False}})
             result['legacyStatus'] = old.get('status', 'unknown')
