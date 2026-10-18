@@ -116,7 +116,12 @@ services:
 networks:
   sandbox:
     internal: true
-  uplink: {}
+  uplink:
+    # Fixed per agent so the Agent Service can bind its agent-only listener to the gateway address
+    # (first host of the subnet) and nothing else. The driver assigns a unique /28 per agent.
+    ipam:
+      config:
+        - subnet: ${AGENT_UPLINK_SUBNET:-172.31.250.0/28}
 
 volumes:
   agent-home: {}

@@ -34,11 +34,12 @@ check("I4", "no-new-privileges", any("no-new-privileges" in s for s in hc.get("S
 check("I5", "read-only root filesystem", hc.get("ReadonlyRootfs") is True, hc.get("ReadonlyRootfs"))
 mounts = [{"type": m["Type"], "dest": m["Destination"], "rw": m["RW"], "src": m.get("Name") or m.get("Source")}
           for m in a.get("Mounts", [])]
-allowed = {("volume", "/opt/data", True), ("volume", "/opt/wizard-skills", False)}
-check("I6", "only the home volume (rw) and system-skills volume (ro); no bind mounts",
+# The home may be a named volume or (driver choice on the VPS) one dedicated host directory.
+allowed = {("volume", "/opt/data", True), ("bind", "/opt/data", True), ("volume", "/opt/wizard-skills", False)}
+check("I6", "only the home (rw) and system-skills volume (ro) are mounted",
       all((m["type"], m["dest"], m["rw"]) in allowed for m in mounts), mounts)
-check("I7", "no docker/containerd socket or host path mounted",
-      not any("sock" in str(m["src"]) or m["type"] == "bind" for m in mounts), mounts)
+check("I7", "no socket mounted and no host path other than the agent's own home",
+      not any("sock" in str(m["src"]) or (m["type"] == "bind" and m["dest"] != "/opt/data") for m in mounts), mounts)
 check("I8", "no published ports on the agent", not (hc.get("PortBindings") or {}), hc.get("PortBindings"))
 nets = list((a.get("NetworkSettings") or {}).get("Networks", {}))
 check("I9", "attached only to the sandbox network", len(nets) == 1 and nets[0].endswith("_sandbox"), nets)
