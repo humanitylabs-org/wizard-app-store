@@ -60,7 +60,6 @@ dialog h2 { margin: 0 0 14px; font-size: 18px; font-weight: 700; }
 .field small { color: var(--ink-3); }
 .steps { margin: 0 0 14px; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 20px; }
 .steps li { counter-increment: s; display: grid; gap: 8px; font-size: 14px; color: var(--ink-2); }
-.steps li > span::before { content: counter(s) ". "; color: var(--ink-3); }
 .steps li[hidden] { display: none; }
 .steps .primary { width: 100%; }
 .code-row { display: flex; gap: 8px; align-items: stretch; }
@@ -94,3 +93,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); }
 
 /* Email titles stay on one line; long ones end in an ellipsis (full address on hover). */
 .acct-head .wz-main b, .acct-head .wz-main small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+
+/* Minimal: the list itself shows how many accounts; keep #count for assistive tech and tests. */
+#count { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

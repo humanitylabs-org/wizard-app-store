@@ -50,7 +50,7 @@ function renderAccount(a) {
   const domain = at > 0 ? a.email.slice(at + 1) : '';
   const main = el('span', 'wz-main');
   const tb = el('b', null, title); tb.title = a.email || title;
-  main.append(tb, el('small', null, [domain, a.plan, nick].filter(Boolean).join(' · ') || 'Plan not reported'));
+  main.append(tb, el('small', null, [domain, a.plan, nick].filter(Boolean).join(' · ')));
   const ok = ['ready', 'connected'].includes(a.status);
   head.append(el('span', 'wz-tile', title.trim().charAt(0).toUpperCase() || '?'), main, el('span', 'pill ' + (ok ? 'ok' : 'warn'), STATUS[a.status] || a.status || 'Unknown'));
   li.append(head);
@@ -71,18 +71,15 @@ function renderAccount(a) {
       box.append(row);
     }
     li.append(box);
-  } else li.append(el('p', 'muted', 'Usage not available yet'));
+  } else li.append(el('p', 'muted', 'No usage yet'));
 
-  if (legacy) {
-    li.append(el('p', 'muted', 'Existing Claude Code sign-in. Renewal uses only its owning official CLI; if expired, reconnect through Claude Code.'));
-    return li;
-  }
+  if (legacy) return li;
   const creds = a.credentials || [];
   if (creds.length) {
     const det = el('details', 'manage');
     det.open = openManage.has(a.id);
     det.addEventListener('toggle', () => det.open ? openManage.add(a.id) : openManage.delete(a.id));
-    det.append(el('summary', null, creds.length === 1 ? 'Manage' : `Manage · ${creds.length} sign-ins`));
+    det.append(el('summary', null, creds.length === 1 ? 'Manage' : `Manage (${creds.length})`));
     for (const c of creds) {
       const r = el('div', 'grant');
       r.append(el('span', 'grant-name', grantName(c)));
@@ -94,7 +91,7 @@ function renderAccount(a) {
           b.addEventListener('click', () => ask(action, a, c));
           r.append(b);
         }
-      } else r.append(el('small', null, c.managed === true ? 'Account changes unavailable' : 'Managed outside Wizard'));
+      }
       det.append(r);
     }
     li.append(det);
@@ -112,7 +109,7 @@ function render(data) {
   $('empty').hidden = n > 0;
   $('add').hidden = !allowed('add');
   $('add').disabled = busy || !allowed('add');
-  $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  $('add').textContent = n ? '+ Add' : 'Sign in';
 }
 
 async function refresh() {
@@ -120,11 +117,11 @@ async function refresh() {
   try {
     const data = await api('api/accounts');
     render(data);
-    $('message').textContent = !manageable() ? (data.management?.message || 'Account changes unavailable; subscriptions remain read-only.') : (data.error || '');
+    $('message').textContent = data.error ? 'Problem reading accounts.' : '';
   } catch {
     if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
     $('add').hidden = true;
-    $('message').textContent = 'Could not reach Hermes. Showing the last reading. Account changes unavailable.';
+    $('message').textContent = 'Offline. Showing last reading.';
   } finally { $('refresh').classList.remove('spin'); }
 }
 
@@ -143,18 +140,16 @@ function ask(action, account, credential) {
   $('steps').hidden = true; $('nick').value = ''; setStatus('');
   $('nick-wrap').hidden = action !== 'add';
   if (action === 'add') {
-    $('dlg-title').textContent = `Add a ${b} subscription`;
-    $('dlg-text').textContent = provider() === 'chatgpt'
-      ? 'Use a ChatGPT account that is not listed yet. If your browser is already signed in to ChatGPT, sign out first or open the link in a private window, otherwise the same account is added again.'
-      : 'Sign in with the Claude account you want to add. You will paste a code back here.';
-    showButtons({go: true, goLabel: 'Start sign-in'});
+    $('dlg-title').textContent = `Sign in to ${b}`;
+    $('dlg-text').textContent = provider() === 'chatgpt' && hermesAccounts().length ? 'Use an account not listed yet.' : '';
+    showButtons({go: true, goLabel: 'Continue'});
   } else if (action === 'reconnect') {
     $('dlg-title').textContent = `Reconnect ${account.name}`;
-    $('dlg-text').textContent = 'Sign in again with this same account. The current sign-in stays until you remove it.';
-    showButtons({go: true, goLabel: 'Start sign-in'});
+    $('dlg-text').textContent = '';
+    showButtons({go: true, goLabel: 'Continue'});
   } else {
     $('dlg-title').textContent = 'Remove this sign-in?';
-    $('dlg-text').textContent = `${grantName(credential)} on ${account.name}. Your agent stops using it. Other sign-ins stay.`;
+    $('dlg-text').textContent = `${grantName(credential)} · ${account.name}`;
     showButtons({go: true, goLabel: 'Remove', danger: true});
   }
   if (!$('manage').open) $('manage').showModal();
@@ -165,12 +160,12 @@ async function start() {
   if (!allowed(action, account, credential)) return;
   busy = true; $('add').disabled = true; $('go').disabled = true; $('cancel').disabled = true;
   before = hermesAccounts().length;
-  setStatus(action === 'remove' ? 'Removing…' : 'Starting sign-in…');
+  setStatus(action === 'remove' ? 'Removing…' : 'Starting…');
   try {
     display(await api('api/operations', {action, target: credential?.id, label: action === 'add' ? $('nick').value.trim() : '', confirmed: true}));
   } catch (e) {
     busy = false; $('add').disabled = false;
-    setStatus(e.status === 409 ? 'Another sign-in is already running. Finish or cancel it first.' : 'Could not start. Nothing was changed; try again in a moment.', 'err');
+    setStatus(e.status === 409 ? 'Another sign-in is running.' : 'Could not start. Try again.', 'err');
     showButtons({cancel: true, cancelLabel: 'Close'});
   }
 }
@@ -184,11 +179,11 @@ function display(job) {
     $('dlg-text').textContent = '';
     $('steps').hidden = !(job.url || job.userCode || job.inputRequired);
     $('signin').href = job.url || '#'; $('signin-step').hidden = !job.url;
-    $('signin').textContent = `Open ${brand()} sign-in`;
+    $('signin').textContent = 'Open sign-in';
     $('code-step').hidden = !job.userCode; $('user-code').textContent = job.userCode || '';
     $('paste-step').hidden = !job.inputRequired;
-    setStatus(job.url ? 'Waiting for you to finish signing in…' : 'Starting sign-in…', 'wait');
-    showButtons({cancel: true, cancelLabel: 'Cancel sign-in'});
+    setStatus(job.url ? 'Waiting…' : 'Starting…', 'wait');
+    showButtons({cancel: true, cancelLabel: 'Cancel'});
     sessionStorage.setItem('account-operation', job.id);
     timer = setTimeout(poll, 1500);
     return;
@@ -197,17 +192,17 @@ function display(job) {
   busy = false; $('steps').hidden = true;
   showButtons({cancel: false, close: true});
   const done = {
-    succeeded: job.action === 'remove' ? 'Sign-in removed.' : 'Connected.',
-    cancelled: 'Sign-in cancelled. Nothing changed.',
-    expired: 'The sign-in timed out. Nothing changed; start again when ready.',
-    failed: 'The sign-in did not finish. Nothing changed; try again.',
-    needs_review: 'Not sure whether this finished. Check the list before trying again.'
+    succeeded: job.action === 'remove' ? 'Removed.' : 'Connected.',
+    cancelled: 'Cancelled.',
+    expired: 'Timed out. Try again.',
+    failed: 'Did not finish. Try again.',
+    needs_review: 'Unclear. Check the list first.'
   }[job.status];
   setStatus(done, job.status === 'succeeded' ? 'ok' : (job.status === 'cancelled' ? '' : 'err'));
   refresh().then(() => {
     if (job.status === 'succeeded' && job.action === 'add' && before > 0 && hermesAccounts().length <= before) {
-      $('dlg-title').textContent = 'That account is already here';
-      setStatus(`You signed in to an account that is already listed, so no new subscription was added. Sign out of ${brand()} in your browser (or use a private window), then add again with the other account.`, 'err');
+      $('dlg-title').textContent = 'Already added';
+      setStatus(`That account is already listed. Sign out of ${brand()} in your browser or use a private window.`, 'err');
     }
   });
 }
@@ -218,7 +213,7 @@ async function poll() {
   catch (e) {
     if (active?.id !== id || TERMINAL.has(active.status)) return;
     if (e.status === 404) display({...active, status: 'needs_review'});
-    else { setStatus('Checking status…'); timer = setTimeout(poll, 3000); }
+    else { setStatus('Checking…'); timer = setTimeout(poll, 3000); }
   }
 }
 
@@ -227,7 +222,7 @@ $('cancel').addEventListener('click', async () => {
   if (!busy || !active?.id) { $('manage').close(); return; }
   $('cancel').disabled = true; setStatus('Cancelling…');
   try { display(await api('api/operations', {action: 'cancel', operation: active.id})); }
-  catch { setStatus('Cancel not confirmed yet; checking…'); $('cancel').disabled = false; }
+  catch { setStatus('Checking…'); $('cancel').disabled = false; }
 });
 $('close').addEventListener('click', () => $('manage').close());
 $('manage').addEventListener('cancel', e => { if (busy) e.preventDefault(); });
@@ -239,9 +234,9 @@ $('copy').addEventListener('click', async () => {
 });
 $('submit-code').addEventListener('click', async () => {
   const code = $('code').value.trim(); if (!code) return;
-  $('code').value = ''; $('submit-code').disabled = true; setStatus('Checking code…');
+  $('code').value = ''; $('submit-code').disabled = true; setStatus('Checking…');
   try { display(await api('api/operations', {action: 'submit', operation: active.id, code})); }
-  catch { setStatus('Not sure the code went through; checking. Do not paste it again.'); }
+  catch { setStatus('Checking… do not paste again.'); }
   finally { $('submit-code').disabled = false; }
 });
 $('refresh').addEventListener('click', refresh);
@@ -252,6 +247,6 @@ refresh();
 const saved = sessionStorage.getItem('account-operation');
 if (saved && /^[A-Za-z0-9_-]{20,64}$/.test(saved)) {
   busy = true; $('add').disabled = true; active = {id: saved};
-  $('dlg-title').textContent = 'Sign-in in progress'; $('dlg-text').textContent = ''; $('nick-wrap').hidden = true;
-  showButtons({cancel: true, cancelLabel: 'Cancel sign-in'}); $('manage').showModal(); poll();
+  $('dlg-title').textContent = 'Signing in'; $('dlg-text').textContent = ''; $('nick-wrap').hidden = true;
+  showButtons({cancel: true, cancelLabel: 'Cancel'}); $('manage').showModal(); poll();
 }
