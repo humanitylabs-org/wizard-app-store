@@ -16,6 +16,10 @@ MAX_BODY = 256 * 1024
 CODES = {"signed_out", "expired", "limit", "unreachable", "provider_error"}
 SLOTS = threading.BoundedSemaphore(2)
 TIMEOUT_S = 120
+from warm_spare import WarmSpare
+FAST_SPARE = WarmSpare()
+# Canonical CLI usage id and its explicitly supported immutable snapshot.
+SNAPSHOTS = {"claude-haiku-4-5": {"claude-haiku-4-5-20251001"}}
 
 
 class Fault(Exception):
@@ -173,6 +177,7 @@ def kill(child):
 def run(data, cli, directory, work):
     """Yield provisional text; done requires the CLI's successful effective-model result."""
     token = credential(directory)
+    fast = data["model"] == "claude-haiku-4-5" and "web_search" not in data.get("abilities", [])
     work.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="infer-", dir=work) as root:
         root = Path(root)
@@ -182,19 +187,51 @@ def run(data, cli, directory, work):
                "CLAUDE_CONFIG_DIR": str(root / "config"), "TMPDIR": str(root), "LANG": "C.UTF-8",
                "CLAUDE_CODE_OAUTH_TOKEN": token, "DISABLE_AUTOUPDATER": "1",
                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+        if fast:
+            env.update(CLAUDE_CODE_DISABLE_THINKING="1", MAX_THINKING_TOKENS="0")
         web = "web_search" in data.get("abilities", [])
         tools = "WebSearch" if web else ""
         argv = [cli, "-p", "--safe-mode", "--system-prompt", data.get("system", ""), "--no-session-persistence",
                 "--tools", tools, "--allowedTools", tools, "--disable-slash-commands", "--setting-sources", "",
                 "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--model", data["model"],
                 "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--max-turns", "8" if web else "1"]
+        if fast:
+            argv += ["--input-format", "stream-json"]
         prompt = (data["messages"][0]["content"] if len(data["messages"]) == 1 and data["messages"][0]["role"] == "user"
                   else "Reply to the final user message in this supplied conversation:\n" + json.dumps(data["messages"]))
-        child = None
-        deadline = time.monotonic() + TIMEOUT_S
+        key = hashlib.sha256(json.dumps([cli, data["model"], data.get("system", ""), token]).encode()).digest()
+        def spawn_spare():
+            temp = tempfile.TemporaryDirectory(prefix="fast-spare-", dir=work)
+            spare_root = Path(temp.name)
+            for folder in ("home", "config", "cwd"):
+                (spare_root / folder).mkdir(mode=0o700)
+            spare_env = {**env, "HOME":str(spare_root/"home"), "CLAUDE_CONFIG_DIR":str(spare_root/"config"), "TMPDIR":str(spare_root)}
+            try:
+                proc = subprocess.Popen(argv, env=spare_env, cwd=spare_root / "cwd", stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+            except Exception:
+                temp.cleanup()
+                raise
+            def dispose():
+                kill(proc)
+                proc.wait(timeout=5)
+                proc.stdin.close()
+                proc.stdout.close()
+                temp.cleanup()
+            return proc, dispose
+        if fast:
+            prompt = json.dumps({"type":"user", "message":{"role":"user", "content":prompt}}) + "\n"
+        child, dispose = None, None
+        deadline = time.monotonic() + (30 if fast else TIMEOUT_S)
         try:
-            child = subprocess.Popen(argv, env=env, cwd=root / "cwd", stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+            spare = FAST_SPARE.take(key) if fast else None
+            if spare:
+                child, dispose = spare
+            else:
+                child = subprocess.Popen(argv, env=env, cwd=root / "cwd", stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+            if fast:
+                FAST_SPARE.arm(key, spawn_spare)
             def write():
                 try:
                     child.stdin.write(prompt.encode())
@@ -252,7 +289,7 @@ def run(data, cli, directory, work):
             if pending.strip() or code or not result or result.get("is_error") or result.get("subtype") != "success":
                 raise Fault(failure(result), "Claude did not complete inference.")
             used = result.get("modelUsage", {})
-            if (set(used) != {data["model"]} or assistant_models - set(used) or result.get("permission_denials")):
+            if (set(used) != {data["model"]} or assistant_models - (set(used) | SNAPSHOTS.get(data["model"], set())) or result.get("permission_denials")):
                 raise Fault(message="Effective model or tool permission differs from the approved request.")
             if "".join(texts) != result.get("result"):
                 raise Fault(message="Final text differs from streamed text.")
@@ -274,6 +311,8 @@ def run(data, cli, directory, work):
                 writer.join(timeout=5)
                 child.stdin.close()
                 child.stdout.close()
+            if dispose:
+                dispose()
 
 
 def handle(handler, cli, directory, work):

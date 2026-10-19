@@ -14,7 +14,7 @@ test("router publishes immutable dual-architecture images only after unit and co
   expect(publish).toBeGreaterThan(smoke);
   expect(steps[publish].if).toBe("github.event_name != 'pull_request'");
   expect(steps[publish].with.platforms).toBe("linux/amd64,linux/arm64");
-  expect(steps[publish].with.tags).toBe("ghcr.io/humanitylabs-org/wizard-connection-router:0.1.1");
+  expect(steps[publish].with.tags).toBe("ghcr.io/humanitylabs-org/wizard-connection-router:0.1.2");
   const dockerfile = readFileSync("images/wizard-connection-router/Dockerfile", "utf8");
   expect(dockerfile).toContain("USER 1000:1000");
   expect(dockerfile).toMatch(/FROM python:3\.12-alpine@sha256:[0-9a-f]{64}/);

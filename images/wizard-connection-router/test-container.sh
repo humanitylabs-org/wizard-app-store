@@ -19,7 +19,7 @@ base = 'http://127.0.0.1:8802'
 for attempt in range(30):
     try:
         with urllib.request.urlopen(base + '/health', timeout=2) as r:
-            assert json.load(r) == {'ok': True, 'version': '0.1.1'}
+            assert json.load(r) == {'ok': True, 'version': '0.1.2'}
         break
     except OSError:
         if attempt == 29:

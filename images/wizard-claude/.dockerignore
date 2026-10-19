@@ -3,6 +3,7 @@
 !fetch-claude-code.py
 !server.py
 !inference.py
+!warm_spare.py
 !models.json
 !usage.py
 !SKILL.md

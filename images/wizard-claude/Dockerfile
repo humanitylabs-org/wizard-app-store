@@ -15,7 +15,7 @@ COPY --from=claude --chmod=0755 /claude /usr/local/bin/claude
 # /claude is the shared login volume. A fresh named volume copies this owner and mode, so the first
 # app to start (this one, AI Accounts or Hermes Agent) creates it as 1000:1000 0700.
 RUN mkdir -p /app/static /claude && chown 1000:1000 /claude && chmod 0700 /claude
-COPY --chmod=0444 server.py usage.py inference.py models.json SKILL.md LICENSE /app/
+COPY --chmod=0444 server.py usage.py inference.py warm_spare.py models.json SKILL.md LICENSE /app/
 COPY --chmod=0444 static/ /app/static/
 USER 1000:1000
 WORKDIR /app

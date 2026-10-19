@@ -17,6 +17,15 @@ assert Path(os.environ['CLAUDE_CONFIG_DIR']).parent == Path.cwd().parent
 assert not list(Path(os.environ['CLAUDE_CONFIG_DIR']).iterdir())
 mode = sys.stdin.read()
 model = args[args.index('--model') + 1]
+if '--input-format' in args:
+    assert os.environ.get('CLAUDE_CODE_DISABLE_THINKING') == '1'
+    assert os.environ.get('MAX_THINKING_TOKENS') == '0'
+    mode = json.loads(mode)['message']['content']
+assistant_model = model
+if mode == 'snapshot':
+    assistant_model = 'claude-haiku-4-5-20251001'
+if mode == 'wrong-snapshot':
+    assistant_model = 'claude-haiku-4-5-unknown'
 if mode == 'stall':
     import time
     time.sleep(60)
@@ -28,7 +37,7 @@ if mode == 'bad-json':
 if mode.startswith('error:'):
     print(json.dumps({'type': 'result', 'is_error': True, 'result': mode[6:]}), flush=True)
     sys.exit(1)
-print(json.dumps({'type': 'assistant', 'message': {'model': model, 'content': []}}), flush=True)
+print(json.dumps({'type': 'assistant', 'message': {'model': assistant_model, 'content': []}}), flush=True)
 print(json.dumps({'type': 'stream_event', 'event': {'delta': {'type': 'text_delta', 'text': 'hello'}}}), flush=True)
 if mode != 'missing':
     result = {'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'hello',
