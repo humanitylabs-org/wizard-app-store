@@ -34,7 +34,7 @@ import inference
 
 import usage
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
@@ -46,7 +46,9 @@ LOGIN_TTL = 15 * 60
 SIGN_IN_HOSTS = {"claude.com", "claude.ai", "console.anthropic.com", "platform.claude.com"}
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]")
 URL = re.compile(r"https://[^\s\"'<>]+")
-STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
+          "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
+          "/appearance.css": ("appearance.css", "text/css; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/app.css": ("app.css", "text/css; charset=utf-8"), "/SKILL.md": ("SKILL.md", "text/markdown; charset=utf-8")}
 # Owner-data routes are box-only: the same port is published on the tailnet (Serve, tunnels and
 # proxies add these headers), while agents and the Agent Service call the app on the app network.

@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inference
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 CONTRACT = "wizard.ai-connection/2"
 APP = Path(__file__).resolve().parent
 BIND = os.environ.get("WIZARD_CHATGPT_BIND", "0.0.0.0")
@@ -47,7 +47,9 @@ CODEX = "openai-codex"   # Hermes' provider id for a ChatGPT subscription
 CHATGPT_HOSTS = {"auth.openai.com"}
 CACHE_S = 60
 URL = re.compile(r"https://[^\s\"'<>]+")
-STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
+          "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
+          "/appearance.css": ("appearance.css", "text/css; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/app.css": ("app.css", "text/css; charset=utf-8"), "/SKILL.md": ("SKILL.md", "text/markdown; charset=utf-8")}
 # Owner-data routes are box-only: the same port is published on the tailnet (Serve, tunnels and
 # proxies add these headers), while agents and the Agent Service call the app on the app network.
