@@ -13,7 +13,7 @@ import json, os, pathlib, subprocess, sys, time, urllib.request, urllib.error
 from urllib.parse import urlsplit, parse_qs
 assert os.getuid() == 1000 and os.getgid() == 1000, "must run as 1000:1000"
 files = sorted(str(p.relative_to("/app")) for p in pathlib.Path("/app").rglob("*") if p.is_file())
-assert files == ["LICENSE", "SKILL.md", "inference.py", "models.json", "server.py", "static/app.css", "static/app.js", "static/index.html", "usage.py"], files
+assert files == ["LICENSE", "SKILL.md", "inference.py", "models.json", "server.py", "static/app.css", "static/app.js", "static/appearance.css", "static/appearance.js", "static/index.html", "usage.py"], files
 v = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
 assert v.startswith(os.environ["CLAUDE_CODE_VERSION"] + " "), v
 assert os.environ["DISABLE_AUTOUPDATER"] == "1"
@@ -37,7 +37,7 @@ health = json.loads(body); assert health["status"] == "ok" and health["claude_co
 code, body = req("/"); assert code == 200 and b"<title>Claude</title>" in body
 h = urllib.request.urlopen(B + "/", timeout=30).headers
 assert h["Content-Security-Policy"].split("frame-ancestors ")[1].startswith(chr(39) + "self" + chr(39) + ";") and h["X-Frame-Options"] == "SAMEORIGIN", dict(h)
-for f in ("/app.js", "/app.css", "/SKILL.md"): assert req(f)[0] == 200, f
+for f in ("/app.js", "/app.css", "/appearance.js", "/appearance.css", "/SKILL.md"): assert req(f)[0] == 200, f
 code, body = req("/.well-known/mcp/server-cards.json"); cardj = json.loads(body)
 assert cardj["x-wizard"]["kind"] == "system-agent-app" and cardj["x-wizard"]["provides"] == ["ai-connection", "claude-subscription"], cardj
 assert cardj["name"] == "wizard-claude" and cardj["x-wizard"]["contract"] == "wizard.ai-connection/2", cardj

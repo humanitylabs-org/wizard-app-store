@@ -42,11 +42,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/wizard-connection-router:0.1.0
+          tags: ghcr.io/humanitylabs-org/wizard-connection-router:0.1.1
       - name: Published image passes the same checks
         if: github.event_name != 'pull_request'
         run: |
-          docker pull ghcr.io/humanitylabs-org/wizard-connection-router:0.1.0
-          SKIP_BUILD=1 WIZARD_ROUTER_IMAGE=ghcr.io/humanitylabs-org/wizard-connection-router:0.1.0 sh images/wizard-connection-router/test-container.sh
-          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-connection-router:0.1.0 | grep -q linux/arm64
-# Publishes only after store, unit and container checks pass. Never re-push 0.1.0: bump the tag.
+          docker pull ghcr.io/humanitylabs-org/wizard-connection-router:0.1.1
+          SKIP_BUILD=1 WIZARD_ROUTER_IMAGE=ghcr.io/humanitylabs-org/wizard-connection-router:0.1.1 sh images/wizard-connection-router/test-container.sh
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-connection-router:0.1.1 | grep -q linux/arm64
+# Publishes only after store, unit and container checks pass. Never re-push 0.1.1: bump the tag.
