@@ -2,6 +2,8 @@
 !Dockerfile
 !fetch-claude-code.py
 !server.py
+!inference.py
+!models.json
 !usage.py
 !SKILL.md
 !LICENSE

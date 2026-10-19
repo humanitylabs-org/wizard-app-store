@@ -1,0 +1,34 @@
+{
+  "models": [
+    {
+      "id": "claude-haiku-4-5",
+      "label": "Claude Haiku 4.5",
+      "tier": "fast",
+      "abilities": [
+        "text",
+        "streaming",
+        "web_search"
+      ]
+    },
+    {
+      "id": "claude-sonnet-5",
+      "label": "Claude Sonnet 5",
+      "tier": "standard",
+      "abilities": [
+        "text",
+        "streaming",
+        "web_search"
+      ]
+    },
+    {
+      "id": "claude-opus-5-5",
+      "label": "Claude Opus 5.5",
+      "tier": "frontier",
+      "abilities": [
+        "text",
+        "streaming",
+        "web_search"
+      ]
+    }
+  ]
+}

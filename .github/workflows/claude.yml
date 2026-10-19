@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
     paths: ['images/wizard-claude/**', '__tests__/claude.test.ts', '.github/workflows/claude.yml']
+  pull_request:
+    branches: [main]
+    paths: ['images/wizard-claude/**', '__tests__/claude.test.ts', '.github/workflows/claude.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,24 +25,29 @@ jobs:
         run: python3 -I images/wizard-claude/test-usage.py
       - name: Build and test Claude image (pinned Claude Code, logged-out contract, login/test/logout paths, box-only, no token surface)
         run: sh images/wizard-claude/test-container.sh
+      - name: Isolated inference contract tests (fake providers only)
+        run: python3 -I images/wizard-claude/test-inference.py -v
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish tested Claude (amd64 and arm64)
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: images/wizard-claude
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/wizard-claude:0.1.2
+          tags: ghcr.io/humanitylabs-org/wizard-claude:0.2.0
       - name: Published image passes the same checks
+        if: github.event_name != 'pull_request'
         run: |
-          docker pull ghcr.io/humanitylabs-org/wizard-claude:0.1.2
-          SKIP_BUILD=1 WIZARD_CLAUDE_IMAGE=ghcr.io/humanitylabs-org/wizard-claude:0.1.2 sh images/wizard-claude/test-container.sh
-          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.1.2 | grep -q linux/arm64
-# Publishes only after store, unit and container checks pass. Never re-push 0.1.2: bump the tag.
+          docker pull ghcr.io/humanitylabs-org/wizard-claude:0.2.0
+          SKIP_BUILD=1 WIZARD_CLAUDE_IMAGE=ghcr.io/humanitylabs-org/wizard-claude:0.2.0 sh images/wizard-claude/test-container.sh
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.2.0 | grep -q linux/arm64
+# Publishes only after store, unit and container checks pass. Never re-push 0.2.0: bump the tag.

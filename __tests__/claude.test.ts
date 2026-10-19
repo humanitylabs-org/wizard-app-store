@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 
 // Claude (wizard-claude): the per-provider AI connection app (decision #61). Its recipe lives in
-// oscarhenrycollins/claude-connection; this store keeps only the image source and CI.
+// Release fork: humanitylabs-org/claude-connection; this store keeps only the image source and CI.
 const dir = "images/wizard-claude";
 const workflow = parse(readFileSync(".github/workflows/claude.yml", "utf8"));
 
@@ -32,11 +32,13 @@ test("only usage.py touches the credential file, and nothing refreshes the token
 
 test("every file the Dockerfile copies is allowed by .dockerignore", () => {
   const ignore = readFileSync(`${dir}/.dockerignore`, "utf8");
-  for (const f of ["server.py", "usage.py", "SKILL.md", "LICENSE", "fetch-claude-code.py", "static/"]) expect(ignore).toContain(`!${f}`);
+  for (const f of ["inference.py", "models.json", "server.py", "usage.py", "SKILL.md", "LICENSE", "fetch-claude-code.py", "static/"]) expect(ignore).toContain(`!${f}`);
 });
 
 test("workflow tests before it publishes, then checks the published image", () => {
   const steps = workflow.jobs.claude.steps.map((s: { name?: string; run?: string; uses?: string }) => s.name ?? s.run ?? s.uses);
+  const inference = workflow.jobs.claude.steps.findIndex((s: { run?: string }) => s.run?.includes("test-inference.py"));
+  expect(inference).toBeGreaterThan(-1);
   const publish = steps.findIndex((s: string) => s.startsWith("Publish"));
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Build and test Claude")));
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Usage normalization")));

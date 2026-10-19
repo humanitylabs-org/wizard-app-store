@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usage  # noqa: E402
+import inference
 
 TOKEN = "sk-ant-oat01-TEST-ACCESS-TOKEN-should-never-leak"
 REFRESH = "sk-ant-ort01-TEST-REFRESH-TOKEN-should-never-leak"
@@ -123,6 +124,10 @@ def main():
 
     def reader():
         return usage.ConnectionReader(d, url, now=lambda: clock[0], timeout_s=2)
+
+    # /2 is additive: catalogue is separate; legacy usage values remain byte-for-byte compatible.
+    assert [m["tier"] for m in inference.models()] == ["fast", "standard", "frontier"]
+    assert all("web_search" in m["abilities"] for m in inference.models())
 
     # Normalization: exactly the Agent Service rows.
     assert usage.claude_limits(CURRENT) == EXPECTED_CURRENT_LIMITS, usage.claude_limits(CURRENT)
