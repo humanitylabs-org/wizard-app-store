@@ -13,7 +13,7 @@ import json, os, pathlib, subprocess, sys, time, urllib.request, urllib.error
 from urllib.parse import urlsplit, parse_qs
 assert os.getuid() == 1000 and os.getgid() == 1000, "must run as 1000:1000"
 files = sorted(str(p.relative_to("/app")) for p in pathlib.Path("/app").rglob("*") if p.is_file())
-assert files == ["LICENSE", "SKILL.md", "inference.py", "models.json", "server.py", "static/app.css", "static/app.js", "static/appearance.css", "static/appearance.js", "static/index.html", "usage.py"], files
+assert files == ["LICENSE", "SKILL.md", "inference.py", "models.json", "server.py", "static/app.css", "static/app.js", "static/appearance.css", "static/appearance.js", "static/index.html", "usage.py", "warm_spare.py"], files
 v = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
 assert v.startswith(os.environ["CLAUDE_CODE_VERSION"] + " "), v
 assert os.environ["DISABLE_AUTOUPDATER"] == "1"
