@@ -38,6 +38,7 @@ class InferenceTests(unittest.TestCase):
         self.thread.join()
         self.settings.stop()
         self.env.stop()
+        inference.FAST_SPARE.close()
         self.tmp.cleanup()
 
     def call(self, data=None, headers=None, path='/api/infer', raw=None):
@@ -61,6 +62,30 @@ class InferenceTests(unittest.TestCase):
         self.assertEqual(done['usage']['output_tokens'], 1)
         self.assertNotIn('fake-only', text)
         self.assertEqual(list((self.root / 'work').iterdir()), [])
+
+    def test_fast_single_use_spare_and_exact_snapshot(self):
+        import time
+        data = {'model':'claude-haiku-4-5','system':'Fixed system','messages':[{'role':'user','content':'snapshot'}], 'abilities':['text','streaming']}
+        for _ in range(2):
+            status, text = self.call(data)
+            self.assertEqual(status, 200)
+            self.assertIn('event: done', text)
+            done = json.loads(text.split('event: done\ndata: ')[1])
+            self.assertEqual(done['model'], 'claude-haiku-4-5')
+            for attempt in range(100):
+                if not inference.FAST_SPARE.arming:
+                    break
+                time.sleep(.005)
+        self.assertIsNotNone(inference.FAST_SPARE.spare)
+        _, text = self.call({**data, 'messages':[{'role':'user','content':'wrong-snapshot'}]})
+        self.assertNotIn('event: done', text)
+        self.assertIn('provider_error', text)
+        for attempt in range(100):
+            if not inference.FAST_SPARE.arming:
+                break
+            time.sleep(.005)
+        inference.FAST_SPARE.close()
+        self.assertEqual(list((self.root/'work').iterdir()), [])
 
     def test_web_opt_in(self):
         data = {'model': 'claude-sonnet-5', 'messages': [{'role': 'user', 'content': 'hello'}], 'abilities': ['web_search']}
