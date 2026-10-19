@@ -19,7 +19,7 @@ base = 'http://127.0.0.1:8802'
 for attempt in range(30):
     try:
         with urllib.request.urlopen(base + '/health', timeout=2) as r:
-            assert json.load(r) == {'ok': True, 'version': '0.1.0'}
+            assert json.load(r) == {'ok': True, 'version': '0.1.1'}
         break
     except OSError:
         if attempt == 29:
@@ -27,6 +27,9 @@ for attempt in range(30):
         time.sleep(.2)
 with urllib.request.urlopen(base + '/') as r:
     assert b'Connection Router' in r.read()
+for asset in ('appearance.js', 'appearance.css'):
+    with urllib.request.urlopen(base + '/' + asset) as r:
+        assert r.status == 200 and r.read()
 with urllib.request.urlopen(base + '/v1/owner/routes') as r:
     routes = json.load(r)
     assert routes['routes'] == []
