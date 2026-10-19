@@ -1,9 +1,10 @@
 """Claude: the owner connects his Claude subscription once; agent apps on the same server reuse it.
 
-A Wizard AI connection app (contract wizard.ai-connection/1, decision #61). The login, test and
-logout run the unmodified official Claude Code CLI. The only code that opens the credential file is
-usage.py, which reads the access token solely to ask Anthropic for this account's usage limits; no
-route serves, copies or logs it, and nothing here refreshes it.
+A Wizard AI connection app (contract wizard.ai-connection/2, decisions #61 and #65).
+Login, test and logout run the unmodified official CLI. usage.py reads the app-owned
+access credential for usage; inference.py passes it only in the isolated
+CLI child environment for router-authorized inference. No route serves or logs credentials;
+refresh remains owned by the official CLI login/test flow.
 """
 from __future__ import annotations
 
@@ -27,9 +28,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# Also supports the existing isolated (-I) launch used by the test harness.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import inference
+
 import usage
 
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
@@ -318,7 +323,7 @@ def card(host: str) -> dict:
         "x-wizard": {
             "kind": "system-agent-app",
             "provides": ["ai-connection", "claude-subscription"],
-            "contract": usage.CONTRACT,
+            "contract": "wizard.ai-connection/2",
             "skill": f"{base}/SKILL.md",
             "connection_api": f"{base}/api/connection",
             "shared_volume": {"name": "wizard-ai-accounts-claude", "mount": "/claude", "uid": 1000, "gid": 1000,
@@ -359,6 +364,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send(code, json.dumps(data).encode(), "application/json")
 
     def authorized(self, path: str) -> bool:
+        if path == "/api/connection" and self.headers.get("X-Wizard-Grant"):
+            try:
+                if inference.admit(self.headers):
+                    return True
+            except inference.Fault as e:
+                self.json(e.status, e.payload())
+                return False
         if not PASSWORD or path == "/health":
             return True
         header = self.headers.get("Authorization", "")
@@ -393,7 +405,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/connection":
             if self.proxied():
                 return self.json(403, {"error": "box-only: call this from the server (app network or 127.0.0.1)"})
-            return self.json(200, renew_if_expired(CONNECTION.read()))
+            answer = renew_if_expired(CONNECTION.read())
+            if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+                # Service-supplied subscription credential, never written to the login volume.
+                answer = {**answer, "status": "connected", "error": None}
+            try:
+                return self.json(200, {**answer, "contract": "wizard.ai-connection/2", "models": inference.models()})
+            except inference.Fault as e:
+                return self.json(200, {**answer, "contract": "wizard.ai-connection/2", "models": [], "models_error": {"code": e.code, "message": str(e)}})
         if path == "/api/accounts":
             login = State.login
             claude = {"id": "claude-subscription", "name": "Claude subscription", "kind": "subscription",
@@ -408,6 +427,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == "/api/infer":
+            return inference.handle(self, CLAUDE, CLAUDE_DIR, WORK)
         if not self.authorized(path):
             return
         origin = self.headers.get("Origin")

@@ -1,0 +1,52 @@
+name: Build Connection Router
+on:
+  push:
+    branches: [main]
+    paths: ['images/wizard-connection-router/**', '__tests__/router.test.ts', '.github/workflows/router.yml']
+  pull_request:
+    branches: [main]
+    paths: ['images/wizard-connection-router/**', '__tests__/router.test.ts', '.github/workflows/router.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  router:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci && npm test && npx tsc --noEmit
+      - name: Router unit and integration suite (fake providers only)
+        working-directory: images/wizard-connection-router
+        run: python3 -m unittest discover -v
+      - name: Build and test Router image (health, page, empty routes, owner boundary)
+        run: sh images/wizard-connection-router/test-container.sh
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested Connection Router (amd64 and arm64)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: images/wizard-connection-router
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ghcr.io/humanitylabs-org/wizard-connection-router:0.1.0
+      - name: Published image passes the same checks
+        if: github.event_name != 'pull_request'
+        run: |
+          docker pull ghcr.io/humanitylabs-org/wizard-connection-router:0.1.0
+          SKIP_BUILD=1 WIZARD_ROUTER_IMAGE=ghcr.io/humanitylabs-org/wizard-connection-router:0.1.0 sh images/wizard-connection-router/test-container.sh
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-connection-router:0.1.0 | grep -q linux/arm64
+# Publishes only after store, unit and container checks pass. Never re-push 0.1.0: bump the tag.

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 
 // ChatGPT (wizard-chatgpt): the per-provider AI connection app (decision #61). Its recipe lives in
-// oscarhenrycollins/chatgpt-connection; this store keeps only the image source and CI.
+// Release fork: humanitylabs-org/chatgpt-connection; this store keeps only the image source and CI.
 const dir = "images/wizard-chatgpt";
 const workflow = parse(readFileSync(".github/workflows/chatgpt.yml", "utf8"));
 
@@ -11,7 +11,7 @@ test("never holds a ChatGPT token: drives the agent's own sign-in through its da
   const server = readFileSync(`${dir}/server.py`, "utf8");
   // Codex refresh tokens are single-use: no auth.json, no token fields, no token endpoint, no usage call.
   expect(server).not.toMatch(/auth\.json|access_token|refresh_token|id_token|oauth\/token|wham|backend-api/);
-  expect(server).toContain('CONTRACT = "wizard.ai-connection/1"');
+  expect(server).toContain('CONTRACT = "wizard.ai-connection/2"');
   expect(server).toContain('"usage": None');
   expect(server).toContain('PROXY_HEADERS = ("tailscale-user-login", "x-forwarded-for", "forwarded", "x-real-ip")');
   expect(server).toMatch(/STATIC = \{"\/": \("index.html"/);
@@ -22,11 +22,13 @@ test("never holds a ChatGPT token: drives the agent's own sign-in through its da
 
 test("every file the Dockerfile copies is allowed by .dockerignore", () => {
   const ignore = readFileSync(`${dir}/.dockerignore`, "utf8");
-  for (const f of ["server.py", "SKILL.md", "LICENSE", "static/"]) expect(ignore).toContain(`!${f}`);
+  for (const f of ["inference.py", "server.py", "SKILL.md", "LICENSE", "static/"]) expect(ignore).toContain(`!${f}`);
 });
 
 test("workflow tests before it publishes, then checks the published image", () => {
   const steps = workflow.jobs.chatgpt.steps.map((s: { name?: string; run?: string; uses?: string }) => s.name ?? s.run ?? s.uses);
+  const inference = workflow.jobs.chatgpt.steps.findIndex((s: { run?: string }) => s.run?.includes("test-inference.py"));
+  expect(inference).toBeGreaterThan(-1);
   const publish = steps.findIndex((s: string) => s.startsWith("Publish"));
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Build and test ChatGPT")));
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Device-code flow")));

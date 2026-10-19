@@ -9,13 +9,13 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     CLAUDE_CODE_VERSION=2.1.296 DISABLE_AUTOUPDATER=1 \
     WIZARD_CLAUDE_CLAUDE_DIR=/claude WIZARD_CLAUDE_PORT=8799
 LABEL org.opencontainers.image.source="https://github.com/humanitylabs-org/wizard-app-store" \
-      org.opencontainers.image.description="Claude: connect a Claude subscription once with the official Claude Code login; agent apps reuse it. Reports wizard.ai-connection/1 status and usage." \
+      org.opencontainers.image.description="Claude: connect a Claude subscription once with the official Claude Code login; agent apps reuse it. Reports wizard.ai-connection/2 status and usage." \
       org.opencontainers.image.licenses="MIT"
 COPY --from=claude --chmod=0755 /claude /usr/local/bin/claude
 # /claude is the shared login volume. A fresh named volume copies this owner and mode, so the first
 # app to start (this one, AI Accounts or Hermes Agent) creates it as 1000:1000 0700.
 RUN mkdir -p /app/static /claude && chown 1000:1000 /claude && chmod 0700 /claude
-COPY --chmod=0444 server.py usage.py SKILL.md LICENSE /app/
+COPY --chmod=0444 server.py usage.py inference.py models.json SKILL.md LICENSE /app/
 COPY --chmod=0444 static/ /app/static/
 USER 1000:1000
 WORKDIR /app

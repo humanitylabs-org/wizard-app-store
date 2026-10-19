@@ -17,7 +17,7 @@ server. It replaces the Claude part of the older AI Accounts app (decision #61: 
   (Hermes Agent from the Wizard App Store). Never read, copy, print or send anything from that folder.
 - Status and usage (read-only, never a token): the MCP tool `connection_status`, or
   `GET http://wizard-claude:8799/api/connection` from the app network. It returns the
-  `wizard.ai-connection/1` shape: `status` (`connected`, `not_connected`, `expired`, `error`), `plan`
+  `wizard.ai-connection/2` shape: `status` (`connected`, `not_connected`, `expired`, `error`), `plan`
   (e.g. `Max 20x`), `account`, and `usage.limits[]` (`label`, `usedPercent`, `remainingPercent`,
   `resetsAt`) plus `usage.paid` (extra usage spend, minor units).
 
@@ -31,6 +31,15 @@ picker, or runs `hermes model`. Don't change the provider or model unless the ow
 If status is `not_connected`, tell the owner: open the Claude app, press **Connect**, sign in, paste the
 code, then press **Test**. If it is `expired`, pressing **Test** lets Claude Code renew the sign-in; if
 that fails, Connect again.
+
+## Isolated model calls (decision #65)
+
+- Apps declare `requires.models` and call the Connection Router, not this provider directly.
+- `/api/connection` now adds a `models` catalogue; existing status, plan, account and usage fields remain.
+- `/api/infer` is a router backend, not an agent API: explicit text only, no persona, memory or session persistence.
+- Text deltas are provisional. Only a final `done` with the approved effective model is success.
+- Never work around `signed_out`, `expired`, `limit`, `unreachable` or `provider_error` by switching accounts/models.
+- Grants are report-only until enforcement is configured. Keep the app on a trusted private network; see README.
 
 ## Limits
 

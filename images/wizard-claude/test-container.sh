@@ -13,7 +13,7 @@ import json, os, pathlib, subprocess, sys, time, urllib.request, urllib.error
 from urllib.parse import urlsplit, parse_qs
 assert os.getuid() == 1000 and os.getgid() == 1000, "must run as 1000:1000"
 files = sorted(str(p.relative_to("/app")) for p in pathlib.Path("/app").rglob("*") if p.is_file())
-assert files == ["LICENSE", "SKILL.md", "server.py", "static/app.css", "static/app.js", "static/index.html", "usage.py"], files
+assert files == ["LICENSE", "SKILL.md", "inference.py", "models.json", "server.py", "static/app.css", "static/app.js", "static/index.html", "usage.py"], files
 v = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
 assert v.startswith(os.environ["CLAUDE_CODE_VERSION"] + " "), v
 assert os.environ["DISABLE_AUTOUPDATER"] == "1"
@@ -40,15 +40,15 @@ assert h["Content-Security-Policy"].split("frame-ancestors ")[1].startswith(chr(
 for f in ("/app.js", "/app.css", "/SKILL.md"): assert req(f)[0] == 200, f
 code, body = req("/.well-known/mcp/server-cards.json"); cardj = json.loads(body)
 assert cardj["x-wizard"]["kind"] == "system-agent-app" and cardj["x-wizard"]["provides"] == ["ai-connection", "claude-subscription"], cardj
-assert cardj["name"] == "wizard-claude" and cardj["x-wizard"]["contract"] == "wizard.ai-connection/1", cardj
+assert cardj["name"] == "wizard-claude" and cardj["x-wizard"]["contract"] == "wizard.ai-connection/2", cardj
 accounts = json.loads(req("/api/accounts")[1])["accounts"]
 assert [a["id"] for a in accounts] == ["claude-subscription"], accounts
 assert accounts[0]["status"] == "not_connected", accounts[0]
-# wizard.ai-connection/1, logged out: exactly the contract keys, no usage, signed_out.
+# wizard.ai-connection/2, logged out: exactly the contract keys, no usage, signed_out.
 code, body = req("/api/connection"); conn = json.loads(body)
-assert code == 200 and conn == {"contract": "wizard.ai-connection/1", "provider": "claude", "name": "Claude",
+assert code == 200 and conn == {"contract": "wizard.ai-connection/2", "provider": "claude", "name": "Claude",
     "status": "not_connected", "plan": None, "account": None, "usage": None,
-    "error": {"code": "signed_out", "message": conn["error"]["message"]}}, conn
+    "error": {"code": "signed_out", "message": conn["error"]["message"]}, "models": json.loads(pathlib.Path("/app/models.json").read_text())["models"]}, conn
 # Box-only: anything that came through Serve, a tunnel or a proxy is refused.
 for h in ({"Tailscale-User-Login": "x@y"}, {"X-Forwarded-For": "1.2.3.4"}, {"Forwarded": "for=1.2.3.4"},
           {"X-Real-IP": "1.2.3.4"}, {"CF-Connecting-IP": "1.2.3.4"}, {"cf-ray": "abc"}):
