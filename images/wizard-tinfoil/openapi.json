@@ -1,0 +1,150 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Tinfoil Connection",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/connection": {
+      "get": {
+        "description": "Box-only wizard.ai-connection/1 status, no secret. No provider I/O; cached last successful verification.",
+        "responses": {
+          "200": {
+            "description": "Successful sanitized result"
+          },
+          "403": {
+            "description": "Untrusted host, origin or forwarded request"
+          }
+        }
+      }
+    },
+    "/api/connect": {
+      "post": {
+        "description": "Verify enclave and list models before atomically saving key. Requires trusted Origin and X-Wizard-Request: 1. No paid inference.",
+        "responses": {
+          "200": {
+            "description": "Successful sanitized result"
+          },
+          "403": {
+            "description": "Untrusted host, origin or forwarded request"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test": {
+      "post": {
+        "description": "Verify stored login and refresh models; empty object. No paid inference.",
+        "responses": {
+          "200": {
+            "description": "Successful sanitized result"
+          },
+          "403": {
+            "description": "Untrusted host, origin or forwarded request"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/disconnect": {
+      "post": {
+        "description": "Delete stored key and rotate local gateway credential; empty object.",
+        "responses": {
+          "200": {
+            "description": "Successful sanitized result"
+          },
+          "403": {
+            "description": "Untrusted host, origin or forwarded request"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "description": "Box-only local bearer-authenticated connected models.",
+        "responses": {
+          "200": {
+            "description": "Successful sanitized result"
+          },
+          "403": {
+            "description": "Untrusted host, origin or forwarded request"
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "description": "Box-only local bearer-authenticated official SDK inference; paid when invoked. Supports buffered SSE. No upstream URL overrides.",
+        "responses": {
+          "200": {
+            "description": "Successful sanitized result"
+          },
+          "403": {
+            "description": "Untrusted host, origin or forwarded request"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "description": "Box-only read-only connection_status MCP.",
+        "responses": {
+          "200": {
+            "description": "Successful sanitized result"
+          },
+          "403": {
+            "description": "Untrusted host, origin or forwarded request"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
