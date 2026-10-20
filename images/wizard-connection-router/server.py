@@ -100,6 +100,28 @@ def fix_for(app):
     return f"/wizard-os-home/?open={app['id']}"
 
 
+def validate_requires(req):
+    if not isinstance(req, dict) or not isinstance(req.get("models", {}), dict) or not isinstance(req.get("services", []), list):
+        raise ValueError()
+    for feature, need in req.get("models", {}).items():
+        if not identifier(feature) or not isinstance(need, dict) or need.get("tier") not in TIERS or not isinstance(need.get("tested_on"), str) or not need["tested_on"] or need.get("swap", "ask") not in ("ask", "never") or type(need.get("private_data", False)) is not bool or not strings(need.get("abilities", [])):
+            raise ValueError()
+    for need in req.get("services", []):
+        if not isinstance(need, dict) or not identifier(need.get("slot")):
+            raise ValueError()
+    return req
+
+
+def read_manifest(root):
+    source = (Path(root) / "wizard.md").read_text()
+    if len(source) > 262144 or not source.startswith("---\n"):
+        raise ValueError()
+    manifest = yaml.safe_load(source.split("---", 2)[1])
+    if not isinstance(manifest, dict):
+        raise ValueError()
+    return manifest
+
+
 class Router:
     def __init__(self, apps_file, data_dir, grants_file=None, timeout=10):
         self.apps_file = Path(apps_file)
@@ -191,10 +213,7 @@ class Router:
                         try:
                             # Ignore a staged recipe until WAM records that exact release.
                             if (root / ".wizard-commit").read_text().strip() == app.get("commit"):
-                                source = (root / "wizard.md").read_text()
-                                if len(source) > 262144 or not source.startswith("---\n"):
-                                    raise ValueError()
-                                manifest = yaml.safe_load(source.split("---", 2)[1])
+                                manifest = read_manifest(root)
                                 # Legacy agent/service manifests can omit version and
                                 # have no declarations. Do not let those unrelated apps
                                 # block every feature; fence any actual declaration.
@@ -210,15 +229,7 @@ class Router:
                 if address:
                     app["api"] = {"internal": address}
                     endpoint(app)  # Fail closed on malformed owner addresses.
-                req = app.get("requires", {})
-                if not isinstance(req, dict) or not isinstance(req.get("models", {}), dict) or not isinstance(req.get("services", []), list):
-                    raise ValueError()
-                for feature, need in req.get("models", {}).items():
-                    if not identifier(feature) or not isinstance(need, dict) or need.get("tier") not in TIERS or not isinstance(need.get("tested_on"), str) or not need["tested_on"] or need.get("swap", "ask") not in ("ask", "never") or type(need.get("private_data", False)) is not bool or not strings(need.get("abilities", [])):
-                        raise ValueError()
-                for need in req.get("services", []):
-                    if not isinstance(need, dict) or not identifier(need.get("slot")):
-                        raise ValueError()
+                validate_requires(app.get("requires", {}))
                 apps[app["id"]] = app
             return data, apps
         except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
@@ -304,19 +315,22 @@ class Router:
             raise Fault("blocked", "Calling app is not installed.", status=403)
         return data, apps, apps[app].get("requires", {}), self.providers(apps)
 
-    def model_need(self, app, feature, need, providers):
+    def model_need(self, app, feature, need, providers, persist=True):
+        # persist=False is the owner preview: it evaluates the same rules but writes nothing.
         key = app + "/" + feature
         route = self.state["routes"].get(key)
         if route and route["tested_on"] != need["tested_on"]:
-            del self.state["routes"][key]
             route = None
-            self.save()
+            if persist:
+                del self.state["routes"][key]
+                self.save()
         if route is None:
             match = next(((pid, m) for pid, m in self.candidates(need, providers) if m["id"] == need["tested_on"]), None)
             if match:
                 route = self.record(app, feature, need, match[0], match[1]["id"], "match")
-                self.state["routes"][key] = route
-                self.save()
+                if persist:
+                    self.state["routes"][key] = route
+                    self.save()
         info = {"feature": feature, **need, "route": route, "fix_url": FIX}
         if route:
             try:
@@ -358,6 +372,48 @@ class Router:
             return {"app": app, "agent_binding": apps[app].get("agent_binding"),
                     "models": [self.model_need(app, f, n, providers) for f, n in req.get("models", {}).items()],
                     "services": [self.service_need(app, n, data, apps) for n in req.get("services", [])]}
+
+    def provider_summary(self, providers):
+        # Names, states and model lists only: enough for the owner sheet to say "Connect X".
+        return [{"id": pid, "name": str(p["app"].get("name") or pid)[:80], "status": p["status"],
+                 "error": p["error"] if p["status"] != "connected" else None, "fix_url": fix_for(p["app"]),
+                 "models": [{"id": m["id"], "label": m["label"], "tier": m["tier"]} for m in p["models"]]}
+                for pid, p in sorted(providers.items())]
+
+    def owner_needs(self, app):
+        with self.lock:
+            result = self.needs(app)
+            _, apps = self.registry()
+            result["providers"] = self.provider_summary(self.providers(apps))
+            return result
+
+    def preview(self, app, commit):
+        """Evaluate a staged release's declaration before it is installed; never records a route."""
+        if not identifier(app) or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise Fault("blocked", "Name an app id and its exact 40-character release commit.", status=400)
+        recipes = os.environ.get("WIZARD_RECIPES_DIR")
+        manifest = None
+        try:
+            for root in sorted(Path(recipes).glob("*/apps/" + app)) if recipes else []:
+                if identifier(root.parent.parent.name) and (root / ".wizard-commit").read_text().strip() == commit:
+                    manifest = read_manifest(root)
+                    break
+            if manifest is not None:
+                if manifest.get("id") != app:
+                    raise ValueError()
+                req = validate_requires(manifest.get("requires", {}))
+        except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+            raise Fault("blocked", "The staged release declaration is malformed.", status=422) from None
+        if manifest is None:
+            raise Fault("blocked", "This release is not staged on this Wizard yet.", status=404)
+        with self.lock:
+            _, apps = self.registry()
+            providers = self.providers(apps)
+            return {"app": app, "commit": commit, "version": str(manifest.get("version", "")),
+                    "installed": app in apps,
+                    "models": [self.model_need(app, f, n, providers, persist=False) for f, n in req.get("models", {}).items()],
+                    "services": [{**n, "status": "unchecked"} for n in req.get("services", [])],
+                    "providers": self.provider_summary(providers)}
 
     def approve(self, body):
         app, feature, provider, model = (body.get(k) for k in ("app", "feature", "provider", "model"))
@@ -551,6 +607,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, self.router.approve(self.json_body()))
             if path == "/v1/owner/provider-order" and self.command == "POST":
                 return self.send_json(200, self.router.order(self.json_body()))
+            match = re.fullmatch(r"/v1/owner/needs/([a-z0-9][a-z0-9-]{0,63})", path)
+            if match and self.command == "GET":
+                return self.send_json(200, self.router.owner_needs(match.group(1)))
+            match = re.fullmatch(r"/v1/owner/preview/([a-z0-9][a-z0-9-]{0,63})", path)
+            if match and self.command == "GET":
+                query = dict(x.partition("=")[::2] for x in urlsplit(self.path).query.split("&") if x)
+                return self.send_json(200, self.router.preview(match.group(1), query.get("commit")))
         app = self.router.caller(self.headers)
         if path == "/v1/needs" and self.command == "GET":
             return self.send_json(200, self.router.needs(app))

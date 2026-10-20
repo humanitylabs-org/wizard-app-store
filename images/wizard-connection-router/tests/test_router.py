@@ -6,12 +6,32 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from server import Fault, Router, Server, atomic_json
 from tests.fake_provider import FakeProvider, model
+
+
+COMMIT = "c" * 40
+MANIFEST = """---
+id: wisdom
+version: 0.4.0-test
+requires:
+  models:
+    ask-ai:
+      tier: standard
+      tested_on: claude-sonnet
+      swap: ask
+      abilities: [web_search]
+    chapter-authoring:
+      tier: frontier
+      tested_on: claude-opus
+      swap: never
+---
+"""
 
 
 class RouterTests(unittest.TestCase):
@@ -418,6 +438,66 @@ class RouterTests(unittest.TestCase):
         self.router.state_file.write_text("{\"schema\":1}")
         with self.assertRaises(ValueError):
             Router(self.apps_file, self.root / "data", self.grants_file)
+
+    # Owner sheet: installed-app needs and pre-install preview (shell install sheet).
+    def stage(self, text=MANIFEST, commit=COMMIT):
+        recipe = self.root / "repos/wizardapps/apps/wisdom"
+        recipe.mkdir(parents=True, exist_ok=True)
+        (recipe / ".wizard-commit").write_text(commit)
+        (recipe / "wizard.md").write_text(text)
+        env = patch.dict(os.environ, {"WIZARD_RECIPES_DIR": str(self.root / "repos")})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def preview(self, commit=COMMIT, headers=None):
+        return self.request("/v1/owner/preview/wisdom?commit=" + commit, owner=True, headers=headers)
+
+    def test_preview_reports_match_swap_and_strict_without_writing(self):
+        self.write_apps([self.claude.app(), self.chatgpt.app()])
+        self.claude.models = [model("claude-sonnet", abilities=["web_search"])]
+        self.stage()
+        status, data = self.preview()
+        self.assertEqual(status, 200, data)
+        self.assertFalse(data["installed"])
+        ask, author = data["models"]
+        self.assertEqual((ask["status"], ask["route"]["provider"], ask["route"]["chosen"]), ("ready", "claude", "match"))
+        self.assertEqual((author["status"], author.get("offered")), ("blocked", None))
+        self.assertEqual({p["id"] for p in data["providers"]}, {"claude", "chatgpt"})
+        self.assertFalse((self.root / "data/routes.json").exists(), "preview must never record a route")
+
+    def test_preview_offers_swap_only_when_tested_model_missing(self):
+        self.write_apps([self.chatgpt.app()])
+        self.stage()
+        ask = self.preview()[1]["models"][0]
+        self.assertEqual(ask["status"], "needs_owner")
+        self.assertEqual((ask["offered"]["provider"], ask["offered"]["model"]), ("chatgpt", "gpt-standard"))
+        self.assertFalse((self.root / "data/routes.json").exists())
+
+    def test_preview_requires_exact_staged_commit_and_owner_network_rules(self):
+        self.stage()
+        self.assertEqual(self.preview("d" * 40)[0], 404)
+        self.assertEqual(self.preview("short")[0], 400)
+        self.assertEqual(self.preview(headers={"X-Forwarded-For": "1.2.3.4"})[0], 403)
+        self.stage("---\nid: other\nversion: x\n---\n")
+        self.assertEqual(self.preview()[0], 422)
+
+    def test_preview_without_declaration_is_empty(self):
+        self.stage("---\nid: wisdom\nversion: 1\n---\n")
+        status, data = self.preview()
+        self.assertEqual((status, data["models"], data["services"]), (200, [], []))
+
+    def test_owner_needs_for_installed_app_and_route_after_approval(self):
+        self.write_apps([self.chatgpt.app()])
+        status, data = self.request("/v1/owner/needs/reader", owner=True)
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["models"][0]["status"], "needs_owner")
+        self.assertEqual(data["providers"][0]["id"], "chatgpt")
+        self.approve("chatgpt", "gpt-standard")
+        data = self.request("/v1/owner/needs/reader", owner=True)[1]
+        self.assertEqual((data["models"][0]["status"], data["models"][0]["route"]["chosen"]), ("ready", "owner-swap"))
+        self.assertEqual(self.request("/v1/owner/needs/missing", owner=True)[0], 403)
+        self.assertEqual(self.request("/v1/owner/needs/reader", owner=True, headers={"Origin": "https://x"})[0], 403)
+        self.assertNotIn("grant", json.dumps(data).lower())
 
 
 if __name__ == "__main__":
