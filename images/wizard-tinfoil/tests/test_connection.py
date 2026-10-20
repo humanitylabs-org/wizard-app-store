@@ -112,7 +112,7 @@ class Tests(unittest.TestCase):
             self.assertEqual(json.loads(b)['chatIntegration'],'registered')
         (m,path,body),=calls
         self.assertEqual((m,path),('POST','/api/providers/custom-endpoints'))
-        self.assertEqual(body['model'],'kimi-k3');self.assertEqual(body['models'],['kimi-k3'])
+        self.assertEqual(body['model'],'glm-5-3');self.assertEqual(body['models'],['glm-5-3','kimi-k3'])
         self.assertFalse(body['make_default']);self.assertFalse(body['discover_models'])
         token=json.loads((s.DATA/'gateway-token.json').read_text())['token']
         self.assertEqual(body['api_key'],token);self.assertNotIn(KEY,json.dumps(body))

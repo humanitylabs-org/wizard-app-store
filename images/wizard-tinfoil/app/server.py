@@ -36,7 +36,9 @@ AGENT_BASE = os.environ.get('WIZARD_TINFOIL_AGENT_URL') or (f'http://wizard-tinf
 ENDPOINT_ID = 'wizard-tinfoil'
 # Tinfoil also serves embeddings, speech and tools; only chat models belong in the agent's model list.
 NOT_CHAT = ('embed', 'tts', 'whisper', 'voxtral', 'doc-upload', 'pii-filter', 'websearch', 'safeguard')
-PREFERRED = ('kimi-k3', 'glm-5-3', 'deepseek-v4-1-flash', 'gpt-oss-120b', 'llama3-3-70b')
+# Best first by the Hermes Index (portal.nousresearch.com/bench, 20 Oct 2026); the top REGISTERED become the agent's private choices.
+PREFERRED = ('glm-5-3', 'kimi-k3', 'deepseek-v4-1-flash', 'gpt-oss-120b', 'llama3-3-70b')
+REGISTERED = 2
 def chat_models(models): return [m for m in models if not any(x in m for x in NOT_CHAT)]
 
 def atomic(name, obj):
@@ -71,10 +73,11 @@ def register(models):
     """Add (or refresh) Tinfoil in the agent's model list. Returns 'registered' or 'unavailable'."""
     chat = chat_models(models)
     if not chat: return 'unavailable'
-    model = next((m for m in PREFERRED if m in chat), chat[0])
+    ranked = [m for m in PREFERRED if m in chat] or chat[:1]
+    picked = ranked[:REGISTERED]; model = picked[0]
     token = json.loads((DATA/'gateway-token.json').read_text())['token']
     try:
-        agent_call('POST', '/api/providers/custom-endpoints', {'id':ENDPOINT_ID,'name':'Tinfoil','base_url':AGENT_BASE,'model':model,'models':[model],'api_key':token,'api_mode':'chat_completions','discover_models':False,'make_default':False})
+        agent_call('POST', '/api/providers/custom-endpoints', {'id':ENDPOINT_ID,'name':'Tinfoil','base_url':AGENT_BASE,'model':model,'models':picked,'api_key':token,'api_mode':'chat_completions','discover_models':False,'make_default':False})
         return 'registered'
     except Exception:
         return 'unavailable'
