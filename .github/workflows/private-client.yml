@@ -1,0 +1,59 @@
+name: Build Private Client
+on:
+  push:
+    branches: [main]
+    paths: ['images/wizard-private-client/**', '__tests__/private-client.test.ts', '.github/workflows/private-client.yml']
+  pull_request:
+    branches: [main]
+    paths: ['images/wizard-private-client/**', '__tests__/private-client.test.ts', '.github/workflows/private-client.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  private-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: images/wizard-private-client/package-lock.json
+      - name: Install pinned SDK and audit production dependencies
+        working-directory: images/wizard-private-client
+        run: npm ci --ignore-scripts && npm audit --omit=dev
+      - name: Unit, real EHBP sealing and isolated container checks (no API key)
+        working-directory: images/wizard-private-client
+        run: python3 tests/run.py
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested Private Client (amd64 and arm64)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: images/wizard-private-client
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ghcr.io/humanitylabs-org/wizard-private-client:0.1.0
+      - name: Verify the published runtime under the same restrictions
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        working-directory: images/wizard-private-client
+        run: |
+          docker pull ghcr.io/humanitylabs-org/wizard-private-client:0.1.0
+          docker tag ghcr.io/humanitylabs-org/wizard-private-client:0.1.0 pp-test-client:test
+          docker build --target test -t pp-test-client:unit .
+          docker build -f tests/Dockerfile.relay -t pp-test-client-relay:test .
+          python3 tests/run.py --skip-build
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-private-client:0.1.0 | grep -q linux/arm64
+# Never repush 0.1.0: bump the version and tag for any subsequent release.

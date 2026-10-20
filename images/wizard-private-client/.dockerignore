@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!server.mjs
+!tests/
+!tests/Dockerfile.relay
+!tests/relay.py
+!tests/*.unit.mjs
