@@ -8,8 +8,11 @@ LABEL org.opencontainers.image.source="https://github.com/humanitylabs-org/wizar
 RUN mkdir -p /app/static
 COPY --chmod=0444 server.py inference.py SKILL.md LICENSE /app/
 COPY --chmod=0444 static/ /app/static/
+COPY --chmod=0444 pool_server.py pool_client.py /app/
+COPY --chmod=0444 pool-static/ /app/pool-static/
 USER 1000:1000
 WORKDIR /app
 EXPOSE 8800
-CMD ["python3", "/app/server.py"]
+ENV WIZARD_POOL_PROVIDER=chatgpt WIZARD_POOL_BIND=0.0.0.0 WIZARD_POOL_PORT=8800
+CMD ["python3", "/app/pool_server.py"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8800/health', timeout=3).read()"]

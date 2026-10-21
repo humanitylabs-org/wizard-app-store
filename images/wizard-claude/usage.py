@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 CONTRACT = "wizard.ai-connection/1"
 IDENTITY = {"provider": "claude", "name": "Claude"}
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 CACHE_S = 60
 STALE_LIMIT_S = 30 * 60
 TIMEOUT_S = 8
@@ -273,11 +274,26 @@ class ConnectionReader:
         self.result: dict | None = None
         self.last_good: dict | None = None
         self.last_good_at = 0.0
+        self.email_for, self.email = "", None
 
-    def account(self) -> str | None:
+    def account(self, token: str = "") -> str | None:
         acct = get(read_json(self.account_path), "oauthAccount")
         label = js_str(get(acct, "emailAddress") or get(acct, "organizationName")).strip()[:120]
-        return label or None
+        if label or not token or not self.usage_url.endswith("/api/oauth/usage"):
+            return label or None
+        # No .claude.json (e.g. a host login dir): ask Anthropic once per sign-in for the signed-in email.
+        login = hashlib.sha256(token.encode()).hexdigest()
+        if self.email_for == login:
+            return self.email
+        email = None
+        try:
+            payload = get_usage(self.usage_url[: -len("/usage")] + "/profile", token, self.timeout_s)
+            raw = js_str(get(get(payload, "account"), "email")).strip()
+            email = raw[:120] if "@" in raw and len(raw) <= 120 and not any(c.isspace() for c in raw) else None
+        except Exception:  # noqa: BLE001 - a missing label never breaks status or usage
+            email = None
+        self.email_for, self.email = login, email
+        return email
 
     def base(self, status, plan=None, account=None, usage=None, error=None) -> dict:
         return {"contract": CONTRACT, **IDENTITY, "status": status, "plan": plan, "account": account,
@@ -290,7 +306,7 @@ class ConnectionReader:
             with self.lock:
                 self.login, self.result, self.last_good = "", None, None
             return self.base("not_connected", error=SIGNED_OUT)
-        plan, account = claude_plan(creds), self.account()
+        plan, account = claude_plan(creds), self.account(token)
         expires = creds.get("expiresAt")
         now = self.now()
         if is_finite_number(expires) and expires <= now * 1000:

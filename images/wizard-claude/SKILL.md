@@ -1,48 +1,19 @@
 ---
 name: wizard-claude
-description: Use when the owner wants an agent on this Wizard server to use his Claude subscription, or asks whether Claude is connected or how much of his Claude usage is left. The Claude app holds the one shared sign-in; agents never handle it.
+description: Use when the owner wants to connect Claude subscriptions or check separate Claude usage on this Wizard server. Never handle credentials in chat.
 ---
 
-# Claude (Wizard AI connection app)
+# Claude subscriptions
 
-The Claude app is where the owner connects his Claude subscription (Pro or Max) once for the whole
-server. It replaces the Claude part of the older AI Accounts app (decision #61: one app per AI provider).
-
-## What the agent must know
-
-- The sign-in is done **by the owner, on the Claude app's page** (`http://<server>:8799`). It runs the
-  official Claude Code login. Never ask the owner for a code, token or password in chat, and never try
-  to sign in yourself.
-- The login lives in a private shared volume mounted at `/claude` in agent apps that support it
-  (Hermes Agent from the Wizard App Store). Never read, copy, print or send anything from that folder.
-- Status and usage (read-only, never a token): the MCP tool `connection_status`, or
-  `GET http://wizard-claude:8799/api/connection` from the app network. It returns the
-  `wizard.ai-connection/2` shape: `status` (`connected`, `not_connected`, `expired`, `error`), `plan`
-  (e.g. `Max 20x`), `account`, and `usage.limits[]` (`label`, `usedPercent`, `remainingPercent`,
-  `resetsAt`) plus `usage.paid` (extra usage spend, minor units).
-
-## Using Claude from Hermes Agent
-
-Hermes Agent from the Wizard App Store ships the official plugin
-**Claude Subscription DirectSDK (Experimental)** and the official Claude Code CLI, already pointed at
-the shared login. To switch, the owner picks that provider and a model (e.g. Opus) in Hermes' model
-picker, or runs `hermes model`. Don't change the provider or model unless the owner asks.
-
-If status is `not_connected`, tell the owner: open the Claude app, press **Connect**, sign in, paste the
-code, then press **Test**. If it is `expired`, pressing **Test** lets Claude Code renew the sign-in; if
-that fails, Connect again.
+- Open the Claude app (`http://<server>:8799`). Each subscription has its own card and usage meter. The owner uses **Sign in / + Add** and completes the official sign-in in the page; never ask for codes, passwords or tokens in chat.
+- Hermes owns its managed sign-ins. Account changes are disabled unless the broker explicitly reports `management.contract=wizard.account-management/1`, `management.status=available` and exact boolean action permissions. Missing/off/unsupported/unavailable brokers fail closed. Server configuration uses the existing authenticated dashboard bridge.
+- Reconnect and remove target an exact managed sign-in after in-app confirmation; remove is not provider-wide logout. Nicknames/emails do not prove distinct subscriptions or additional quota. Never change adoption, provider or model settings as a sign-in side effect.
+- An existing shared Claude Code volume remains a separate, non-removable legacy source. Never copy its login into Hermes or expose anything from `/claude`. Existing DirectSDK settings stay unchanged.
+- On expired legacy credentials the owning app may run one bounded noninteractive Haiku test through its official CLI. GET schedules this in the background and returns `renewing` immediately; after completion a fresh read reports `connected` or `expired` with its reason. Only one renewal runs at a time; a 600-second completion-based cooldown follows success/failure/challenge/timeout. `WIZARD_CLAUDE_AUTO_RENEW=0` disables it. This existing test policy may consume one Haiku turn; never start an automatic login or implement a token refresh yourself.
+- Box-only `GET /api/connection` and the MCP card retain `wizard.ai-connection/2`, plan/account/usage and model discovery. Aggregate status is connected only when a usable subscription exists; expired rows alone never imply connected.
 
 ## Isolated model calls (decision #65)
 
-- Apps declare `requires.models` and call the Connection Router, not this provider directly.
-- `/api/connection` now adds a `models` catalogue; existing status, plan, account and usage fields remain.
-- `/api/infer` is a router backend, not an agent API: explicit text only, no persona, memory or session persistence.
-- Text deltas are provisional. Only a final `done` with the approved effective model is success.
-- Never work around `signed_out`, `expired`, `limit`, `unreachable` or `provider_error` by switching accounts/models.
-- Grants are report-only until enforcement is configured. Keep the app on a trusted private network; see README.
+Apps declare `requires.models` and call the Connection Router, not this provider directly. `/api/infer` retains main's isolated explicit-text SSE inference, warm single-use spare, model catalogue, grant enforcement, deadlines and effective-model validation. No persona, memory or session persistence. Deltas are provisional: only final `done` is success. Never bypass `signed_out`, `expired`, `limit`, `unreachable` or `provider_error` by silently switching accounts/models. Grants remain report-only until configured; keep this app on a trusted private network.
 
-## Limits
-
-- One Claude account per server. Disconnecting in the Claude app signs out every agent that uses it.
-- This is for the owner's own use with his own subscription. A product that serves other people should
-  use API keys instead.
+Personal use with the owner's own subscriptions. Fixture checks do not prove real sign-in or renewal success.

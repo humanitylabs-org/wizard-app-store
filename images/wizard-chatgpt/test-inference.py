@@ -16,6 +16,10 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inference
 import server
+POOLED = os.environ.get('WIZARD_TEST_POOL') == '1'
+if POOLED:
+    os.environ['WIZARD_POOL_PROVIDER'] = 'chatgpt'
+    import pool_server
 spec = importlib.util.spec_from_file_location('legacy', Path(__file__).with_name('test-chatgpt.py'))
 legacy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(legacy)
@@ -79,7 +83,8 @@ class InferenceTests(unittest.TestCase):
         self.settings.start()
         server.Hermes.opener = None
         server.forget()
-        self.srv = server.Server(('127.0.0.1', 0), server.Handler)
+        target = pool_server if POOLED else server
+        self.srv = target.Server(('127.0.0.1', 0), target.Handler)
         self.threads = []
         for srv in (self.plugin, self.srv):
             thread = threading.Thread(target=srv.serve_forever, kwargs={'poll_interval': .01})

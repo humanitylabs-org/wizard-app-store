@@ -14,6 +14,10 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inference
 import server
+POOLED = os.environ.get('WIZARD_TEST_POOL') == '1'
+if POOLED:
+    os.environ['WIZARD_POOL_PROVIDER'] = 'claude'
+    import pool_server
 
 
 class InferenceTests(unittest.TestCase):
@@ -27,7 +31,11 @@ class InferenceTests(unittest.TestCase):
         self.cli.chmod(0o755)
         self.settings = patch.multiple(server, CLAUDE=str(self.cli), CLAUDE_DIR=str(self.root / 'login'), WORK=self.root / 'work')
         self.settings.start()
-        self.srv = server.Server(('127.0.0.1', 0), server.Handler)
+        target = pool_server if POOLED else server
+        self.pool_inventory = patch.object(pool_server.Hermes, 'accounts', return_value={'provider': 'claude', 'name': 'Claude', 'accounts': []}) if POOLED else None
+        if self.pool_inventory:
+            self.pool_inventory.start()
+        self.srv = target.Server(('127.0.0.1', 0), target.Handler)
         self.thread = threading.Thread(target=self.srv.serve_forever, kwargs={'poll_interval': .01})
         self.thread.start()
         self.base = f'http://127.0.0.1:{self.srv.server_port}'
@@ -37,6 +45,8 @@ class InferenceTests(unittest.TestCase):
         self.srv.server_close()
         self.thread.join()
         self.settings.stop()
+        if self.pool_inventory:
+            self.pool_inventory.stop()
         self.env.stop()
         inference.FAST_SPARE.close()
         self.tmp.cleanup()
@@ -170,7 +180,7 @@ class InferenceTests(unittest.TestCase):
             with urlopen(self.base + '/api/connection') as response:
                 data = json.load(response)
         self.assertEqual(data['contract'], 'wizard.ai-connection/2')
-        self.assertEqual({k: v for k, v in data.items() if k not in ('contract', 'models')}, {k: v for k, v in old.items() if k != 'contract'})
+        self.assertEqual({k: data[k] for k in old if k != 'contract'}, {k: v for k, v in old.items() if k != 'contract'})
         self.assertEqual([(m['tier'], m['id']) for m in data['models']], [('fast', 'claude-haiku-4-5'), ('standard', 'claude-sonnet-5'), ('frontier', 'claude-opus-5-5')])
 
 
