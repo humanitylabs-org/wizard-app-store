@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { isIPv4 } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -25,8 +26,10 @@ export function configFromEnv(env = process.env) {
   if (!['http:', 'https:'].includes(relay.protocol) || relay.username || relay.password || relay.search || relay.hash || relay.pathname !== '/') throw new Error('RELAY_URL must be an HTTP(S) origin');
   const port = Number(env.LISTEN_PORT ?? 3301);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid LISTEN_PORT');
+  const host = env.LISTEN_HOST ?? '0.0.0.0';
+  if (!isIPv4(host)) throw new Error('Invalid LISTEN_HOST');
   return {
-    profile, relay: relay.origin, port,
+    profile, relay: relay.origin, port, host,
     token: secretFile(env.RELAY_TOKEN_FILE ?? '/run/wizard/relay-token'),
     cacheSecret: env.CACHE_SECRET_FILE ? secretFile(env.CACHE_SECRET_FILE) : randomBytes(32).toString('hex'),
     models: [...new Set((env.MODELS ?? '').split(',').map(s => s.trim()).filter(Boolean))],
@@ -179,7 +182,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const config = configFromEnv();
     const server = createServer(config);
-    server.listen(config.port, '0.0.0.0');
+    server.listen(config.port, config.host);
     for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { server.close(); server.closeAllConnections(); });
   } catch {
     console.error('Private client configuration invalid');

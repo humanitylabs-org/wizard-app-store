@@ -18,5 +18,5 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json server.mjs ./
 USER 1000:1000
 EXPOSE 3301
-HEALTHCHECK --interval=30s --timeout=5s CMD ["node", "-e", "fetch('http://127.0.0.1:'+process.env.LISTEN_PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+HEALTHCHECK --interval=30s --timeout=5s CMD ["node", "-e", "fetch('http://'+(process.env.LISTEN_HOST||'127.0.0.1')+':'+process.env.LISTEN_PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
 CMD ["node", "server.mjs"]

@@ -165,6 +165,8 @@ test('environment validates configuration, mounted secrets and generated cache s
     for (const RELAY_URL of ['ftp://relay', 'http://user:pass@relay', 'http://relay/path', 'http://relay?key=x']) assert.throws(() => configFromEnv({ ...env, RELAY_URL }));
     assert.throws(() => configFromEnv({ ...env, PROFILE: 'unknown' }));
     assert.throws(() => configFromEnv({ ...env, LISTEN_PORT: '0' }));
+    assert.equal(configFromEnv({ ...env, LISTEN_HOST: '10.251.0.3' }).host, '10.251.0.3');
+    for (const LISTEN_HOST of ['::', 'localhost', '10.252.0.999']) assert.throws(() => configFromEnv({ ...env, LISTEN_HOST }));
     assert.throws(() => configFromEnv({ ...env, CACHE_SECRET_FILE: join(dir, 'missing') }));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

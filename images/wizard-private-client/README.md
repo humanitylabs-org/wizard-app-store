@@ -34,6 +34,7 @@ Image intended for first publication on merge: **`ghcr.io/humanitylabs-org/wizar
 | `PROFILE` | `tinfoil` for attested-relay; `passthrough` for local provider |
 | `RELAY_URL` | `http://wizard-tinfoil-relay:8090` or local app's relay origin (no path, query, userinfo or trailing `/v1`) |
 | `RELAY_TOKEN_FILE` | `/run/wizard/relay-token` (default) |
+| `LISTEN_HOST` | Sandbox IPv4 address; runtime must set this so relay peers cannot open the plaintext API |
 | `LISTEN_PORT` | `3301` (default) |
 | `CACHE_SECRET_FILE` | Optional `/run/wizard/cache-secret`; recommended persistent per-agent random secret |
 | `MODELS` | Comma-separated model IDs advertised by the provider, e.g. `llama3-3-70b,gpt-oss-120b`; required to advertise tinfoil models (empty otherwise) |
