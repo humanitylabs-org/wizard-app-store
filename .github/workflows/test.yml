@@ -19,6 +19,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Subscription compatibility and owning CLI renewal fixtures (no provider access)
+        run: |
+          python3 tests/provider-pool-http.py
+          python3 tests/test_legacy_renewal.py
+          python3 tests/provider-pool-regressions.py
+          python3 -I images/wizard-claude/test-usage.py
       - run: npx tsc --noEmit
       - name: Build the Hermes Agent Wizard image under its recipe tag (published by ai-accounts.yml)
         run: docker build -t "ghcr.io/humanitylabs-org/hermes-agent:$(node -p 'require("./apps/hermes-agent/config.json").version')" images/hermes-agent

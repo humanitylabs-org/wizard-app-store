@@ -12,7 +12,7 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --me
 import json, os, pathlib, subprocess, sys, time, urllib.request, urllib.error
 assert os.getuid() == 1000 and os.getgid() == 1000, "must run as 1000:1000"
 files = sorted(str(p.relative_to("/app")) for p in pathlib.Path("/app").rglob("*") if p.is_file())
-assert files == ["LICENSE", "SKILL.md", "inference.py", "server.py", "static/app.css", "static/app.js", "static/appearance.css", "static/appearance.js", "static/index.html"], files
+assert files == sorted(["LICENSE", "SKILL.md", "inference.py", "server.py", "static/app.css", "static/app.js", "static/appearance.css", "static/appearance.js", "static/index.html", "pool_server.py", "pool_client.py", *["pool-static/" + n for n in ("app.css", "app.js", "boot.js", "index.html", "theme-client.js", "wizard-ui.css")]]), files
 p = subprocess.Popen([sys.executable, "/app/server.py"])
 B = "http://127.0.0.1:8801"
 def req(path, body=None, headers=None):
@@ -29,7 +29,7 @@ while time.monotonic() - t0 < 10:
     try:
         code, body = req("/health"); break
     except OSError: time.sleep(0.1)
-assert json.loads(body) == {"status": "ok", "version": "0.2.1"}, body
+assert json.loads(body) == {"status": "ok", "version": "0.2.2"}, body
 code, body = req("/"); assert code == 200 and b"<title>ChatGPT</title>" in body
 h = urllib.request.urlopen(B + "/", timeout=30).headers
 assert h["Content-Security-Policy"].split("frame-ancestors ")[1].startswith(chr(39) + "self" + chr(39) + ";") and h["X-Frame-Options"] == "SAMEORIGIN", dict(h)
@@ -54,3 +54,4 @@ p.terminate(); rc = p.wait(10)
 print(json.dumps({"uid": os.getuid(), "status": conn["status"], "error": conn["error"]["code"], "sigterm_exit": rc}))
 assert rc == 0, rc'
 docker image inspect "$TAG" --format 'image size bytes: {{.Size}}'
+python3 "$ROOT/../../tests/pool-container-smoke.py" chatgpt "$TAG"
