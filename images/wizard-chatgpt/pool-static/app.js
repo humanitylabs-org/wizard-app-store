@@ -266,7 +266,7 @@ addEventListener('popstate', () => {
     const now = Date.now();
     if (parent === window && lastRootBack && now - lastRootBack < 2000) { history.back(); return; }
     lastRootBack = now;
-    $('message').textContent = 'Press back again to exit';
+    $('message').textContent = parent === window ? 'Press back again to exit' : 'Subscriptions home.';
   }
   history.pushState({...history.state, wizardSubscriptions: 'guard'}, '');
 });

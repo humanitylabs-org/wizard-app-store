@@ -73,7 +73,7 @@ const server = http.createServer((req,res)=>{
    async function back(){const h=await cdp.send('Page.getNavigationHistory');assert.ok(h.currentIndex>0);await cdp.send('Page.navigateToHistoryEntry',{entryId:h.entries[h.currentIndex-1].id})}
    await back();await frame.locator('#manage').waitFor({state:'hidden'});
    assert.equal(await frame.evaluate(()=>window.qaIdentity),'same-document');
-   await back();await frame.waitForFunction(()=>document.getElementById('message').textContent==='Press back again to exit');
+   await back();await frame.waitForFunction(()=>document.getElementById('message').textContent==='Subscriptions home.');
    assert.equal(await frame.locator('.acct').count(),2);
    assert.deepEqual(errors,[]);await context.close();
   }

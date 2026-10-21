@@ -54,6 +54,14 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    await page.locator('#go').click();
    await page.waitForFunction(()=>document.querySelector('#user-code')?.textContent==='ABCD-EFGHI' && !document.querySelector('#code-step').hidden);
    assert.equal(calls[0].action,'add');assert.equal(calls[0].label,'Work');
+   await page.evaluate(()=>history.back());
+   await page.waitForFunction(()=>!document.getElementById('manage').open);
+   assert.equal(await page.locator('#add').textContent(),'Resume sign-in');
+   await page.waitForTimeout(1700); // a scheduled poll must not reopen the sheet
+   assert.equal(await page.locator('#manage').evaluate(e=>e.open),false);
+   assert.equal(calls.length,1); // Back never cancels/submits another broker operation
+   await page.locator('#add').click();
+   await page.waitForFunction(()=>document.getElementById('manage').open);
    if(shots) await page.screenshot({path:`${shots}/ui-code-${width}.png`});
    await page.locator('#cancel').click();await page.locator('#close').waitFor({state:'visible'});await page.locator('#close').click();await closed(page);
    // reconnect targets the exact sign-in
