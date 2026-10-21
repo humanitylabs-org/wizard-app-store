@@ -17,6 +17,7 @@ test("pins the same official Claude Code as AI Accounts and Hermes Agent", () =>
   // The shared login volume is created 1000:1000 0700 by whichever app starts first.
   expect(dockerfile).toContain("chown 1000:1000 /claude && chmod 0700 /claude");
   expect(dockerfile).toContain("USER 1000:1000");
+  expect(dockerfile).toContain("RUN chmod 0555 /app/pool-static");
 });
 
 test("only usage.py touches the credential file, and nothing refreshes the token", () => {

@@ -17,6 +17,7 @@ test("never holds a ChatGPT token: drives the agent's own sign-in through its da
   expect(server).toMatch(/STATIC = \{"\/": \("index.html"/);
   const dockerfile = readFileSync(`${dir}/Dockerfile`, "utf8");
   expect(dockerfile).toContain("USER 1000:1000");
+  expect(dockerfile).toContain("RUN chmod 0555 /app/pool-static");
   expect(dockerfile).toMatch(/FROM python:3\.12-alpine@sha256:[0-9a-f]{64}/);
 });
 

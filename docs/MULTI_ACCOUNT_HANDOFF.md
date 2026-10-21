@@ -16,7 +16,7 @@ The pool entrypoint now uses the same owning Claude app `ConnectionReader` and `
 
 On an expired reading only, at most one noninteractive `run_test` (one Haiku turn, no tools, no session persistence, 120-second timeout, stdin closed) runs at a time in a background daemon thread. GET returns immediately with `renewing` while the CLI runs. A fresh read after completion reports connected or expired truthfully. A 600-second cooldown starts after completion, including challenge/failure/timeout; polling during cooldown does not extend it. No automatic login flow, token refresh implementation, cron, retry loop, credential copy or provider-wide auth action is added. A future deployed renewal can consume the already-declared single Haiku test turn; tests mock the CLI and make no real calls/spend. Errors retain `expired` and a reconnect reason, not generic provider-unavailable; service projection drops any old usage when expired.
 
-Both packaged pool entrypoints preserve main's `wizard.ai-connection/2` discovery, models and `/api/infer` handler, including Claude's warm spare. Only ready/connected accounts imply aggregate connected status. Releases use fresh tags above main: ChatGPT 0.2.2 and Claude 0.2.3.
+Both packaged pool entrypoints preserve main's `wizard.ai-connection/2` discovery, models and `/api/infer` handler, including Claude's warm spare. Only ready/connected accounts imply aggregate connected status. Releases use fresh tags above main: ChatGPT 0.2.3 and Claude 0.2.4. The preceding ChatGPT 0.2.2 / Claude 0.2.3 publication exposed a BuildKit directory-permission defect; do not use those tags. They remain immutable.
 
 ## Verification and release boundary
 

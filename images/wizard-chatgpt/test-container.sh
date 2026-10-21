@@ -6,7 +6,7 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TAG=${WIZARD_CHATGPT_IMAGE:-wizard-chatgpt:test}
-[ -n "${SKIP_BUILD:-}" ] || docker build -t "$TAG" "$ROOT"
+[ -n "${SKIP_BUILD:-}" ] || docker buildx build --load -t "$TAG" "$ROOT"
 docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --memory 128m --pids-limit 64 \
   --network none -e WIZARD_CHATGPT_PORT=8801 --entrypoint python3 "$TAG" -c '
 import json, os, pathlib, subprocess, sys, time, urllib.request, urllib.error
@@ -29,7 +29,7 @@ while time.monotonic() - t0 < 10:
     try:
         code, body = req("/health"); break
     except OSError: time.sleep(0.1)
-assert json.loads(body) == {"status": "ok", "version": "0.2.2"}, body
+assert json.loads(body) == {"status": "ok", "version": "0.2.3"}, body
 code, body = req("/"); assert code == 200 and b"<title>ChatGPT</title>" in body
 h = urllib.request.urlopen(B + "/", timeout=30).headers
 assert h["Content-Security-Policy"].split("frame-ancestors ")[1].startswith(chr(39) + "self" + chr(39) + ";") and h["X-Frame-Options"] == "SAMEORIGIN", dict(h)

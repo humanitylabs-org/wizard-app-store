@@ -19,6 +19,7 @@ COPY --chmod=0444 server.py usage.py inference.py warm_spare.py models.json SKIL
 COPY --chmod=0444 static/ /app/static/
 COPY --chmod=0444 pool_server.py pool_client.py /app/
 COPY --chmod=0444 pool-static/ /app/pool-static/
+RUN chmod 0555 /app/pool-static
 USER 1000:1000
 WORKDIR /app
 EXPOSE 8799

@@ -23,14 +23,15 @@ jobs:
       - run: npm ci && npm test && npx tsc --noEmit
       - name: Device-code flow against a stand-in Hermes dashboard (no token, password or session id leaks)
         run: python3 -I images/wizard-chatgpt/test-chatgpt.py
+      # Use the publisher's docker-container BuildKit driver for pre-publish smoke.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - name: Build and test ChatGPT image (contract with no dashboard, box-only, no credential surface)
         run: sh images/wizard-chatgpt/test-container.sh
       - name: Isolated inference contract tests (fake providers only)
         run: |
           python3 -I images/wizard-chatgpt/test-inference.py -v
           WIZARD_TEST_POOL=1 python3 -I images/wizard-chatgpt/test-inference.py -v
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
         with:
@@ -45,11 +46,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.2
+          tags: ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.3
       - name: Published image passes the same checks
         if: github.event_name != 'pull_request'
         run: |
-          docker pull ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.2
-          SKIP_BUILD=1 WIZARD_CHATGPT_IMAGE=ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.2 sh images/wizard-chatgpt/test-container.sh
-          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.2 | grep -q linux/arm64
+          docker pull ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.3
+          SKIP_BUILD=1 WIZARD_CHATGPT_IMAGE=ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.3 sh images/wizard-chatgpt/test-container.sh
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.3 | grep -q linux/arm64
 # Publishes only after store, unit and container checks pass. Never re-push 0.2.1: bump the tag.

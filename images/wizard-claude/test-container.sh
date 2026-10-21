@@ -5,7 +5,7 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TAG=${WIZARD_CLAUDE_IMAGE:-wizard-claude:test}
-[ -n "${SKIP_BUILD:-}" ] || docker build -t "$TAG" "$ROOT"
+[ -n "${SKIP_BUILD:-}" ] || docker buildx build --load -t "$TAG" "$ROOT"
 docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --memory 512m --pids-limit 128 \
   --tmpfs /claude:rw,nosuid,size=8m,uid=1000,gid=1000,mode=0700 --tmpfs /tmp:rw,nosuid,size=64m,uid=1000,gid=1000 \
   -e WIZARD_CLAUDE_PORT=8799 -e WIZARD_CLAUDE_USAGE_URL=http://127.0.0.1:9/api/oauth/usage --entrypoint python3 "$TAG" -c '
