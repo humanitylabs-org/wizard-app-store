@@ -68,9 +68,12 @@ const server = http.createServer((req,res)=>{
     assert.equal(await frame.locator('#manage').evaluate(e=>e.open),true);
     assert.equal(await frame.evaluate(()=>window.qaIdentity),'same-document');
    }
-   await page.goBack();await frame.locator('#manage').waitFor({state:'hidden'});
+   // A child-frame history step does not emit a top-frame load event.
+   const cdp=await context.newCDPSession(page);
+   async function back(){const h=await cdp.send('Page.getNavigationHistory');assert.ok(h.currentIndex>0);await cdp.send('Page.navigateToHistoryEntry',{entryId:h.entries[h.currentIndex-1].id})}
+   await back();await frame.locator('#manage').waitFor({state:'hidden'});
    assert.equal(await frame.evaluate(()=>window.qaIdentity),'same-document');
-   await page.goBack();await frame.waitForFunction(()=>document.getElementById('message').textContent==='Press back again to exit');
+   await back();await frame.waitForFunction(()=>document.getElementById('message').textContent==='Press back again to exit');
    assert.equal(await frame.locator('.acct').count(),2);
    assert.deepEqual(errors,[]);await context.close();
   }
