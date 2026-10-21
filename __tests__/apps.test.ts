@@ -60,8 +60,8 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
     test("isolated data, no host privileges or auth bypass", () => {
       const s = compose.services[id];
       expect(Object.keys(compose.services)).toEqual([id]);
-      expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data", "claude-login:/claude"]);
-      expect(compose.volumes).toEqual({"claude-login": {name: "wizard-ai-accounts-claude"}});
+      expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data"]);
+      expect(compose.volumes).toBeUndefined();
       for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build"]) expect(s[key]).toBeUndefined();
       expect(s.environment.HERMES_DASHBOARD_INSECURE).toBeUndefined();
       expect(s.environment.HERMES_UMBREL_APP_PROXY_AUTH).toBeUndefined();

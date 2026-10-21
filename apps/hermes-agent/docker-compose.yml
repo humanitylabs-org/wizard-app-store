@@ -5,8 +5,7 @@ services:
     stop_grace_period: 1m
     volumes:
       - ${APP_DATA_DIR}/data:/opt/data
-      # The Claude sign-in made in the AI Accounts app (same fixed volume name there).
-      - claude-login:/claude
+      # App Manager adds /claude only for the wizard.md claude-login share grant.
     environment:
       HERMES_UID: "1000"
       HERMES_GID: "1000"
@@ -19,9 +18,6 @@ services:
     x-runtipi:
       is_main: true
       internal_port: 9119
-volumes:
-  claude-login:
-    name: wizard-ai-accounts-claude
 x-runtipi:
   schema_version: 2
   overrides: []
