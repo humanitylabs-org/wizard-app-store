@@ -48,7 +48,7 @@ const server = http.createServer((req,res)=>{
    const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.goto('http://127.0.0.1:'+server.address().port+'/host?provider='+provider);
    const frame=page.frames().find(f=>f.url().endsWith('/'+provider+'/'));
-   await frame.waitForSelector('.account:nth-child(2)');
+   await frame.waitForSelector('.acct:nth-child(2)');
    assert.equal(await frame.evaluate(()=>innerWidth),mobile?390:1440);
    await frame.evaluate(()=>window.qaIdentity='same-document');
    for(const skin of ['nebula','signal']){
@@ -71,7 +71,7 @@ const server = http.createServer((req,res)=>{
    await page.goBack();await frame.locator('#manage').waitFor({state:'hidden'});
    assert.equal(await frame.evaluate(()=>window.qaIdentity),'same-document');
    await page.goBack();await frame.waitForFunction(()=>document.getElementById('message').textContent==='Press back again to exit');
-   assert.equal(await frame.locator('.account').count(),2);
+   assert.equal(await frame.locator('.acct').count(),2);
    assert.deepEqual(errors,[]);await context.close();
   }
   console.log('PASS 4 hosted proxies: both providers, mobile-touch 390px + desktop 1440px, Nebula + Signal fallback and transport, transparent canvas, live skin switches preserve unsent form/document, nested/root Back, '+captures+' screenshots. Not a live shell/device test.');
