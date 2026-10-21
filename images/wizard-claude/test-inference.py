@@ -64,6 +64,7 @@ class InferenceTests(unittest.TestCase):
             return res.status, res.read().decode()
 
     def test_real_http_isolation_and_done(self):
+        self.assertFalse((self.root / 'work').exists())  # fresh pool CMD never calls server.main()
         status, text = self.call()
         self.assertEqual(status, 200)
         self.assertIn('event: delta', text)

@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'needs_review']);
 const STATUS = {ready: 'Ready', connected: 'Ready', renewing: 'Renewing', expired: 'Sign in again', cooldown: 'Cooling down', exhausted: 'Limit reached', error: 'Problem'};
 let snapshot = null, active = null, busy = false, timer = null, intent = null, before = 0;
+let dialogHidden = false, lastRootBack = 0;
 const openManage = new Set();
 const manageable = () => snapshot?.management?.contract === 'wizard.account-management/1' && snapshot.management.status === 'available';
 const allowed = (action, account, credential) => manageable() && (action === 'add' ? snapshot.actions?.add === true : account?.actions?.[action] === true && credential?.managed === true);
@@ -107,9 +108,10 @@ function render(data) {
   $('count').textContent = String(n); $('count').hidden = !n;
   $('accounts').replaceChildren(...data.accounts.map(renderAccount));
   $('empty').hidden = n > 0;
-  $('add').hidden = !allowed('add');
-  $('add').disabled = busy || !allowed('add');
-  $('add').textContent = n ? '+ Add' : 'Sign in';
+  const resume = dialogHidden && busy;
+  $('add').hidden = !resume && !allowed('add');
+  $('add').disabled = !resume && (busy || !allowed('add'));
+  $('add').textContent = resume ? 'Resume sign-in' : (n ? '+ Add' : 'Sign in');
 }
 
 async function refresh() {
@@ -136,6 +138,7 @@ function showButtons({go = false, goLabel = 'Continue', danger = false, cancel =
 function ask(action, account, credential) {
   if (busy || !allowed(action, account, credential)) return;
   intent = {action, account, credential}; active = null;
+  dialogHidden = false;
   const b = brand();
   $('steps').hidden = true; $('nick').value = ''; setStatus('');
   $('nick-wrap').hidden = action !== 'add';
@@ -173,7 +176,7 @@ async function start() {
 function display(job) {
   if (active?.id === job.id && TERMINAL.has(active.status) && !TERMINAL.has(job.status)) return;
   clearTimeout(timer); active = job;
-  if (!$('manage').open) $('manage').showModal();
+  if (!$('manage').open && !dialogHidden) $('manage').showModal();
   $('nick-wrap').hidden = true;
   if (!TERMINAL.has(job.status)) {
     $('dlg-text').textContent = '';
@@ -240,7 +243,33 @@ $('submit-code').addEventListener('click', async () => {
   finally { $('submit-code').disabled = false; }
 });
 $('refresh').addEventListener('click', refresh);
-$('add').addEventListener('click', () => { if (snapshot) ask('add'); });
+$('add').addEventListener('click', () => {
+  if (dialogHidden && busy && active) { dialogHidden = false; display(active); render(snapshot); }
+  else if (snapshot) ask('add');
+});
+
+// Back closes local UI without cancelling provider work or leaving the app.
+// A plain tab allows exit only on a second root Back within two seconds.
+history.replaceState({...history.state, wizardSubscriptions: 'root'}, '');
+history.pushState({...history.state, wizardSubscriptions: 'guard'}, '');
+addEventListener('popstate', () => {
+  if ($('manage').open) {
+    dialogHidden = busy;
+    $('manage').close();
+    if (snapshot) render(snapshot);
+    lastRootBack = 0;
+  } else if (openManage.size) {
+    openManage.clear();
+    if (snapshot) render(snapshot);
+    lastRootBack = 0;
+  } else {
+    const now = Date.now();
+    if (parent === window && lastRootBack && now - lastRootBack < 2000) { history.back(); return; }
+    lastRootBack = now;
+    $('message').textContent = 'Press back again to exit';
+  }
+  history.pushState({...history.state, wizardSubscriptions: 'guard'}, '');
+});
 setInterval(() => { if (!document.hidden && !$('manage').open) refresh(); }, 60000);
 
 refresh();

@@ -112,6 +112,17 @@ class Regressions(unittest.TestCase):
                 with patch.object(pool.Hermes, 'accounts', return_value={'accounts': [{'status': status}]}):
                     self.assertEqual(self.get(base, '/api/connection')['status'], expected)
 
+    def test_pool_only_limits_errors_and_signed_out_have_explanations(self):
+        base = self.serve(pool)
+        with patch.object(pool, 'LEGACY', None):
+            for status, expected, code in [('cooldown', 'error', 'limit'), ('exhausted', 'error', 'limit'),
+                                           ('expired', 'expired', 'expired'), ('unknown', 'error', 'provider_error'),
+                                           ('not_connected', 'not_connected', None), ('ready', 'connected', None)]:
+                with self.subTest(status=status), patch.object(pool.Hermes, 'accounts', return_value={'accounts': [{'status': status}]}):
+                    answer = self.get(base, '/api/connection')
+                    self.assertEqual(answer['status'], expected)
+                    self.assertEqual((answer.get('error') or {}).get('code'), code)
+
 
 if __name__ == '__main__':
     unittest.main()

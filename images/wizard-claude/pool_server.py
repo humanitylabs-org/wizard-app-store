@@ -45,14 +45,22 @@ def with_legacy(result):
 def connection(result):
     """An inventory row is not evidence of a usable subscription."""
     rows = result['accounts']
-    selected = next((row for status in ('connected', 'ready', 'renewing', 'expired', 'error')
+    selected = next((row for status in ('connected', 'ready', 'renewing', 'expired', 'cooldown', 'exhausted', 'error', 'not_connected')
                      for row in rows if row.get('status') == status), {})
     status = selected.get('status', 'error' if rows or result.get('inventoryStatus') == 'unavailable' else 'not_connected')
     if status == 'ready':
         status = 'connected'
+    error = selected.get('error') or result.get('error')
+    if status in ('cooldown', 'exhausted'):
+        status = 'error'
+        error = {'code': 'limit', 'message': 'Subscription limit reached; wait for its reset.'}
+    elif status == 'error' and not isinstance(error, dict):
+        error = {'code': 'provider_error', 'message': 'Subscription state is unavailable.'}
+    elif status == 'expired' and not isinstance(error, dict):
+        error = {'code': 'expired', 'message': 'Subscription sign-in expired; reconnect it in the app.'}
     answer = {**result, 'contract': 'wizard.ai-connection/2', 'status': status,
               'plan': selected.get('plan'), 'usage': selected.get('usage'),
-              'account': selected.get('email') or selected.get('account'), 'error': selected.get('error') or result.get('error')}
+              'account': selected.get('email') or selected.get('account'), 'error': error}
     try:
         answer['models'] = owner.inference.models(owner.Hermes) if PROVIDER == 'chatgpt' else owner.inference.models()
     except (owner.inference.Fault, getattr(owner, 'HermesError', owner.inference.Fault)) as error:
