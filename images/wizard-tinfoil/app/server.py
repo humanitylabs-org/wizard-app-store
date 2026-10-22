@@ -94,6 +94,7 @@ def unregister():
 ADMIN_API = 'https://api.tinfoil.sh'
 BILLING_TTL = 300
 BILL = {'at': 0.0, 'data': None, 'error': None}
+STARTING_CREDIT_MINOR = 100
 TOPUP = ('credit', 'top-up', 'top up', 'topup', 'reload', 'prepaid', 'promo')
 def admin_stored():
     try: return json.loads((DATA/'admin.json').read_text())
@@ -111,16 +112,17 @@ def money(v):
     except (TypeError,ValueError): return None
     return round(v*100) if v==v and abs(v)<1e9 else None
 def summarize(period, alltime, tx):
-    """Turn Tinfoil billing reads into minor-unit numbers. Balance = credit top-ups minus all-time usage cost; it is
-    only reported when at least one top-up is recognised, otherwise only spend is known."""
+    """Turn Tinfoil billing reads into minor-unit numbers. Balance = $1 starting credit + credit top-ups minus
+    all-time usage cost. Full tank = the last top-up (or the $1 starting credit before any)."""
     rows = [t for t in (tx or {}).get('transactions') or [] if isinstance(t,dict) and str(t.get('status','completed')).lower() in ('completed','succeeded','paid')]
     tops = [t for t in rows if any(w in (str(t.get('description',''))+' '+str(t.get('type',''))).lower() for w in TOPUP) and (money(t.get('amount')) or 0) > 0]
     tops.sort(key=lambda t: str(t.get('date','')))
     spent_all, spent_period = money((alltime or {}).get('cost')), money((period or {}).get('cost'))
-    bought = sum(money(t.get('amount')) or 0 for t in tops)
-    balance = max(0, bought-(spent_all or 0)) if tops and spent_all is not None else None
-    last = money(tops[-1].get('amount')) if tops else None
-    return {'periodSpendMinor':spent_period,'allTimeSpendMinor':spent_all,'topUpsMinor':bought if tops else None,'lastTopUpMinor':last,'balanceMinor':balance,
+    # Every Tinfoil account starts with $1 of API credit that never appears as a transaction.
+    bought = STARTING_CREDIT_MINOR + sum(money(t.get('amount')) or 0 for t in tops)
+    balance = max(0, bought-(spent_all or 0)) if spent_all is not None else None
+    last = money(tops[-1].get('amount')) if tops else STARTING_CREDIT_MINOR
+    return {'periodSpendMinor':spent_period,'allTimeSpendMinor':spent_all,'topUpsMinor':bought,'lastTopUpMinor':last,'balanceMinor':balance,
             'transactions':[{'date':str(t.get('date',''))[:25],'type':str(t.get('type',''))[:40],'description':str(t.get('description',''))[:80],'amountMinor':money(t.get('amount'))} for t in rows[-20:]]}
 REFRESHING = threading.Lock()
 def billing(force=False, wait=True):
@@ -153,14 +155,15 @@ def usage():
     if not d: return None
     paid = {'type':'credits','enabled':True,'currency':'USD','exponent':2,'usedMinor':d['periodSpendMinor'],'limitMinor':d['lastTopUpMinor'],'balanceMinor':d['balanceMinor'],'unlimited':False}
     return {'fetchedAt':d['fetchedAt'],'limits':[],'paid':paid}
+def hint(k): return ('…'+k[-4:]) if isinstance(k,str) and len(k)>=16 else None
 def billing_status():
     a = admin_stored()
-    return {'adminKeyStored':bool(a),'billing':'off' if not a else ('rejected' if BILL['error']=='rejected' else 'unavailable' if BILL['error'] and not BILL['data'] else 'ok' if BILL['data'] else 'pending')}
+    return {'adminKeyStored':bool(a),'adminKeyHint':hint((a or {}).get('key')),'billing':'off' if not a else ('rejected' if BILL['error']=='rejected' else 'unavailable' if BILL['error'] and not BILL['data'] else 'ok' if BILL['data'] else 'pending')}
 
 def status():
     # Atomic replace makes this a safe snapshot; never wait behind network verification.
     s = stored()
-    return {'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':usage(),'error':None,**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered')}
+    return {'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':usage(),'error':None,**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered'),'apiKeyHint':hint((s or {}).get('key'))}
 
 def worker(action, key, payload=None):
     # Kill on timeout; no upstream exception/headers/body may reach logs or clients.
@@ -179,7 +182,7 @@ TOOLS = [{'name':'billing_summary','description':'Read Tinfoil spend and credit 
 def rpc(m):
     i=m.get('id'); method=m.get('method'); p=m.get('params') or {}
     if 'id' not in m: return None
-    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.0'}}
+    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.1'}}
     elif method=='tools/list': r={'tools':TOOLS}
     elif method=='ping': r={}
     elif method=='tools/call' and p.get('name')=='connection_status' and not p.get('arguments'):
@@ -212,7 +215,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         if self.refused(path): return
-        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.0'})
+        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.1'})
         if path in ('/api/connection', '/api/status'): return self.send(200,status())
         if path=='/v1/models': return self.send(200,{'object':'list','data':[{'id':x,'object':'model','owned_by':'tinfoil'} for x in status()['models']]})
         if path=='/openapi.json': return self.send(200,(ROOT/'openapi.json').read_bytes())
