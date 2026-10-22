@@ -1,4 +1,5 @@
 """Private Tinfoil connection. Secrets never enter MCP, URLs or logs."""
+import datetime
 import hmac
 import json
 import os
@@ -86,10 +87,80 @@ def unregister():
     try: agent_call('DELETE', f'/api/providers/custom-endpoints/{ENDPOINT_ID}')
     except Exception: pass
 
+
+# Billing (optional second key). The owner pastes a Tinfoil *admin* key on this app's page; it lives only in
+# admin.json (0600) and is used for exactly two read-only calls: usage cost and transaction history. It is never
+# used to create, change or delete keys, never returned by any route, and never reaches the agent or MCP.
+ADMIN_API = 'https://api.tinfoil.sh'
+BILLING_TTL = 300
+BILL = {'at': 0.0, 'data': None, 'error': None}
+TOPUP = ('credit', 'top-up', 'top up', 'topup', 'reload', 'prepaid', 'promo')
+def admin_stored():
+    try: return json.loads((DATA/'admin.json').read_text())
+    except FileNotFoundError: return None
+def admin_get(key, path):
+    req = urllib.request.Request(ADMIN_API+path, headers={'Authorization':'Bearer '+key,'Accept':'application/json','User-Agent':'wizard-tinfoil/0.3'})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r: return json.loads(r.read() or b'{}')
+    except urllib.error.HTTPError as e:
+        raise PermissionError('rejected') if e.code in (401,403) else RuntimeError('provider') from None
+    except Exception:
+        raise RuntimeError('unreachable') from None
+def money(v):
+    try: v=float(v)
+    except (TypeError,ValueError): return None
+    return round(v*100) if v==v and abs(v)<1e9 else None
+def summarize(period, alltime, tx):
+    """Turn Tinfoil billing reads into minor-unit numbers. Balance = credit top-ups minus all-time usage cost; it is
+    only reported when at least one top-up is recognised, otherwise only spend is known."""
+    rows = [t for t in (tx or {}).get('transactions') or [] if isinstance(t,dict) and str(t.get('status','completed')).lower() in ('completed','succeeded','paid')]
+    tops = [t for t in rows if any(w in (str(t.get('description',''))+' '+str(t.get('type',''))).lower() for w in TOPUP) and (money(t.get('amount')) or 0) > 0]
+    tops.sort(key=lambda t: str(t.get('date','')))
+    spent_all, spent_period = money((alltime or {}).get('cost')), money((period or {}).get('cost'))
+    bought = sum(money(t.get('amount')) or 0 for t in tops)
+    balance = max(0, bought-(spent_all or 0)) if tops and spent_all is not None else None
+    last = money(tops[-1].get('amount')) if tops else None
+    return {'periodSpendMinor':spent_period,'allTimeSpendMinor':spent_all,'topUpsMinor':bought if tops else None,'lastTopUpMinor':last,'balanceMinor':balance,
+            'transactions':[{'date':str(t.get('date',''))[:25],'type':str(t.get('type',''))[:40],'description':str(t.get('description',''))[:80],'amountMinor':money(t.get('amount'))} for t in rows[-20:]]}
+REFRESHING = threading.Lock()
+def billing(force=False, wait=True):
+    """Cached read; failures keep the last good numbers and report the error. Never raises. wait=False (status
+    reads) returns the cache at once and refreshes in the background, so /api/connection never waits on Tinfoil."""
+    import time
+    if not wait:
+        if admin_stored() and (BILL['data'] is None or time.time()-BILL['at'] >= BILLING_TTL) and REFRESHING.acquire(blocking=False):
+            def run():
+                try: billing(True)
+                finally: REFRESHING.release()
+            threading.Thread(target=run, daemon=True).start()
+        return BILL['data'] if admin_stored() else None
+    a = admin_stored()
+    if not a:
+        BILL.update(at=0.0, data=None, error=None); return None
+    if not force and BILL['data'] is not None and time.time()-BILL['at'] < BILLING_TTL: return BILL['data']
+    if not force and BILL['error'] and time.time()-BILL['at'] < 60: return BILL['data']
+    try:
+        d = summarize(admin_get(a['key'],'/api/billing/usage?time=period'), admin_get(a['key'],'/api/billing/usage?time=all'), admin_get(a['key'],'/api/billing/transactions'))
+        d['fetchedAt'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        BILL.update(at=time.time(), data=d, error=None)
+    except PermissionError:
+        BILL.update(at=time.time(), error='rejected')
+    except Exception:
+        BILL.update(at=time.time(), error='unreachable')
+    return BILL['data']
+def usage():
+    d = billing(wait=False)
+    if not d: return None
+    paid = {'type':'credits','enabled':True,'currency':'USD','exponent':2,'usedMinor':d['periodSpendMinor'],'limitMinor':d['lastTopUpMinor'],'balanceMinor':d['balanceMinor'],'unlimited':False}
+    return {'fetchedAt':d['fetchedAt'],'limits':[],'paid':paid}
+def billing_status():
+    a = admin_stored()
+    return {'adminKeyStored':bool(a),'billing':'off' if not a else ('rejected' if BILL['error']=='rejected' else 'unavailable' if BILL['error'] and not BILL['data'] else 'ok' if BILL['data'] else 'pending')}
+
 def status():
     # Atomic replace makes this a safe snapshot; never wait behind network verification.
     s = stored()
-    return {'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':None,'error':None,'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered')}
+    return {'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':usage(),'error':None,**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered')}
 
 def worker(action, key, payload=None):
     # Kill on timeout; no upstream exception/headers/body may reach logs or clients.
@@ -104,15 +175,17 @@ BODY_EXTRAS = {'thinking','reasoning','chat_template_kwargs','top_k','min_p','re
 
 def key_ok(k): return isinstance(k,str) and 16 <= len(k) <= 512 and all(33<=ord(c)<=126 for c in k)
 
-TOOLS = [{'name':'connection_status','description':'Read Tinfoil connection and attestation status. Never returns credentials. To connect, the owner enters a key in the Tinfoil app; do not request keys in chat.','inputSchema':{'type':'object','properties':{},'additionalProperties':False},'annotations':{'readOnlyHint':True}}]
+TOOLS = [{'name':'billing_summary','description':'Read Tinfoil spend and credit balance (USD minor units) from the owner\'s saved billing key. Read-only; never returns credentials. If adminKeyStored is false, the owner adds a Tinfoil admin key on the Tinfoil app page; never ask for keys in chat.','inputSchema':{'type':'object','properties':{},'additionalProperties':False},'annotations':{'readOnlyHint':True}},{'name':'connection_status','description':'Read Tinfoil connection and attestation status. Never returns credentials. To connect, the owner enters a key in the Tinfoil app; do not request keys in chat.','inputSchema':{'type':'object','properties':{},'additionalProperties':False},'annotations':{'readOnlyHint':True}}]
 def rpc(m):
     i=m.get('id'); method=m.get('method'); p=m.get('params') or {}
     if 'id' not in m: return None
-    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.1.0'}}
+    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.0'}}
     elif method=='tools/list': r={'tools':TOOLS}
     elif method=='ping': r={}
     elif method=='tools/call' and p.get('name')=='connection_status' and not p.get('arguments'):
         s=status(); r={'content':[{'type':'text','text':json.dumps(s)}],'structuredContent':s,'isError':False}
+    elif method=='tools/call' and p.get('name')=='billing_summary' and not p.get('arguments'):
+        b={**billing_status(),'summary':billing()}; r={'content':[{'type':'text','text':json.dumps(b)}],'structuredContent':b,'isError':False}
     else: return {'jsonrpc':'2.0','id':i,'error':{'code':-32602,'message':'Unknown method, tool or arguments.'}}
     return {'jsonrpc':'2.0','id':i,'result':r}
 
@@ -139,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         if self.refused(path): return
-        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.1.0'})
+        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.0'})
         if path in ('/api/connection', '/api/status'): return self.send(200,status())
         if path=='/v1/models': return self.send(200,{'object':'list','data':[{'id':x,'object':'model','owned_by':'tinfoil'} for x in status()['models']]})
         if path=='/openapi.json': return self.send(200,(ROOT/'openapi.json').read_bytes())
@@ -164,6 +237,19 @@ class Handler(BaseHTTPRequestHandler):
                     atomic('connection.json',{'key':body['apiKey'],'authenticated':False,**result})
                     atomic('connection.json',{**stored(),'agent':register(result['models'])})
                 return self.send(200,status())
+            if path=='/api/admin-key':
+                if set(body)!={'adminKey'} or not key_ok(body['adminKey']): return self.send(400,{'error':'Enter a valid admin key.'})
+                k=body['adminKey']
+                try:
+                    ctx=admin_get(k,'/api/auth/context'); admin_get(k,'/api/billing/usage?time=24h')
+                except PermissionError: return self.send(400,{'error':'Tinfoil rejected that key for billing. Use an unscoped admin key (Dashboard → Admin Keys), not an API key.'})
+                except Exception: return self.send(503,{'error':'Could not reach Tinfoil. Nothing was saved.'})
+                with LOCK: atomic('admin.json',{'key':k,'context':str((ctx or {}).get('context_type',''))[:20],'savedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+                billing(True); return self.send(200,status())
+            if path=='/api/admin-key/remove':
+                if body: raise ValueError()
+                with LOCK: (DATA/'admin.json').unlink(missing_ok=True)
+                billing(True); return self.send(200,status())
             if path=='/api/test':
                 if body: raise ValueError()
                 with LOCK:

@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Tinfoil Connection",
-    "version": "0.1.0"
+    "version": "0.3.0"
   },
   "paths": {
     "/api/connection": {
@@ -142,6 +142,32 @@
                 "type": "object"
               }
             }
+          }
+        }
+      }
+    },
+    "/api/admin-key": {
+      "post": {
+        "description": "Owner page only (trusted Origin + X-Wizard-Request). Save an optional Tinfoil admin key used solely to read billing (usage cost, transactions). Verified against Tinfoil before saving; never returned.",
+        "responses": {
+          "200": {
+            "description": "Sanitized status"
+          },
+          "400": {
+            "description": "Rejected key, nothing saved"
+          },
+          "403": {
+            "description": "Untrusted origin"
+          }
+        }
+      }
+    },
+    "/api/admin-key/remove": {
+      "post": {
+        "description": "Delete the saved billing key.",
+        "responses": {
+          "200": {
+            "description": "Sanitized status"
           }
         }
       }
