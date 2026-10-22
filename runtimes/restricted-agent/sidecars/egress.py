@@ -77,7 +77,7 @@ def load_declared_tcp(value, relay_host):
         alias, address, port, relay_port = (item[k] for k in ("alias", "address", "port", "relay_port"))
         if not isinstance(alias, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", alias):
             raise ValueError("invalid declared TCP alias")
-        if ipaddress.ip_address(address) not in ipaddress.ip_network("100.64.0.0/10"):
+        if not isinstance(address, str) or ipaddress.ip_address(address) not in ipaddress.ip_network("100.64.0.0/10"):
             raise ValueError("declared TCP address must be tailnet IPv4")
         if type(port) is not int or not 1 <= port <= 65535 or port == 443:
             raise ValueError("invalid declared TCP port")

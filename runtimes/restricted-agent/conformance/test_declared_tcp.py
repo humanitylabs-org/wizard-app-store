@@ -23,7 +23,7 @@ class Policy(unittest.TestCase):
         good = eg.load_declared_tcp(json.dumps([ENTRY]), '10.250.0.17')
         self.assertEqual(set(good), {('builder', '22')})
         invalid = [dict(ENTRY, alias='*.builder'), dict(ENTRY, alias='localhost'),
-                   dict(ENTRY, address='127.0.0.1'), dict(ENTRY, address='10.0.0.1'),
+                   dict(ENTRY, address=1684300900), dict(ENTRY, address='127.0.0.1'), dict(ENTRY, address='10.0.0.1'),
                    dict(ENTRY, address='100.100.100.100/32'), dict(ENTRY, port=True),
                    dict(ENTRY, port=443), dict(ENTRY, relay_port=22), dict(ENTRY, extra='x')]
         # localhost is syntactically an alias, not a destination or DNS lookup.
