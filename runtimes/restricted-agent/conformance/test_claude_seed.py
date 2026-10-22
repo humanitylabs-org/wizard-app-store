@@ -79,6 +79,9 @@ class SeedTest(unittest.TestCase):
         self.path.unlink(); self.write(); self.path.chmod(0o644)
         self.assertFalse(self.seed())
         self.write(); self.path.write_bytes(b'\xff'); self.assertFalse(self.seed())
+        self.write(); self.assertTrue(self.seed())
+        self.path.write_bytes(b'[' * 60001)  # size-valid but deeper than the JSON recursion limit
+        self.assertFalse(self.seed()); self.assertFalse((self.target / '.credentials.json').exists())
         link = self.root / 'directory-link'; link.symlink_to(self.source)
         with self.assertRaises(OSError): seeder.credential(link)
 
