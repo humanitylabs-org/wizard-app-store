@@ -62,7 +62,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.call('/connection.json')[0],404)
     def test_03_mcp_and_gateway(self):
         code,b=self.call('/mcp',{'jsonrpc':'2.0','id':1,'method':'tools/list'});self.assertEqual(code,200)
-        self.assertEqual([t['name'] for t in json.loads(b)['result']['tools']],['connection_status'])
+        self.assertEqual([t['name'] for t in json.loads(b)['result']['tools']],['billing_summary','connection_status'])
         code,b=self.call('/mcp',{'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'connection_status'}});self.assertEqual(code,200);self.assertNotIn(KEY.encode(),b)
         token=json.loads((s.DATA/'gateway-token.json').read_text())['token'];h={'Origin':'','Authorization':'Bearer '+token}
         self.assertEqual(self.call('/v1/models',None,h)[0],200)
@@ -142,3 +142,46 @@ class Tests(unittest.TestCase):
         self.assertNotIn('reasoning_effort',seen)
 
 if __name__=='__main__':unittest.main(verbosity=2)
+
+class Billing(unittest.TestCase):
+    """Optional admin key: read-only billing, never echoed, rejected keys never saved."""
+    @classmethod
+    def setUpClass(cls):
+        cls.temp=tempfile.TemporaryDirectory();s.DATA=Path(cls.temp.name);s.initialize()
+        cls.http=s.ThreadingHTTPServer(('127.0.0.1',0),s.Handler);cls.port=cls.http.server_address[1];cls.base=f'http://127.0.0.1:{cls.port}'
+        s.HOSTS.add(f'127.0.0.1:{cls.port}');s.ORIGINS.add(cls.base);threading.Thread(target=cls.http.serve_forever,daemon=True).start()
+    @classmethod
+    def tearDownClass(cls):cls.http.shutdown();cls.http.server_close();cls.temp.cleanup()
+    call=Tests.call
+    ADMIN='admin_synthetic-not-a-real-admin-key'
+    def fake(self,key,path):
+        self.paths.append(path)
+        if path=='/api/auth/context':return {'context_type':'personal'}
+        if path=='/api/billing/usage?time=all':return {'cost':7.25}
+        if path.startswith('/api/billing/usage'):return {'cost':1.5}
+        if path=='/api/billing/transactions':return {'transactions':[{'date':'2026-10-01T00:00:00Z','type':'Charge','description':'API credit purchase','amount':10,'status':'completed'},{'date':'2026-10-05T00:00:00Z','type':'Charge','description':'API credit purchase','amount':20,'status':'completed'},{'date':'2026-10-06T00:00:00Z','type':'Invoice','description':'Chat subscription','amount':20,'status':'completed'}]}
+        raise AssertionError(path)
+    def test_billing_flow(self):
+        self.paths=[]
+        with patch.object(s,'admin_get',side_effect=self.fake):
+            code,b=self.call('/api/admin-key',{'adminKey':self.ADMIN});self.assertEqual(code,200);self.assertNotIn(self.ADMIN.encode(),b)
+            d=json.loads(b);self.assertTrue(d['adminKeyStored']);self.assertEqual(d['billing'],'ok')
+            paid=d['usage']['paid'];self.assertEqual(paid['balanceMinor'],3000-725);self.assertEqual(paid['usedMinor'],150);self.assertEqual(paid['limitMinor'],2000)
+            self.assertEqual((s.DATA/'admin.json').stat().st_mode&0o777,0o600)
+            code,b=self.call('/mcp',{'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'billing_summary'}});self.assertEqual(code,200);self.assertNotIn(self.ADMIN.encode(),b)
+            self.assertEqual(json.loads(b)['result']['structuredContent']['summary']['balanceMinor'],2275)
+        # Only read paths are ever called with the admin key.
+        self.assertTrue(all(p.startswith(('/api/auth/context','/api/billing/')) for p in self.paths),self.paths)
+        for path in ['/api/status','/api/connection']:self.assertNotIn(self.ADMIN.encode(),self.call(path)[1])
+        self.assertEqual(self.call('/admin.json')[0],404)
+        self.assertEqual(self.call('/api/admin-key/remove',{})[0],200);self.assertFalse((s.DATA/'admin.json').exists())
+        self.assertFalse(s.status()['adminKeyStored']);self.assertIsNone(s.status()['usage'])
+    def test_rejected_key_not_saved(self):
+        with patch.object(s,'admin_get',side_effect=PermissionError('rejected')):
+            code,b=self.call('/api/admin-key',{'adminKey':self.ADMIN});self.assertEqual(code,400);self.assertNotIn(self.ADMIN.encode(),b)
+        self.assertFalse((s.DATA/'admin.json').exists())
+        self.assertEqual(self.call('/api/admin-key',{'adminKey':self.ADMIN},{'Origin':'https://evil.invalid'})[0],403)
+        self.assertEqual(self.call('/api/admin-key',{'adminKey':self.ADMIN},{'X-Wizard-Request':''})[0],403)
+    def test_no_topups_means_spend_only(self):
+        d=s.summarize({'cost':2},{'cost':5},{'transactions':[{'description':'Monthly subscription','amount':20,'status':'completed'}]})
+        self.assertIsNone(d['balanceMinor']);self.assertEqual(d['periodSpendMinor'],200)
