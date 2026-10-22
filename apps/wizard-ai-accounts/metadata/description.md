@@ -1,4 +1,8 @@
-# AI Accounts
+# AI Accounts (deprecated)
+
+**Deprecated — do not install for new connections.** Use the separate **Claude app** and **ChatGPT app**. Each owns its login in its app-data; agents use a granted share (Claude) or the app gateway (ChatGPT). This entry is unavailable for new installs and remains only to document existing installations. Stop AI Accounts before App Manager migrates the old Claude volume to the Claude app. Do not run both from a copied rotating login.
+
+The instructions below describe the legacy layout, not the new app-owned model.
 
 The one place to connect your AI subscriptions for this Wizard server. Your agents use them from here, so you sign in once.
 

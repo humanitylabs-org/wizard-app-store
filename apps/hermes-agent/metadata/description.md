@@ -7,7 +7,7 @@ The self-improving AI agent by [Nous Research](https://github.com/NousResearch/h
 - **Claude Code 2.1.296**, Anthropic's official CLI (integrity-checked, auto-update off).
 - **Claude Subscription DirectSDK (Experimental)**, NousResearch's official provider plugin (MIT, pinned commit `ef73726`), built into Hermes' provider folder.
 
-Together they let Hermes use the Claude subscription you connect in the **AI Accounts** app. Your current model and provider stay exactly as they are until you choose Claude yourself.
+Together they let Hermes use the Claude subscription you connect in the **Claude app**. Your current model and provider stay exactly as they are until you choose Claude yourself.
 
 ## First use
 
@@ -15,10 +15,12 @@ Choose a dashboard username and strong password during installation. Open the ap
 
 ## Use your Claude subscription (optional)
 
-1. Install **AI Accounts**, press **Connect** next to Claude subscription, sign in and paste the code. Press **Test** to check it.
+1. Install the **Claude app**, press **Connect**, sign in and paste the code. Press **Test** to check it. Approve Hermes Agent's **Claude sign-in** share grant in App Manager.
 2. In Hermes, open the model picker (or run `hermes model` in the app's terminal) and choose **Claude Subscription DirectSDK (Experimental)**, then **Opus**.
 
-Hermes runs the official Claude Code for each request, using the sign-in in the shared `wizard-ai-accounts-claude` volume (mounted at `/claude`). Hermes itself never reads that sign-in. If you pick Claude before connecting, Hermes says Claude Code "has no usable login": connect in AI Accounts and try again. This is for your own subscription on your own server; products for other people should use API keys.
+Hermes runs the official Claude Code for each request. The Claude app owns the config folder in its app-data and exports the `claude-login` share; Hermes Agent's `wizard.md` declares `mounts: [{app: wizard-claude, share: claude-login, path: /claude}]`. App Manager adds that bind mount only while the share grant exists; revocation removes it on restart. Sharing the whole folder preserves Claude Code's refresh lock. Hermes core never reads that sign-in. If you pick Claude before connecting or granting the share, Claude Code has no usable login: connect in the Claude app and grant access, then try again. This is for your own subscription on your own server; products for other people should use API keys.
+
+This legacy store entry requires the App Manager implementation of Wizard OS decisions #79/#80. Stock Runtipi does not compile `mounts:`. Upgrade/migrate the Claude provider before starting Hermes; the old AI Accounts app is deprecated and must not keep refreshing a copied login.
 
 ## Private access
 
@@ -28,7 +30,7 @@ Use a trusted LAN or VPN such as Tailscale. Public domain exposure is disabled i
 
 All Hermes state is persisted in this app's `data` directory, mounted at `/opt/data`. Updating to the Wizard build does not touch it. Back up that directory before upgrades. There is no Docker socket, privileged mode, host networking, or access to the host's existing Hermes installation. This is a normal agent, not a server caretaker.
 
-The official image starts its initialization as root and then runs Hermes as UID/GID 1000 (the same as AI Accounts, so both can keep the Claude sign-in fresh). Do not override the container user or entrypoint. Provider credentials, plugins, skills, and configuration remain managed by upstream Hermes.
+The official image starts its initialization as root and then runs Hermes as UID/GID 1000 (matching the Claude app, so official Claude Code processes can coordinate refresh in the granted folder). Do not override the container user or entrypoint. Provider credentials, plugins, skills, and configuration remain managed by upstream Hermes.
 
 ## Updates
 
