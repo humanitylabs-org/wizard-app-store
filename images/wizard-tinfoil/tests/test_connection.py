@@ -166,10 +166,10 @@ class Billing(unittest.TestCase):
         with patch.object(s,'admin_get',side_effect=self.fake):
             code,b=self.call('/api/admin-key',{'adminKey':self.ADMIN});self.assertEqual(code,200);self.assertNotIn(self.ADMIN.encode(),b)
             d=json.loads(b);self.assertTrue(d['adminKeyStored']);self.assertEqual(d['billing'],'ok')
-            paid=d['usage']['paid'];self.assertEqual(paid['balanceMinor'],3000-725);self.assertEqual(paid['usedMinor'],150);self.assertEqual(paid['limitMinor'],2000)
+            paid=d['usage']['paid'];self.assertEqual(paid['balanceMinor'],100+3000-725);self.assertEqual(paid['usedMinor'],150);self.assertEqual(paid['limitMinor'],2000)
             self.assertEqual((s.DATA/'admin.json').stat().st_mode&0o777,0o600)
             code,b=self.call('/mcp',{'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'billing_summary'}});self.assertEqual(code,200);self.assertNotIn(self.ADMIN.encode(),b)
-            self.assertEqual(json.loads(b)['result']['structuredContent']['summary']['balanceMinor'],2275)
+            self.assertEqual(json.loads(b)['result']['structuredContent']['summary']['balanceMinor'],2375)
         # Only read paths are ever called with the admin key.
         self.assertTrue(all(p.startswith(('/api/auth/context','/api/billing/')) for p in self.paths),self.paths)
         for path in ['/api/status','/api/connection']:self.assertNotIn(self.ADMIN.encode(),self.call(path)[1])
@@ -182,6 +182,11 @@ class Billing(unittest.TestCase):
         self.assertFalse((s.DATA/'admin.json').exists())
         self.assertEqual(self.call('/api/admin-key',{'adminKey':self.ADMIN},{'Origin':'https://evil.invalid'})[0],403)
         self.assertEqual(self.call('/api/admin-key',{'adminKey':self.ADMIN},{'X-Wizard-Request':''})[0],403)
-    def test_no_topups_means_spend_only(self):
-        d=s.summarize({'cost':2},{'cost':5},{'transactions':[{'description':'Monthly subscription','amount':20,'status':'completed'}]})
-        self.assertIsNone(d['balanceMinor']);self.assertEqual(d['periodSpendMinor'],200)
+    def test_starting_dollar_counts_before_any_topup(self):
+        d=s.summarize({'cost':0.77},{'cost':0.77},{'transactions':[]})
+        self.assertEqual(d['balanceMinor'],23);self.assertEqual(d['lastTopUpMinor'],100);self.assertEqual(d['periodSpendMinor'],77)
+        self.assertEqual(s.summarize({'cost':0},{'cost':0},{'transactions':[]})['balanceMinor'],100)
+    def test_hints_show_only_last_four(self):
+        s.atomic('connection.json',{'key':KEY,'models':['m'],'verifiedAt':'t'})
+        st=s.status();self.assertEqual(st['apiKeyHint'],'…'+KEY[-4:]);self.assertNotIn(KEY[:-4],json.dumps(st))
+        (s.DATA/'connection.json').unlink()
