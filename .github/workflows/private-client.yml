@@ -95,7 +95,7 @@ jobs:
     env:
       IMAGE: ghcr.io/humanitylabs-org/wizard-private-client
       DIGEST: ${{ needs.publish.outputs.digest }}
-      DOCKER_CONFIG: ${{ runner.temp }}/anonymous-docker
+      DOCKER_CONFIG: ${{ github.workspace }}/.anonymous-docker
     steps:
       - uses: actions/checkout@v4
         with:
