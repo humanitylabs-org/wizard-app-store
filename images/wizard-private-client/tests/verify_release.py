@@ -11,6 +11,9 @@ ACCEPT = 'application/vnd.oci.image.index.v1+json, application/vnd.oci.image.man
 
 def main():
     # No registry publication token or stored login is available in this job.
+    for name in ('GH_TOKEN', 'GITHUB_TOKEN', 'DOCKER_AUTH_CONFIG', 'REGISTRY_AUTH_FILE'):
+        os.environ.pop(name, None)
+    Path(os.environ['HOME']).mkdir(mode=0o700, parents=True, exist_ok=True)
     config = Path(os.environ['DOCKER_CONFIG']); config.mkdir(mode=0o700, parents=True, exist_ok=True)
     (config/'config.json').write_text('{}')
     with urllib.request.urlopen(f'https://ghcr.io/token?service=ghcr.io&scope=repository:{PACKAGE}:pull', timeout=30) as response:
@@ -22,7 +25,10 @@ def main():
         return json.loads(raw), digest
     expected=os.environ['DIGEST']; sha=os.environ['EXPECTED_SHA']
     index,digest=fetch(expected); assert digest == expected
-    for tag in ['0.1.0', 'sha-'+sha]: assert fetch(tag)[1] == expected, tag
+    tags=['sha-'+sha]
+    release=os.environ.get('RELEASE_VERSION', '')
+    if release: tags.append(release)
+    for tag in tags: assert fetch(tag)[1] == expected, tag
     platforms={}
     for entry in index['manifests']:
         platform=entry['platform']; arch=platform['architecture']
@@ -34,7 +40,7 @@ def main():
         platforms[arch]=entry['digest']
     assert set(platforms) == {'amd64','arm64'}
     for arch in sorted(platforms):
-        for ref in [expected,'0.1.0','sha-'+sha]:
+        for ref in [expected,*tags]:
             image=os.environ['IMAGE']+('@' if ref.startswith('sha256:') else ':')+ref
             subprocess.run(['docker','pull','--platform','linux/'+arch,image], check=True)
             subprocess.run(['docker','image','rm',image], check=True)

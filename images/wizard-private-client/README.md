@@ -27,7 +27,7 @@ The current official SDK and `tinfoil-proxy --user-cache-secret` use an encrypte
 
 ## Agent Service deployment contract
 
-Image intended for first publication on merge: **`ghcr.io/humanitylabs-org/wizard-private-client:0.1.0`**. PRs test but do not publish. Add the multi-architecture digest after the main workflow publishes; don't reuse the version for later code.
+Published **0.1.0** from source `c3a4345ff68363dfff7435f80344ca1a235624be` via [guarded CI dispatch](https://github.com/humanitylabs-org/wizard-app-store/actions/runs/40115387940), with anonymous amd64/arm64 pulls and restricted-runtime tests. Runtime pin: **`ghcr.io/humanitylabs-org/wizard-private-client@sha256:c562bef2166e6e1054be8eed34229cf0ead4574002da28f8fe5d4f09ad0e6631`**. See `release.json`. PRs never publish; main publishes write-once full-SHA tags; versions require repeated confirmation and an exact-head dispatch. Do not overwrite the version for later code. A read-only `private-client-verify.yml` dispatch can reverify the published digest without rebuilding it.
 
 | Environment | Value |
 |---|---|
@@ -44,7 +44,7 @@ Example compose fragment (Agent Service must set the host-file paths and network
 ```yaml
 services:
   agent-example-client:
-    image: ghcr.io/humanitylabs-org/wizard-private-client:0.1.0
+    image: ghcr.io/humanitylabs-org/wizard-private-client@sha256:c562bef2166e6e1054be8eed34229cf0ead4574002da28f8fe5d4f09ad0e6631
     user: "1000:1000"
     read_only: true
     cap_drop: [ALL]
@@ -79,6 +79,9 @@ Hermes: `provider: custom`, `base_url: http://agent-<id>-client:3301/v1`, `api_k
 ```sh
 cd images/wizard-private-client
 npm ci --ignore-scripts
+# Optional: real ATC + official verifyBundle + EHBP over authenticated HTTP.
+# No provider key, model request or credit; tampered bundle must fail closed.
+node tests/live-attestation.mjs
 npm test
 npm audit --omit=dev
 # No API key; builds disposable test images and verifies both profiles' HTTP paths.

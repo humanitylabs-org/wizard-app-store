@@ -21,12 +21,14 @@ def main():
     basic = base64.b64encode((os.environ['GITHUB_ACTOR']+':'+os.environ['GH_TOKEN']).encode()).decode()
     request = urllib.request.Request(f'https://ghcr.io/token?service=ghcr.io&scope=repository:{PACKAGE}:pull,push', headers={'Authorization':'Basic '+basic})
     with urllib.request.urlopen(request, timeout=30) as response: token=json.load(response)['token']
-    version = manifest('0.1.0', token)
+    release = os.environ.get('RELEASE_VERSION', '')
+    if release and release != '0.1.0': raise RuntimeError('Unrecognized release version')
+    version = manifest(release, token) if release else None
     source = manifest('sha-'+os.environ['GITHUB_SHA'], token)
     if version or source:
-        if version and version == source:
-            with open(os.environ['GITHUB_OUTPUT'], 'a') as output: output.write('digest='+version+'\n')
-            print('Reusing existing exact-source immutable release', version)
+        if source and (not release or version == source):
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as output: output.write('digest='+source+'\n')
+            print('Reusing existing exact-source immutable release', source)
         else:
             raise RuntimeError('Release/source tag already exists; refusing overwrite. Bump the version.')
     else: print('Both write-once release tags are absent')

@@ -1,0 +1,33 @@
+name: Verify Published Private Client
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full commit SHA labeled in the existing image
+        required: true
+      digest:
+        description: Existing immutable multi-platform sha256 index digest
+        required: true
+      version:
+        description: Optional existing version tag to verify without publishing
+        required: false
+        default: '0.1.0'
+permissions:
+  contents: read
+jobs:
+  anonymous-pulls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      IMAGE: ghcr.io/humanitylabs-org/wizard-private-client
+      DIGEST: ${{ inputs.digest }}
+      EXPECTED_SHA: ${{ inputs.source_sha }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      DOCKER_CONFIG: ${{ github.workspace }}/.anonymous-docker
+      HOME: ${{ github.workspace }}/.anonymous-home
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify existing artifact anonymously (never login, build or publish)
+        run: python3 images/wizard-private-client/tests/verify_release.py

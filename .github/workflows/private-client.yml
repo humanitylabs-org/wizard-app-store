@@ -38,7 +38,7 @@ jobs:
         run: npm ci --ignore-scripts && npm audit --omit=dev
       - name: Unit, real EHBP sealing and isolated container checks (no API key)
         working-directory: images/wizard-private-client
-        run: python3 tests/run.py
+        run: python3 -m unittest discover -s tests -p 'test_release_guard.py' -v && python3 tests/run.py
   publish:
     needs: private-client
     if: >-
@@ -64,6 +64,7 @@ jobs:
         id: existing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
         run: python3 images/wizard-private-client/tests/release_guard.py
       - uses: docker/login-action@v3
         if: steps.existing.outputs.digest == ''
@@ -84,8 +85,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/humanitylabs-org/wizard-app-store
             org.opencontainers.image.revision=${{ github.sha }}
           tags: |
-            ghcr.io/humanitylabs-org/wizard-private-client:0.1.0
             ghcr.io/humanitylabs-org/wizard-private-client:sha-${{ github.sha }}
+            ${{ github.event_name == 'workflow_dispatch' && 'ghcr.io/humanitylabs-org/wizard-private-client:0.1.0' || '' }}
   verify-public:
     needs: publish
     runs-on: ubuntu-24.04
@@ -96,6 +97,8 @@ jobs:
       IMAGE: ghcr.io/humanitylabs-org/wizard-private-client
       DIGEST: ${{ needs.publish.outputs.digest }}
       DOCKER_CONFIG: ${{ github.workspace }}/.anonymous-docker
+      HOME: ${{ github.workspace }}/.anonymous-home
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
