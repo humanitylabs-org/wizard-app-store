@@ -32,9 +32,14 @@ def with_legacy(result):
             if os.environ.get('CLAUDE_CODE_OAUTH_TOKEN'):
                 old = {**old, 'status': 'connected', 'error': None}
             if old.get('status') != 'not_connected':
-                result['accounts'].append({'id': 'legacy-claude-code', 'name': old.get('account') or 'Claude',
+                # Hermes mirrors this same Claude Code login into its pool; show one row, not two.
+                mirrors = [a for a in result['accounts'] if a.get('mirror') == 'claude-code']
+                result['accounts'] = [a for a in result['accounts'] if a.get('mirror') != 'claude-code']
+                # The original sign-in is the first account; added subscriptions follow it.
+                result['accounts'].insert(0, {'id': 'legacy-claude-code', 'name': old.get('account') or 'Claude',
                     'source': 'legacy-claude-code', 'email': old.get('account'), 'plan': old.get('plan'),
-                    'status': old['status'], 'usage': old.get('usage'), 'error': old.get('error'), 'credentials': [],
+                    'status': old['status'], 'usage': old.get('usage'), 'error': old.get('error'),
+                    'credentials': [c for m in mirrors for c in m.get('credentials') or []],
                     'actions': {'reconnect': False, 'remove': False}})
             result['legacyStatus'] = old.get('status', 'unknown')
         except Exception:
