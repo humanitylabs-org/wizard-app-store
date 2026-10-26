@@ -12,10 +12,10 @@ DEFAULT_URL = 'http://hermes-agent:9119'
 # Why the agent's account broker could not be read. The page shows the line and a Retry; it never offers a sign-in
 # that would not reach the agent (see pool_server.legacy_signin).
 REASONS = {
-    'not_configured': "This app isn't linked to your agent yet. Ask your agent to repair Wizard (`wizard doctor`).",
+    'not_configured': "This app isn't linked to your agent yet. Ask your agent to reconnect it to itself.",
     'unreachable': "Can't reach your agent right now. Retry in a moment; if it keeps failing, ask your agent to "
-                   "repair Wizard (`wizard doctor`).",
-    'login_rejected': "Your agent didn't accept this app's login. Ask your agent to repair Wizard (`wizard doctor`).",
+                   "reconnect this app.",
+    'login_rejected': "Your agent didn't accept this app's login. Ask your agent to reconnect this app.",
     'no_broker': "Your agent can't add sign-ins from this app yet.",
 }
 
