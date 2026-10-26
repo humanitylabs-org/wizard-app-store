@@ -74,7 +74,14 @@ function renderAccount(a) {
     li.append(box);
   } else li.append(el('p', 'muted', 'No usage yet'));
 
-  if (legacy) return li;
+  if (legacy) {
+    // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.
+    if (!['ready', 'connected', 'renewing'].includes(a.status)) {
+      const again = el('a', 'link', 'Sign in again'); again.href = 'claude-code/'; again.dataset.legacySignin = '1';
+      li.append(again);
+    }
+    return li;
+  }
   const creds = a.credentials || [];
   if (creds.length) {
     const det = el('details', 'manage');
@@ -109,9 +116,17 @@ function render(data) {
   $('accounts').replaceChildren(...data.accounts.map(renderAccount));
   $('empty').hidden = n > 0;
   const resume = dialogHidden && busy;
-  $('add').hidden = !resume && !allowed('add');
-  $('add').disabled = !resume && (busy || !allowed('add'));
-  $('add').textContent = resume ? 'Resume sign-in' : (n ? '+ Add' : 'Sign in');
+  const fallback = legacyFallback();
+  $('add').hidden = !resume && !allowed('add') && !fallback;
+  $('add').disabled = !resume && !fallback && (busy || !allowed('add'));
+  $('add').textContent = resume ? 'Resume sign-in' : (n && !fallback ? '+ Add' : 'Sign in');
+}
+
+// Without the agent's account broker (older or fresh-mode agents, or changes switched off) Claude still signs in
+// the original way: the official Claude Code login on its own page, exactly as before multiple subscriptions.
+function legacyFallback() {
+  if (provider() !== 'claude' || allowed('add')) return false;
+  return !(snapshot?.accounts || []).some(a => ['ready', 'connected', 'renewing'].includes(a.status));
 }
 
 async function refresh() {
@@ -245,6 +260,7 @@ $('submit-code').addEventListener('click', async () => {
 $('refresh').addEventListener('click', refresh);
 $('add').addEventListener('click', () => {
   if (dialogHidden && busy && active) { dialogHidden = false; display(active); render(snapshot); }
+  else if (legacyFallback()) location.href = 'claude-code/';
   else if (snapshot) ask('add');
 });
 
