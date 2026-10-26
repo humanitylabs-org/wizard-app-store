@@ -19,6 +19,11 @@
     <section class="wz-sec" aria-labelledby="subs-h">
       <h2 class="wz-sec-h" id="subs-h"><span class="wz-sr">Accounts</span><small id="count" hidden></small><button id="refresh" class="icon-btn" type="button" aria-label="Refresh"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></h2>
       <ul id="accounts" class="wz-list" aria-label="Accounts"></ul>
+      <div id="problem" class="wz-empty problem" role="alert" hidden>
+        <div class="wz-tile" aria-hidden="true">!</div>
+        <strong id="problem-text"></strong>
+        <button id="retry" class="primary" type="button">Retry</button>
+      </div>
       <div id="empty" class="wz-empty" hidden>
         <div class="wz-tile" aria-hidden="true">+</div>
         <strong>Not connected</strong>
@@ -33,8 +38,8 @@
   <p id="dlg-text" class="dlg-text"></p>
   <label id="nick-wrap" class="field" hidden><span class="wz-sr">Nickname</span><input id="nick" class="wz-input" maxlength="40" autocomplete="off" placeholder="Nickname (optional)"></label>
   <ol id="steps" class="steps" hidden>
+    <li id="code-step" hidden><span>Copy this code</span><div class="code-row"><output id="user-code" class="code"></output><button id="copy" type="button" class="ghost">Copy</button></div></li>
     <li id="signin-step"><a id="signin" class="primary" target="_blank" rel="noopener noreferrer" href="#">Open sign-in</a></li>
-    <li id="code-step" hidden><span>Code</span><div class="code-row"><output id="user-code" class="code"></output><button id="copy" type="button" class="ghost">Copy</button></div></li>
     <li id="paste-step" hidden><span>Paste code</span><div class="code-row"><input id="code" class="wz-input" type="password" autocomplete="off" aria-label="Authorization code"><button id="submit-code" type="button" class="primary">Submit</button></div></li>
   </ol>
   <p id="dlg-status" class="dlg-status" role="status" aria-live="polite"></p>

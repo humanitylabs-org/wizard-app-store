@@ -15,6 +15,14 @@
 - The original Claude Code sign-in page stays reachable at `claude-code/` (Connect, code, Test, Sign out of the login the agent's Claude Code provider uses). Its row shows "Sign in again" when that login is not working, and "Sign in" falls back to it when the agent has no account broker (older plugin, fresh-mode agent or changes off).
 - The Claude Code mirror folds into the original row also for plugins that predate the `mirror` flag (unmanaged grants labelled `claude_code`), so a single-login box never reports a second subscription.
 
+## ChatGPT 0.2.4 / Claude 0.2.6: sign-in reliability (one shared engine page)
+
+- Both images ship byte-identical `pool_server.py`, `pool_client.py` and `pool-static/` (a test enforces it), so ChatGPT and Claude look and behave the same.
+- When the agent's dashboard cannot be asked, `/api/accounts` says why (`error.code`: `unreachable`, `not_configured`, `login_rejected`, `no_broker`; `agent` = host:port, never a credential) and the page shows that line with **Retry** instead of an empty list or a sign-in. `/api/connection` then drops `accounts` and answers `status=error`, `error.code=unreachable`, so Home keeps its last reading instead of showing "not connected".
+- Claude falls back to the original Claude Code page (`legacySignin`) only on the fresh-mode Hermes Agent app without a broker. On an alongside box (agent URL is not `http://hermes-agent:9119`) that login would not reach the host agent, so it is never offered there.
+- The original Claude Code sign-in and an agent row for the same account show as one row: exact `emailHash` match when the plugin reports it (wizard-agent-service plugin), otherwise, on alongside only, matching masked email.
+- ChatGPT's dialog says up front that ChatGPT needs **Settings → Security → Device code sign-in for Codex** turned on, shows the code with Copy above the sign-in link, and repeats the hint when a sign-in fails or times out.
+
 ## Legacy Claude Code ownership and renewal
 
 The existing Claude shared volume, ownership, provider/model and DirectSDK configuration remain unchanged. Legacy Claude Code is a separate source, not a Hermes-owned account; no broker reconnect/remove controls are offered for it.

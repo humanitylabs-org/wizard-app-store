@@ -2,10 +2,10 @@ name: Build ChatGPT (AI connection app)
 on:
   push:
     branches: [main]
-    paths: ['images/wizard-chatgpt/**', '__tests__/chatgpt.test.ts', '.github/workflows/chatgpt.yml']
+    paths: ['images/wizard-chatgpt/**', '__tests__/chatgpt.test.ts', 'tests/connection-signin-reliability.py', '.github/workflows/chatgpt.yml']
   pull_request:
     branches: [main]
-    paths: ['images/wizard-chatgpt/**', '__tests__/chatgpt.test.ts', '.github/workflows/chatgpt.yml']
+    paths: ['images/wizard-chatgpt/**', '__tests__/chatgpt.test.ts', 'tests/connection-signin-reliability.py', '.github/workflows/chatgpt.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -38,6 +38,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an already published tag
+        if: github.event_name != 'pull_request'
+        run: |
+          if docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.4 >/dev/null 2>&1; then
+            echo "wizard-chatgpt:0.2.4 is already published; bump the tag in this workflow and server.py" >&2; exit 1
+          fi
       - name: Publish tested ChatGPT (amd64 and arm64)
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
@@ -46,11 +52,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.3
+          tags: ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.4
       - name: Published image passes the same checks
         if: github.event_name != 'pull_request'
         run: |
-          docker pull ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.3
-          SKIP_BUILD=1 WIZARD_CHATGPT_IMAGE=ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.3 sh images/wizard-chatgpt/test-container.sh
-          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.3 | grep -q linux/arm64
-# Publishes only after store, unit and container checks pass. Never re-push 0.2.1: bump the tag.
+          docker pull ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.4
+          SKIP_BUILD=1 WIZARD_CHATGPT_IMAGE=ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.4 sh images/wizard-chatgpt/test-container.sh
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-chatgpt:0.2.4 | grep -q linux/arm64
+# Publishes only after store, unit and container checks pass. Never re-push 0.2.4: bump the tag.

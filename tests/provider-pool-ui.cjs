@@ -50,10 +50,17 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    await page.getByRole('button',{name:'Remove'}).first().click();await page.locator('#cancel').click();await closed(page);assert.equal(calls.length,0);
    // add: nickname -> start -> big device code visible
    await page.locator('#add').click();await page.locator('#nick').fill('Work');
+   // ChatGPT refuses device codes until this one-time setting is on: the dialog says so before the code.
+   assert.match(await page.locator('#dlg-text').innerText(),/Settings → Security.*Device code sign-in for Codex/);
    if(shots) await page.screenshot({path:`${shots}/ui-add-${width}.png`});
    await page.locator('#go').click();
    await page.waitForFunction(()=>document.querySelector('#user-code')?.textContent==='ABCD-EFGHI' && !document.querySelector('#code-step').hidden);
    assert.equal(calls[0].action,'add');assert.equal(calls[0].label,'Work');
+   // Copy-first: the code (with Copy) sits above the sign-in link, and the hint stays visible while waiting.
+   const [codeY,linkY]=await page.evaluate(()=>[document.querySelector('#code-step').getBoundingClientRect().top,document.querySelector('#signin-step').getBoundingClientRect().top]);
+   assert.ok(codeY<linkY,'code above the sign-in link');
+   assert.match(await page.locator('#dlg-text').innerText(),/Device code sign-in for Codex/);
+   assert.match(await page.locator('#signin').innerText(),/paste the code/);
    await page.evaluate(()=>history.back());
    await page.waitForFunction(()=>!document.getElementById('manage').open);
    assert.equal(await page.locator('#add').textContent(),'Resume sign-in');

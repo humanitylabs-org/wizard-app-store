@@ -25,6 +25,7 @@ jobs:
           python3 tests/test_legacy_renewal.py
           python3 tests/provider-pool-regressions.py
           python3 tests/claude-pool-accounts.py
+          python3 tests/connection-signin-reliability.py
           python3 -I images/wizard-claude/test-usage.py
       - run: npx tsc --noEmit
       - name: Build the Hermes Agent Wizard image under its recipe tag (published by ai-accounts.yml)
