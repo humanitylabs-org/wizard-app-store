@@ -76,7 +76,7 @@ const server=http.createServer(async(req,res)=>{
       assert.equal(await page.locator('#add').isVisible(),false);
       // 6. alongside box whose agent can't be reached: no Sign in that would miss the agent, a plain reason + Retry
       rows=[];management={status:'unavailable'};
-      extra={legacySignin:false,alongside:true,inventoryStatus:'unavailable',agent:'100.64.0.9:9119',error:{code:'unreachable',message:"Can't reach your agent right now."}};
+      extra={legacySignin:false,alongside:true,inventoryStatus:'unavailable',agent:'agent.example:9119',error:{code:'unreachable',message:"Can't reach your agent right now."}};
       await page.goto(base);await page.locator('#problem').waitFor({state:'visible'});
       assert.equal(await page.locator('#add').isVisible(),false);
       assert.equal(await page.locator('#empty').isVisible(),false);
