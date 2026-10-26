@@ -53,8 +53,11 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.calls,[('chatgpt','/operations',body)])
         self.assertEqual(self.request('/api/logout',{},headers={'X-Wizard-Account-Action':'1'})[0],404)
     def test_password_missing_fails_closed(self):
+        # No page password (Tailscale-only box): same-origin requests only, and still the exact broker contract.
         m.PASSWORD=''
-        self.assertEqual(self.request('/api/operations',{},headers={'X-Wizard-Account-Action':'1'})[0],503)
+        self.assertEqual(self.request('/api/operations',{'action':'add','confirmed':True},headers={'X-Wizard-Account-Action':'1','Origin':'https://evil.example','Host':'wizard.example'})[0],403)
+        self.assertEqual(self.request('/api/operations',{'action':'add','confirmed':True},headers={'X-Wizard-Account-Action':'1','Sec-Fetch-Site':'cross-site'})[0],403)
+        self.assertEqual(self.request('/api/operations',{},headers={'X-Wizard-Account-Action':'1'})[0],403)
         self.assertEqual(self.calls,[])
     def test_box_only_connection_and_static_files(self):
         self.assertEqual(self.request('/api/connection',headers={'X-Forwarded-For':'1.2.3.4'})[0],403)
@@ -95,14 +98,14 @@ class HTTPTests(unittest.TestCase):
         m.LEGACY=Legacy()
         code,raw,_=self.request('/api/accounts')
         out=json.loads(raw);self.assertEqual(code,200)
-        self.assertEqual(out['accounts'][-1]['error']['code'],'expired')
+        self.assertEqual(next(a for a in out['accounts'] if a['id']=='legacy-claude-code')['error']['code'],'expired')
         seen=[]
         def renew(answer,reader):
             seen.append(reader)
             return {'status':'connected','usage':{'limits':[{'usedPercent':23}]}}
         m.LEGACY_RENEW=renew
         code,raw,_=self.request('/api/accounts')
-        self.assertEqual(json.loads(raw)['accounts'][-1]['usage']['limits'][0]['usedPercent'],23)
+        self.assertEqual(next(a for a in json.loads(raw)['accounts'] if a['id']=='legacy-claude-code')['usage']['limits'][0]['usedPercent'],23)
         self.assertEqual(seen,[m.LEGACY])
 
 if __name__=='__main__':unittest.main()

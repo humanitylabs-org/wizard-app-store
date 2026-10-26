@@ -15,9 +15,15 @@ const hermesAccounts = () => (snapshot?.accounts || []).filter(a => a.source !==
 
 async function api(path, body) {
   const r = await fetch(path, {cache: 'no-store', ...(body ? {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Wizard-Account-Action': '1'}, body: JSON.stringify(body)} : {})});
-  if (!r.ok) { const e = new Error('Request failed'); e.status = r.status; throw e; }
+  if (!r.ok) {
+    const e = new Error('Request failed'); e.status = r.status;
+    try { const d = await r.json(); e.detail = typeof d.error === 'string' ? d.error : ''; } catch { e.detail = ''; }
+    throw e;
+  }
   return r.json();
 }
+// ChatGPT refuses Codex device codes until the owner turns this on once; say so before the code, not after.
+const DEVICE_HINT = 'First, in ChatGPT open Settings → Security and turn on “Device code sign-in for Codex”.';
 
 function usedOf(l) {
   if (typeof l.usedPercent === 'number') return Math.round(l.usedPercent);
@@ -74,7 +80,14 @@ function renderAccount(a) {
     li.append(box);
   } else li.append(el('p', 'muted', 'No usage yet'));
 
-  if (legacy) return li;
+  if (legacy) {
+    // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.
+    if (!['ready', 'connected', 'renewing'].includes(a.status)) {
+      const again = el('a', 'link', 'Sign in again'); again.href = 'claude-code/'; again.dataset.legacySignin = '1';
+      li.append(again);
+    }
+    return li;
+  }
   const creds = a.credentials || [];
   if (creds.length) {
     const det = el('details', 'manage');
@@ -107,11 +120,25 @@ function render(data) {
   const n = data.accounts.length;
   $('count').textContent = String(n); $('count').hidden = !n;
   $('accounts').replaceChildren(...data.accounts.map(renderAccount));
-  $('empty').hidden = n > 0;
+  // The agent could not be asked (or cannot take sign-ins from here): say why with a Retry, never a dead Sign in.
+  const problem = data.inventoryStatus === 'unavailable' ? (data.error?.message || 'Can’t reach your agent right now.')
+    : (data.management?.status === 'off' && !n ? (data.management.message || 'Signing in from this app is switched off on your agent.') : '');
+  $('problem').hidden = !problem || data.legacySignin === true;
+  $('problem-text').textContent = problem;
+  $('empty').hidden = n > 0 || !$('problem').hidden;
   const resume = dialogHidden && busy;
-  $('add').hidden = !resume && !allowed('add');
-  $('add').disabled = !resume && (busy || !allowed('add'));
-  $('add').textContent = resume ? 'Resume sign-in' : (n ? '+ Add' : 'Sign in');
+  const fallback = legacyFallback();
+  $('add').hidden = !resume && !allowed('add') && !fallback;
+  $('add').disabled = !resume && !fallback && (busy || !allowed('add'));
+  $('add').textContent = resume ? 'Resume sign-in' : (n && !fallback ? '+ Add' : 'Sign in');
+}
+
+// Without the agent's account broker (the fresh-mode Hermes Agent app or an older plugin) Claude still signs in the
+// original way: the official Claude Code login on its own page, which that agent shares. The server decides
+// (`legacySignin`): on an alongside box that login would not reach the agent, so the page says why instead.
+function legacyFallback() {
+  if (provider() !== 'claude' || allowed('add') || snapshot?.legacySignin !== true) return false;
+  return !(snapshot?.accounts || []).some(a => ['ready', 'connected', 'renewing'].includes(a.status));
 }
 
 async function refresh() {
@@ -119,7 +146,7 @@ async function refresh() {
   try {
     const data = await api('api/accounts');
     render(data);
-    $('message').textContent = data.error ? 'Problem reading accounts.' : '';
+    $('message').textContent = data.error && data.inventoryStatus !== 'unavailable' ? 'Problem reading accounts.' : '';
   } catch {
     if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
     $('add').hidden = true;
@@ -144,7 +171,9 @@ function ask(action, account, credential) {
   $('nick-wrap').hidden = action !== 'add';
   if (action === 'add') {
     $('dlg-title').textContent = `Sign in to ${b}`;
-    $('dlg-text').textContent = provider() === 'chatgpt' && hermesAccounts().length ? 'Use an account not listed yet.' : '';
+    $('dlg-text').textContent = provider() === 'chatgpt'
+      ? DEVICE_HINT + (hermesAccounts().length ? ' Use an account not listed yet.' : '')
+      : '';
     showButtons({go: true, goLabel: 'Continue'});
   } else if (action === 'reconnect') {
     $('dlg-title').textContent = `Reconnect ${account.name}`;
@@ -168,7 +197,7 @@ async function start() {
     display(await api('api/operations', {action, target: credential?.id, label: action === 'add' ? $('nick').value.trim() : '', confirmed: true}));
   } catch (e) {
     busy = false; $('add').disabled = false;
-    setStatus(e.status === 409 ? 'Another sign-in is running.' : 'Could not start. Try again.', 'err');
+    setStatus(e.status === 409 ? 'Another sign-in is running.' : (e.detail || 'Could not start. Try again.'), 'err');
     showButtons({cancel: true, cancelLabel: 'Close'});
   }
 }
@@ -179,10 +208,11 @@ function display(job) {
   if (!$('manage').open && !dialogHidden) $('manage').showModal();
   $('nick-wrap').hidden = true;
   if (!TERMINAL.has(job.status)) {
-    $('dlg-text').textContent = '';
+    // ChatGPT: copy the code first, then open the sign-in page and paste it there.
+    $('dlg-text').textContent = job.userCode ? DEVICE_HINT : '';
     $('steps').hidden = !(job.url || job.userCode || job.inputRequired);
     $('signin').href = job.url || '#'; $('signin-step').hidden = !job.url;
-    $('signin').textContent = 'Open sign-in';
+    $('signin').textContent = job.userCode ? 'Open sign-in and paste the code' : 'Open sign-in';
     $('code-step').hidden = !job.userCode; $('user-code').textContent = job.userCode || '';
     $('paste-step').hidden = !job.inputRequired;
     setStatus(job.url ? 'Waiting…' : 'Starting…', 'wait');
@@ -202,7 +232,13 @@ function display(job) {
     needs_review: 'Unclear. Check the list first.'
   }[job.status];
   setStatus(done, job.status === 'succeeded' ? 'ok' : (job.status === 'cancelled' ? '' : 'err'));
+  $('dlg-text').textContent = provider() === 'chatgpt' && ['failed', 'expired'].includes(job.status)
+    ? 'If ChatGPT refused the code: ' + DEVICE_HINT.replace(/^First, in/, 'in') + ' Then try again.' : '';
   refresh().then(() => {
+    // Success means the agent itself now lists the sign-in; if it does not, say so rather than “Connected”.
+    if (job.status === 'succeeded' && job.action !== 'remove' && snapshot?.inventoryStatus === 'unavailable') {
+      setStatus('Signed in, but your agent can’t be reached to confirm it. Retry in a moment.', 'err');
+    }
     if (job.status === 'succeeded' && job.action === 'add' && before > 0 && hermesAccounts().length <= before) {
       $('dlg-title').textContent = 'Already added';
       setStatus(`That account is already listed. Sign out of ${brand()} in your browser or use a private window.`, 'err');
@@ -243,8 +279,10 @@ $('submit-code').addEventListener('click', async () => {
   finally { $('submit-code').disabled = false; }
 });
 $('refresh').addEventListener('click', refresh);
+$('retry').addEventListener('click', refresh);
 $('add').addEventListener('click', () => {
   if (dialogHidden && busy && active) { dialogHidden = false; display(active); render(snapshot); }
+  else if (legacyFallback()) location.href = 'claude-code/';
   else if (snapshot) ask('add');
 });
 

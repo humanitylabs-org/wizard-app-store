@@ -11,11 +11,11 @@ const pool=(n)=>({id:'acct'+n,name:`Sub ${n}`,email:`owner${n}@example.com`,plan
   usage:{limits:[{label:'All models · weekly',usedPercent:7*n,remainingPercent:100-7*n,resetsAt:new Date(Date.now()+2*86400e3).toISOString()}]}});
 const legacy=(status)=>({id:'legacy-claude-code',source:'legacy-claude-code',name:'owner@example.com',email:'owner@example.com',plan:'Max 20x',status,
   usage:status==='connected'?{limits:[{label:'Session',usedPercent:5,remainingPercent:95}]}:null,credentials:[],actions:{reconnect:false,remove:false}});
-let rows=[],management=MANAGED,calls=[],job=null,hits=[];
+let rows=[],management=MANAGED,calls=[],job=null,hits=[],extra={};
 const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://x');hits.push(url.pathname);
   if(url.pathname.endsWith('/api/accounts')){res.setHeader('Content-Type','application/json');
-    return res.end(JSON.stringify({provider:'claude',name:'Claude',accounts:rows,accountCount:rows.length,actions:{add:management===MANAGED},management}));}
+    return res.end(JSON.stringify({provider:'claude',name:'Claude',accounts:rows,accountCount:rows.length,actions:{add:management===MANAGED},management,legacySignin:management!==MANAGED,...extra}));}
   if(url.pathname.endsWith('/api/operations')&&req.method==='POST'){
     assert.equal(req.headers['x-wizard-account-action'],'1');
     let raw='';for await(const c of req)raw+=c;const b=JSON.parse(raw);calls.push(b);
@@ -74,8 +74,22 @@ const server=http.createServer(async(req,res)=>{
       // 5. no broker but the original login works: nothing to add, nothing to break
       rows=[legacy('connected')];management={status:'unavailable'};await open();
       assert.equal(await page.locator('#add').isVisible(),false);
+      // 6. alongside box whose agent can't be reached: no Sign in that would miss the agent, a plain reason + Retry
+      rows=[];management={status:'unavailable'};
+      extra={legacySignin:false,alongside:true,inventoryStatus:'unavailable',agent:'agent.example:9119',error:{code:'unreachable',message:"Can't reach your agent right now."}};
+      await page.goto(base);await page.locator('#problem').waitFor({state:'visible'});
+      assert.equal(await page.locator('#add').isVisible(),false);
+      assert.equal(await page.locator('#empty').isVisible(),false);
+      assert.match(await page.locator('#problem-text').innerText(),/reach your agent/);
+      const before=hits.filter(h=>h.endsWith('/api/accounts')).length;
+      extra={};rows=[pool(1)];management=MANAGED;
+      await page.locator('#retry').click();
+      await page.waitForFunction(()=>document.querySelectorAll('.acct').length===1);
+      assert.ok(hits.filter(h=>h.endsWith('/api/accounts')).length>before,'Retry reads the agent again');
+      assert.equal(await page.locator('#problem').isVisible(),false);
+      assert.equal(await page.locator('#add').innerText(),'+ Add');
       assert.deepEqual(errors,[]);await page.close();
     }
-    console.log('PASS 390px+1440px: original login + 3 subscriptions = 4 rows/meters; +2 adds -> 6 rows; expired original login -> Sign in again (claude-code/); no broker -> Sign in opens original Claude Code sign-in; no JS errors or native dialogs');
+    console.log('PASS 390px+1440px: original login + 3 subscriptions = 4 rows/meters; +2 adds -> 6 rows; expired original login -> Sign in again (claude-code/); no broker -> Sign in opens original Claude Code sign-in; alongside + unreachable agent -> reason + Retry, no Sign in; no JS errors or native dialogs');
   }finally{await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;server.close();});
