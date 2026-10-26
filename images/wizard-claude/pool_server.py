@@ -15,12 +15,32 @@ assert PROVIDER in ('chatgpt', 'claude')
 PREFIX = 'WIZARD_' + PROVIDER.upper()
 ROOT = Path(__file__).parent / 'pool-static'
 PASSWORD = os.environ.get(PREFIX + '_PASSWORD', '')
+LEGACY_PREFIX = '/claude-code'
 LEGACY = None
 LEGACY_RENEW = None
 if PROVIDER == 'claude':
     import server as claude_owner
     LEGACY = claude_owner.CONNECTION
     LEGACY_RENEW = claude_owner.renew_if_expired
+
+
+def is_mirror(row):
+    """Hermes' pool copy of the host Claude Code login. Current plugins flag it; older plugins (before the
+    flag) list it as an unmanaged grant labelled claude_code, which must not count as a second subscription."""
+    if row.get('mirror') == 'claude-code':
+        return True
+    creds = row.get('credentials') or []
+    return bool(creds) and all(c.get('managed') is not True and c.get('name') == 'claude_code' for c in creds)
+
+
+def same_origin(headers):
+    """Browser-only request guard used when no page password is set (a Tailscale-only box): the owner's own
+    page may change accounts; a cross-site page may not. Non-browser callers on the app network have no
+    Origin and still need the custom action header, which a cross-site form cannot send."""
+    origin = headers.get('Origin')
+    if origin and urlsplit(origin).netloc != headers.get('Host'):
+        return False
+    return headers.get('Sec-Fetch-Site') in (None, 'same-origin', 'none')
 
 
 def with_legacy(result):
@@ -33,8 +53,8 @@ def with_legacy(result):
                 old = {**old, 'status': 'connected', 'error': None}
             if old.get('status') != 'not_connected':
                 # Hermes mirrors this same Claude Code login into its pool; show one row, not two.
-                mirrors = [a for a in result['accounts'] if a.get('mirror') == 'claude-code']
-                result['accounts'] = [a for a in result['accounts'] if a.get('mirror') != 'claude-code']
+                mirrors = [a for a in result['accounts'] if is_mirror(a)]
+                result['accounts'] = [a for a in result['accounts'] if not is_mirror(a)]
                 # The original sign-in is the first account; added subscriptions follow it.
                 result['accounts'].insert(0, {'id': 'legacy-claude-code', 'name': old.get('account') or 'Claude',
                     'source': 'legacy-claude-code', 'email': old.get('account'), 'plan': old.get('plan'),
@@ -104,7 +124,7 @@ class Handler(owner.Handler):
         if self.command != 'HEAD':
             self.wfile.write(data)
 
-    def authorized(self):
+    def authorized(self, path=None):
         if urlsplit(self.path).path == '/api/connection' and self.headers.get('X-Wizard-Grant'):
             return super().authorized('/api/connection')
         if not PASSWORD:
@@ -122,8 +142,26 @@ class Handler(owner.Handler):
         self.end_headers()
         return False
 
+    def legacy(self, method):
+        """The original Claude Code sign-in page (Connect, code, Test, Sign out) under claude-code/: the login
+        the host agent's Claude Code provider uses. Kept so that login can always be renewed from this app."""
+        if PROVIDER != 'claude':
+            return self.send(404, {'error': 'not found'})
+        path = urlsplit(self.path).path
+        if path == LEGACY_PREFIX:
+            self.send_response(308)
+            self.send_header('Location', 'claude-code/')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        rest = self.path[len(LEGACY_PREFIX):] or '/'
+        self.path = rest
+        return method(self)
+
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == LEGACY_PREFIX or path.startswith(LEGACY_PREFIX + '/'):
+            return self.legacy(owner.Handler.do_GET)
         if path == '/health':
             return self.send(200, {'status': 'ok', 'version': owner.VERSION})
         if not self.authorized():
@@ -135,8 +173,8 @@ class Handler(owner.Handler):
         if path == '/SKILL.md':
             return self.send(200, (ROOT.parent / 'SKILL.md').read_bytes(), 'text/markdown; charset=utf-8')
         if re.fullmatch(r'/api/operations/[A-Za-z0-9_-]{20,64}', path):
-            if not PASSWORD:
-                return self.send(503, {'error': 'Configure app password before account management'})
+            if not PASSWORD and not same_origin(self.headers):
+                return self.send(403, {'error': 'Cross-site request rejected'})
             try:
                 return self.send(200, Hermes.request(PROVIDER, '/operations/' + path.rsplit('/', 1)[1]))
             except BridgeError as error:
@@ -167,10 +205,14 @@ class Handler(owner.Handler):
         if urlsplit(self.path).path == '/api/infer':
             # Preserve main's router grants, isolated providers and SSE contract.
             return owner.Handler.do_POST(self)
+        path = urlsplit(self.path).path
+        if path.startswith(LEGACY_PREFIX + '/'):
+            return self.legacy(owner.Handler.do_POST)
         if not self.authorized():
             return
-        if not PASSWORD:
-            return self.send(503, {'error': 'Configure app password before account management'})
+        if not PASSWORD and not same_origin(self.headers):
+            # No page password (Tailscale-only box, like the original Connect): same-origin browser requests only.
+            return self.send(403, {'error': 'Cross-site action rejected'})
         if urlsplit(self.path).path != '/api/operations':
             return self.send(404, {'error': 'not found'})
         if self.headers.get('X-Wizard-Account-Action') != '1' or self.headers.get('Content-Type', '').split(';')[0] != 'application/json' or self.headers.get('Sec-Fetch-Site') == 'cross-site':

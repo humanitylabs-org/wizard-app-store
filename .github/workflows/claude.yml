@@ -2,10 +2,10 @@ name: Build Claude (AI connection app)
 on:
   push:
     branches: [main]
-    paths: ['images/wizard-claude/**', '__tests__/claude.test.ts', '.github/workflows/claude.yml']
+    paths: ['images/wizard-claude/**', '__tests__/claude.test.ts', 'tests/claude-pool-accounts.py', '.github/workflows/claude.yml']
   pull_request:
     branches: [main]
-    paths: ['images/wizard-claude/**', '__tests__/claude.test.ts', '.github/workflows/claude.yml']
+    paths: ['images/wizard-claude/**', '__tests__/claude.test.ts', 'tests/claude-pool-accounts.py', '.github/workflows/claude.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,6 +21,8 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci && npm test && npx tsc --noEmit
+      - name: Any number of subscriptions, no-password owner changes, original sign-in page (loopback fixtures)
+        run: python3 tests/claude-pool-accounts.py
       - name: Usage normalization against a stand-in Anthropic usage server (no token leaks, never refreshes)
         run: python3 -I images/wizard-claude/test-usage.py
       # Use the publisher's docker-container BuildKit driver for pre-publish smoke.
@@ -38,6 +40,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an already published tag
+        if: github.event_name != 'pull_request'
+        run: |
+          if docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.2.5 >/dev/null 2>&1; then
+            echo "wizard-claude:0.2.5 is already published; bump the tag in this workflow and server.py" >&2; exit 1
+          fi
       - name: Publish tested Claude (amd64 and arm64)
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
@@ -46,11 +54,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/wizard-claude:0.2.4
+          tags: ghcr.io/humanitylabs-org/wizard-claude:0.2.5
       - name: Published image passes the same checks
         if: github.event_name != 'pull_request'
         run: |
-          docker pull ghcr.io/humanitylabs-org/wizard-claude:0.2.4
-          SKIP_BUILD=1 WIZARD_CLAUDE_IMAGE=ghcr.io/humanitylabs-org/wizard-claude:0.2.4 sh images/wizard-claude/test-container.sh
-          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.2.4 | grep -q linux/arm64
-# Publishes only after store, unit and container checks pass. Never re-push 0.2.4: bump the tag.
+          docker pull ghcr.io/humanitylabs-org/wizard-claude:0.2.5
+          SKIP_BUILD=1 WIZARD_CLAUDE_IMAGE=ghcr.io/humanitylabs-org/wizard-claude:0.2.5 sh images/wizard-claude/test-container.sh
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.2.5 | grep -q linux/arm64
+# Publishes only after store, unit and container checks pass. Never re-push 0.2.5: bump the tag.
