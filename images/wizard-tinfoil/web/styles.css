@@ -5,20 +5,27 @@
 .wz-conn .sigil svg { width: 100%; height: 100%; display: block; }
 .wz-sec { margin-top: var(--wz-space-3); }
 .wz-sec-h .wz-count { margin-left: 0; }
-#keys.wz-grid { gap: 0; }
-.key-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--wz-space-2); padding: 2px 0 var(--wz-space-2); min-width: 0; }
-.key-row + .key-row { border-top: 1px solid var(--line); padding-top: var(--wz-space-2); }
+/* Keys: one list row per key at every width (connector pattern, same as ChatGPT/Claude accounts). The credit
+ * meter sits under the name when the window is narrow and beside it, in the same row, when it is wide. */
+.key-row { min-width: 0; padding: 2px 0; }
+.key-row + .key-row { border-top: 1px solid var(--line); }
+.key-row > .wz-row { flex-wrap: wrap; row-gap: var(--wz-space-2); }
 .key-row .wz-tile { font-weight: 700; color: var(--accent); background: var(--accent-soft); }
-.key-row .wz-main b, .key-row .wz-main small { overflow: hidden; text-overflow: ellipsis; }
+.key-row .wz-main b, .key-row .wz-main small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .key-row .ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .key-row .chev { flex: none; color: var(--ink-3); font-size: 20px; line-height: 1; }
-.key-row .wz-meter { margin: 0 8px 4px 56px; }
-@container wz-app (max-width: 439px) { .key-row .wz-meter { margin-left: 8px; } }
+.key-row .wz-pill { flex: none; }
+.key-row .use { order: 9; flex: 1 0 100%; min-width: 0; display: grid; gap: var(--wz-space-2); padding: 0 0 4px 48px; }
+.key-row .wz-meter > span { overflow-wrap: anywhere; }
+@container wz-app (max-width: 599px) { .key-row .use:not(:has(> :not([hidden]))) { display: none; } }
+@container wz-app (max-width: 439px) { .key-row .use { padding-left: 0; } }
 @container wz-app (min-width: 600px) {
-  #keys.wz-grid { gap: var(--wz-space-3); }
-  .key-row, .key-row + .key-row { padding: var(--wz-space-2); border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); align-content: start; }
-  .key-row .wz-meter { margin-left: 8px; }
+  /* Same columns in every row, so the meter and pills line up down the list. */
+  .key-row > .wz-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) minmax(200px, 38%) 132px 12px; column-gap: var(--wz-space-3); }
+  .key-row .use { order: 0; padding: 4px 0; }
+  .key-row .wz-pill { justify-self: end; }
 }
+@container wz-app (min-width: 960px) { .key-row > .wz-row { grid-template-columns: 36px minmax(0, 1fr) minmax(260px, 420px) 132px 12px; } }
 .wz-actions .wz-button { min-width: 160px; }
 @container wz-app (max-width: 599px) { .wz-actions .wz-button { flex: 1; } }
 .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; padding: 0 8px 8px; }
