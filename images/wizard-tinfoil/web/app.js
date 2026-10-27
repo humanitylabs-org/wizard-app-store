@@ -37,8 +37,20 @@ function details(s){
   const v=s.verification||{},facts=[['Status',s.status||'unknown'],['Key checked by Tinfoil',s.credentialVerified?'yes':'not yet'],['Agent model',s.chatIntegration||''],['Enclave check',v.mode||''],['SDK',v.sdk||''],['Last verified',v.lastVerifiedAt?new Date(v.lastVerifiedAt).toLocaleString():''],['Models',(s.models||[]).join(', ')],['Contract',s.contract||'']].filter(([,x])=>x);
   el('details').replaceChildren(...facts.flatMap(([a,b])=>{const t=document.createElement('dt'),d=document.createElement('dd');t.textContent=a;d.textContent=b;return[t,d];}));
 }
+// Apps the owner let use Tinfoil from their own page (e.g. Search AI overviews). Remove revokes that app's token.
+const APP_NAMES={'wizard-search':['Search','AI overviews on search results']};
+function apps(s){
+  const list=s.apps||[];el('apps-sec').hidden=!list.length;el('apps-count').textContent=String(list.length);
+  el('apps').replaceChildren(...list.map(id=>{
+    const [name,use]=APP_NAMES[id]||[id,'Uses your private models'],li=document.createElement('li');li.className='app-li';
+    const r=document.createElement('div');r.className='wz-row app-row';const tile=document.createElement('span');tile.className='wz-tile';tile.setAttribute('aria-hidden','true');tile.textContent=name.slice(0,1);
+    const m=document.createElement('span');m.className='wz-main';const b=document.createElement('b');b.textContent=name;const sm=document.createElement('small');sm.textContent=use;m.append(b,sm);
+    const x=document.createElement('button');x.type='button';x.className='wz-button secondary';x.textContent='Remove';x.disabled=busy;
+    x.onclick=()=>{if(x.dataset.armed!=='1'){x.dataset.armed='1';x.textContent='Tap again to remove';setTimeout(()=>{x.dataset.armed='';x.textContent='Remove';},4000);return;}action('api/app-tokens/remove',{app:id});};
+    r.append(tile,m,x);li.append(r);return li;}));
+}
 function render(s){
-  last=s;view('api',s);view('admin',s);credit(s);details(s);
+  last=s;apps(s);view('api',s);view('admin',s);credit(s);details(s);
   const [kind,word]=s.status==='connected'&&s.billing!=='rejected'?['ok','Connected']:s.status==='error'||s.billing==='rejected'||(s.status==='connected'&&s.error)?['warn','Needs attention']:['off','Not connected'];
   el('pill').className='wz-pill '+kind;el('pill').textContent=word;
   el('count').textContent=String((s.credentialStored?1:0)+(s.adminKeyStored?1:0));

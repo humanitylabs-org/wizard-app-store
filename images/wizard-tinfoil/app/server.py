@@ -94,6 +94,20 @@ def register(models):
     except Exception:
         return 'unavailable'
 
+# Apps on this box (e.g. Search's AI overviews) can use the same private gateway when the owner turns that on from
+# the app's own page. Each app gets its own box-only token (app-tokens.json, 0600): the Tinfoil key never leaves
+# this app, the agent's token is unchanged, and Remove here (or Turn off in the app) revokes it at once.
+APP_ID = re.compile(r'^[a-z0-9][a-z0-9-]{1,40}$')
+APP_BASE = f'http://wizard-tinfoil:{PORT}/v1'
+def app_tokens():
+    try: return json.loads((DATA/'app-tokens.json').read_text())
+    except FileNotFoundError: return {}
+def bearer_ok(header):
+    gateway=json.loads((DATA/'gateway-token.json').read_text())['token']
+    ok=hmac.compare_digest(header,'Bearer '+gateway)
+    for t in app_tokens().values(): ok=hmac.compare_digest(header,'Bearer '+t['token']) or ok
+    return ok
+
 def unregister():
     try: agent_call('DELETE', f'/api/providers/custom-endpoints/{ENDPOINT_ID}')
     except Exception: pass
@@ -174,7 +188,7 @@ def billing_status():
 def status():
     # Atomic replace makes this a safe snapshot; never wait behind network verification.
     s = stored()
-    return {'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':usage(),'error':None,**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered'),'apiKeyHint':hint((s or {}).get('key'))}
+    return {'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':usage(),'error':None,**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered'),'apiKeyHint':hint((s or {}).get('key')),'apps':sorted(app_tokens())}
 
 def worker(action, key, payload=None):
     # Kill on timeout; no upstream exception/headers/body may reach logs or clients.
@@ -193,7 +207,7 @@ TOOLS = [{'name':'billing_summary','description':'Read Tinfoil spend and credit 
 def rpc(m):
     i=m.get('id'); method=m.get('method'); p=m.get('params') or {}
     if 'id' not in m: return None
-    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.4'}}
+    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.5'}}
     elif method=='tools/list': r={'tools':TOOLS}
     elif method=='ping': r={}
     elif method=='tools/call' and p.get('name')=='connection_status' and not p.get('arguments'):
@@ -219,14 +233,13 @@ class Handler(BaseHTTPRequestHandler):
             if any(k.lower() in {'tailscale-user-login','x-forwarded-for','forwarded','x-real-ip'} or k.lower().startswith('cf-') for k in self.headers): self.send(403,{'error':'Box-only endpoint.'}); return True
         if write and path.startswith('/api/') and (origin not in ORIGINS or self.headers.get('X-Wizard-Request')!='1'): self.send(403,{'error':'Use the trusted connection page.'}); return True
         if path.startswith('/v1/'):
-            token=json.loads((DATA/'gateway-token.json').read_text())['token']
-            if origin or not hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+token): self.send(401,{'error':'Local gateway credential required.'}); return True
+            if origin or not bearer_ok(self.headers.get('Authorization','')): self.send(401,{'error':'Local gateway credential required.'}); return True
         return False
     def do_HEAD(self): self.do_GET()
     def do_GET(self):
         path=urlsplit(self.path).path
         if self.refused(path): return
-        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.4'})
+        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.5'})
         if path in ('/api/connection', '/api/status'): return self.send(200,status())
         if path=='/v1/models': return self.send(200,{'object':'list','data':[{'id':x,'object':'model','owned_by':'tinfoil'} for x in status()['models']]})
         if path=='/openapi.json': return self.send(200,(ROOT/'openapi.json').read_bytes())
@@ -264,6 +277,19 @@ class Handler(BaseHTTPRequestHandler):
                 if body: raise ValueError()
                 with LOCK: (DATA/'admin.json').unlink(missing_ok=True)
                 billing(True); return self.send(200,status())
+            if path=='/api/app-tokens':
+                # Owner action from an app's own page on this box (trusted origin + X-Wizard-Request, checked above).
+                if set(body)!={'app'} or not isinstance(body['app'],str) or not APP_ID.match(body['app']): return self.send(400,{'error':'Name the app.'})
+                with LOCK:
+                    s=stored()
+                    if not s: return self.send(409,{'error':'Connect Tinfoil first.'})
+                    token=secrets.token_urlsafe(48); atomic('app-tokens.json',{**app_tokens(),body['app']:{'token':token,'createdAt':datetime.datetime.now(datetime.timezone.utc).isoformat()}})
+                return self.send(200,{'app':body['app'],'token':token,'baseUrl':APP_BASE,'models':chat_models(s['models']),'recommended':ranked(s['models'])[:1]})
+            if path=='/api/app-tokens/remove':
+                if set(body)!={'app'} or not isinstance(body['app'],str): return self.send(400,{'error':'Name the app.'})
+                with LOCK:
+                    t=app_tokens(); t.pop(body['app'],None); atomic('app-tokens.json',t)
+                return self.send(200,status())
             if path=='/api/test':
                 if body: raise ValueError()
                 with LOCK:
