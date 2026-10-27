@@ -259,7 +259,9 @@ class Handler(owner.Handler):
             if path == '/api/connection':
                 result = connection(result)
             return self.send(200, result)
-        assets = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/app.css': ('app.css', 'text/css; charset=utf-8'), '/boot.js': ('boot.js', 'text/javascript; charset=utf-8'), '/theme-client.js': ('theme-client.js', 'text/javascript; charset=utf-8'), '/wizard-ui.css': ('wizard-ui.css', 'text/css; charset=utf-8')}
+        assets = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/app.css': ('app.css', 'text/css; charset=utf-8'), '/boot.js': ('boot.js', 'text/javascript; charset=utf-8'), '/theme-client.js': ('theme-client.js', 'text/javascript; charset=utf-8'), '/wizard-ui.css': ('wizard-ui.css', 'text/css; charset=utf-8'),
+                  '/wizard-tokens.css': ('wizard-tokens.css', 'text/css; charset=utf-8'), '/wizard-layout.css': ('wizard-layout.css', 'text/css; charset=utf-8'), '/wizard-sheet.js': ('wizard-sheet.js', 'text/javascript; charset=utf-8'),
+                  '/logo-claude.svg': ('logo-claude.svg', 'image/svg+xml'), '/logo-chatgpt.svg': ('logo-chatgpt.svg', 'image/svg+xml')}
         if path in assets:
             name, ctype = assets[path]
             return self.send(200, (ROOT / name).read_bytes(), ctype)

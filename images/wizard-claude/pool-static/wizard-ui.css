@@ -1,4 +1,4 @@
-/* Wizard UI kit for generated apps (builder template, MVP).
+/* Wizard UI kit for generated apps (style/ canonical source, v1).
  *
  * Rule 1: a hosted app paints NO canvas. In a window or fullscreen the shell's window glass is the
  *         canvas, exactly as it is for Chats. Only a standalone tab paints the skin's background.
@@ -7,33 +7,26 @@
  *         a round accent action. Every value derives from the appearance v1 roles (--wz-*), so all
  *         the five accepted skins and future shell-approved skins flow through without per-app colour work.
  * Rule 3: layout and content stay the app's own. Use these classes; add app styles in styles.css.
+ * Rule 4: look only. Talking to an agent is the real Chats thread (WizardApp.nav.openThread), never a
+ *         composer or transcript built from these classes (wizard-ux docs/COMPONENTS.md).
+ * Rule 5: skins may restyle these classes. Hosted apps load the live copy of this kit from the shell
+ *         (/wizard-os-home/kit/wizard-ui.css) and the active skin's stylesheets after the app's own.
  *
- * Values mirror web/core/chats.css and core/base.css in Wizard UX (ch-row, ch-sec-h, ch-compose). */
+ * Values mirror web/core/chats.css and core/base.css in Wizard UX (ch-row, ch-sec-h). */
 
 :root {
-  --ink: var(--wz-text, #f3efff);
-  --ink-2: var(--wz-text-secondary, #b9b0d8);
-  --ink-3: var(--wz-text-muted, #a59abf);
-  --line-2: var(--wz-border, rgba(205, 190, 255, .24));
-  --line: color-mix(in srgb, var(--line-2) 55%, transparent);
-  --fill: color-mix(in srgb, var(--ink) 6%, transparent);
-  --fill-2: color-mix(in srgb, var(--ink) 10%, transparent);
-  --accent: var(--wz-accent, #b99bff);
-  --on-accent: var(--wz-on-accent, #160b32);
-  --accent-soft: var(--wz-accent-soft, rgba(143, 99, 255, .16));
-  --canvas: var(--wz-canvas, #05030c);
-  --danger: #ff8f8f;
-  --r: 14px;          /* rows, panels */
-  --r-tile: 12px;     /* 36px tiles, search */
-  --r-pill: 20px;     /* composer input */
-  --ease: cubic-bezier(.2, .9, .25, 1);
-  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  color-scheme: dark;
+  --ink: var(--wz-text); --ink-2: var(--wz-text-secondary); --ink-3: var(--wz-text-muted);
+  --line-2: var(--wz-border); --line: color-mix(in srgb, var(--line-2) 55%, transparent);
+  --fill: var(--wz-surface); --fill-2: var(--wz-surface-raised);
+  --accent: var(--wz-accent); --on-accent: var(--wz-on-accent); --accent-soft: var(--wz-accent-soft);
+  --canvas: var(--wz-base); --danger: var(--wz-danger);
+  --r: var(--wz-radius); --r-tile: var(--wz-radius-tile); --r-pill: var(--wz-radius-pill);
+  --ease: var(--wz-ease); --font: var(--wz-font-ui);
 }
-html[data-color-scheme="light"] { color-scheme: light; --danger: #b42318; }
-/* Skin shape. The protocol carries colour only today; these two skins also change shape in the shell. */
-html[data-skin="signal"] { --r: 2px; --r-tile: 2px; --r-pill: 2px; }
-html[data-skin="signal"] .wz-sec-h { font-family: ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .08em; }
+html[data-color-scheme="light"] { color-scheme: light; --danger: var(--ink); }
+html[data-skin="signal"] .wz-sec-h { font-family: var(--wz-font-mono); letter-spacing: .08em; }
+html { background: var(--wz-base); }
+html.wz-hosted, html[data-wz-hosted] { background: transparent; }
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -45,7 +38,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wz-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* ---------- frame: head / scroll / composer, like a Chats thread ---------- */
+/* ---------- frame: head / scroll / footer ---------- */
 .wz-app { display: flex; flex-direction: column; height: 100%; max-width: 640px; margin: 0 auto; }
 .wz-head { flex: none; display: flex; align-items: flex-end; gap: 12px; padding: calc(var(--wos-cutout, 0px) + 18px) 18px 6px; }
 .wz-head h1 { margin: 0; font-size: 26px; line-height: 1.15; font-weight: 750; letter-spacing: -.02em; }
@@ -88,16 +81,17 @@ html[data-skin="signal"] .wz-check i { border-radius: 2px; }
 .wz-empty strong { display: block; margin-bottom: 4px; font-size: 16px; font-weight: 700; color: var(--ink); }
 .wz-empty p { margin: 0 auto; max-width: 30ch; font-size: 14px; line-height: 1.4; }
 
-/* ---------- composer: .ch-compose ---------- */
-.wz-compose { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); }
-.wz-input { flex: 1; min-width: 0; height: 42px; padding: 0 16px; border-radius: var(--r-pill); border: 1px solid var(--line-2); outline: 0; background: var(--fill); color: var(--ink); font-size: 15px; }
-.wz-input::placeholder { color: var(--ink-3); }
-.wz-input:focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
-.wz-send { flex: none; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); transition: opacity 140ms, transform 140ms; }
-html[data-skin="signal"] .wz-send { border-radius: 2px; }
-.wz-send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
-.wz-send:disabled { opacity: .4; cursor: default; }
-.wz-send:not(:disabled):active { transform: scale(.94); }
+/* ---------- single-line add field (forms such as "New habit"; never a chat) ----------
+ * .wz-compose / .wz-input / .wz-send are the pre-23 Oct 2026 names, kept so existing apps keep their look. */
+.wz-field-row, .wz-compose { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); }
+.wz-field, .wz-input { flex: 1; min-width: 0; height: 42px; padding: 0 16px; border-radius: var(--r-pill); border: 1px solid var(--line-2); outline: 0; background: var(--fill); color: var(--ink); font-size: 15px; }
+.wz-field::placeholder, .wz-input::placeholder { color: var(--ink-3); }
+.wz-field:focus, .wz-input:focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.wz-field-go, .wz-send { flex: none; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); transition: opacity 140ms, transform 140ms; }
+html[data-skin="signal"] :is(.wz-field-go, .wz-send) { border-radius: 2px; }
+:is(.wz-field-go, .wz-send) svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
+:is(.wz-field-go, .wz-send):disabled { opacity: .4; cursor: default; }
+:is(.wz-field-go, .wz-send):not(:disabled):active { transform: scale(.94); }
 
 /* ---------- status: errors are visible, confirmations are for screen readers ---------- */
 .wz-status { flex: none; margin: 0; padding: 0 18px 6px; min-height: 0; font-size: 13px; color: var(--danger); }
@@ -108,3 +102,14 @@ html[data-skin="signal"] .wz-send { border-radius: 2px; }
 html.wz-hosted #wiz-staging-tag { display: none !important; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+
+/* Shared semantic primitives: tinted surfaces, never a second full-page canvas. */
+.wz-card { padding: var(--wz-space-4); border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); }
+.wz-card > :first-child { margin-top: 0; } .wz-card > :last-child { margin-bottom: 0; }
+.wz-chip { display: inline-flex; align-items: center; gap: var(--wz-space-2); padding: 4px 10px; border-radius: var(--r-pill); background: var(--fill); color: var(--ink-2); font-size: 13px; }
+.wz-bar { display: flex; align-items: center; gap: var(--wz-space-2); padding: 8px 10px; background: var(--wz-chrome); border-bottom: 1px solid var(--line); backdrop-filter: blur(16px); }
+.wz-button { min-height: 44px; padding: 8px 16px; border-radius: var(--r-tile); background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.wz-button.secondary { background: var(--fill); color: var(--ink); border: 1px solid var(--line-2); }
+.wz-button:disabled { opacity: .45; cursor: default; }
+.wz-sheet { color: var(--ink); background: var(--wz-overlay); border: 1px solid var(--line-2); border-radius: var(--r); padding: var(--wz-space-4); max-width: min(420px, calc(100% - 24px)); max-height: 85%; overflow: auto; backdrop-filter: blur(20px); }
+.wz-sheet::backdrop { background: color-mix(in srgb, var(--wz-base) 74%, transparent); }

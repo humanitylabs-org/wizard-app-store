@@ -13,7 +13,7 @@ import json, os, pathlib, subprocess, sys, time, urllib.request, urllib.error
 from urllib.parse import urlsplit, parse_qs
 assert os.getuid() == 1000 and os.getgid() == 1000, "must run as 1000:1000"
 files = sorted(str(p.relative_to("/app")) for p in pathlib.Path("/app").rglob("*") if p.is_file())
-assert files == sorted(["LICENSE", "SKILL.md", "inference.py", "models.json", "server.py", "static/app.css", "static/app.js", "static/appearance.css", "static/appearance.js", "static/index.html", "usage.py", "warm_spare.py", "pool_server.py", "pool_client.py", *["pool-static/" + n for n in ("app.css", "app.js", "boot.js", "index.html", "theme-client.js", "wizard-ui.css")]]), files
+assert files == sorted(["LICENSE", "SKILL.md", "inference.py", "models.json", "server.py", "static/app.css", "static/app.js", "static/appearance.css", "static/appearance.js", "static/index.html", "usage.py", "warm_spare.py", "pool_server.py", "pool_client.py", *["pool-static/" + n for n in ("app.css", "app.js", "boot.js", "index.html", "logo-chatgpt.svg", "logo-claude.svg", "theme-client.js", "wizard-layout.css", "wizard-sheet.js", "wizard-tokens.css", "wizard-ui.css")]]), files
 v = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
 assert v.startswith(os.environ["CLAUDE_CODE_VERSION"] + " "), v
 assert os.environ["DISABLE_AUTOUPDATER"] == "1"
