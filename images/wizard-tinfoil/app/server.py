@@ -2,12 +2,14 @@
 import datetime
 import hmac
 import json
+import re
 import os
 import secrets
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import http.cookiejar
 import urllib.error
 import urllib.request
@@ -37,10 +39,20 @@ AGENT_BASE = os.environ.get('WIZARD_TINFOIL_AGENT_URL') or (f'http://wizard-tinf
 ENDPOINT_ID = 'wizard-tinfoil'
 # Tinfoil also serves embeddings, speech and tools; only chat models belong in the agent's model list.
 NOT_CHAT = ('embed', 'tts', 'whisper', 'voxtral', 'doc-upload', 'pii-filter', 'websearch', 'safeguard')
-# Best first by the Hermes Index (portal.nousresearch.com/bench, 20 Oct 2026); the top REGISTERED become the agent's private choices.
-PREFERRED = ('glm-5-3', 'kimi-k3', 'deepseek-v4-1-flash', 'gpt-oss-120b', 'llama3-3-70b')
+# The owner's private model is the newest Kimi Tinfoil serves (kimi-k3 today; kimi-k3-1 / kimi-k3.1 the day it lands),
+# then the rest best first by the Hermes Index (portal.nousresearch.com/bench, 20 Oct 2026). The top REGISTERED become
+# the agent's private choices, first one the default.
+PREFERRED = ('glm-5-3', 'deepseek-v4-1-flash', 'gpt-oss-120b', 'llama3-3-70b')
+KIMI = re.compile(r'^kimi-k(\d+)(?:[.-](\d+))?(-pro)?$')
 REGISTERED = 2
+MODEL_REFRESH = int(os.environ.get('WIZARD_TINFOIL_MODEL_REFRESH','21600'))  # re-read Tinfoil's catalogue every 6 h
 def chat_models(models): return [m for m in models if not any(x in m for x in NOT_CHAT)]
+def kimi_version(m):
+    k = KIMI.match(m); return (int(k[1]), int(k[2] or 0), bool(k[3])) if k else None
+def ranked(models):
+    chat = chat_models(models)
+    kimis = sorted((m for m in chat if kimi_version(m)), key=kimi_version, reverse=True)
+    return (kimis[:1] + [m for m in PREFERRED if m in chat]) or chat[:1]
 
 def atomic(name, obj):
     DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -72,10 +84,9 @@ def agent_call(method, path, body=None):
 
 def register(models):
     """Add (or refresh) Tinfoil in the agent's model list. Returns 'registered' or 'unavailable'."""
-    chat = chat_models(models)
-    if not chat: return 'unavailable'
-    ranked = [m for m in PREFERRED if m in chat] or chat[:1]
-    picked = ranked[:REGISTERED]; model = picked[0]
+    picked = ranked(models)[:REGISTERED]
+    if not picked: return 'unavailable'
+    model = picked[0]
     token = json.loads((DATA/'gateway-token.json').read_text())['token']
     try:
         agent_call('POST', '/api/providers/custom-endpoints', {'id':ENDPOINT_ID,'name':'Tinfoil','base_url':AGENT_BASE,'model':model,'models':picked,'api_key':token,'api_mode':'chat_completions','discover_models':False,'make_default':False})
@@ -182,7 +193,7 @@ TOOLS = [{'name':'billing_summary','description':'Read Tinfoil spend and credit 
 def rpc(m):
     i=m.get('id'); method=m.get('method'); p=m.get('params') or {}
     if 'id' not in m: return None
-    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.2'}}
+    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.3'}}
     elif method=='tools/list': r={'tools':TOOLS}
     elif method=='ping': r={}
     elif method=='tools/call' and p.get('name')=='connection_status' and not p.get('arguments'):
@@ -215,7 +226,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         if self.refused(path): return
-        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.2'})
+        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.3'})
         if path in ('/api/connection', '/api/status'): return self.send(200,status())
         if path=='/v1/models': return self.send(200,{'object':'list','data':[{'id':x,'object':'model','owned_by':'tinfoil'} for x in status()['models']]})
         if path=='/openapi.json': return self.send(200,(ROOT/'openapi.json').read_bytes())
@@ -238,7 +249,7 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     result=worker('verify',body['apiKey'])
                     atomic('connection.json',{'key':body['apiKey'],'authenticated':False,**result})
-                    atomic('connection.json',{**stored(),'agent':register(result['models'])})
+                    atomic('connection.json',{**stored(),'agent':register(result['models']),'picked':ranked(result['models'])[:REGISTERED]})
                 return self.send(200,status())
             if path=='/api/admin-key':
                 if set(body)!={'adminKey'} or not key_ok(body['adminKey']): return self.send(400,{'error':'Enter a valid admin key.'})
@@ -259,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
                     s=stored()
                     if not s: return self.send(409,{'error':'Connect an API key first.'})
                     result=worker('verify',s['key']); atomic('connection.json',{**s,**result})
-                    atomic('connection.json',{**stored(),'agent':register(result['models'])})
+                    atomic('connection.json',{**stored(),'agent':register(result['models']),'picked':ranked(result['models'])[:REGISTERED]})
                 return self.send(200,status())
             if path=='/api/disconnect':
                 if body: raise ValueError()
@@ -298,12 +309,31 @@ def initialize():
     if not (DATA/'gateway-token.json').exists(): atomic('gateway-token.json',{'token':secrets.token_urlsafe(48)})
 
 def reconcile():
-    """A saved key whose agent registration is missing (older version, agent installed later): register it."""
+    """Register a saved key whose agent registration is missing (older version, agent installed later) or whose
+    private choices changed (a newer Kimi on Tinfoil, a new ranking in this version)."""
     with LOCK:
         s = stored()
-        if s and s.get('agent') != 'registered': atomic('connection.json',{**s,'agent':register(s.get('models') or [])})
+        want = ranked((s or {}).get('models') or [])[:REGISTERED]
+        if s and (s.get('agent') != 'registered' or s.get('picked') != want):
+            atomic('connection.json',{**s,'agent':register(s.get('models') or []),'picked':want})
+
+def refresh_models():
+    """Every MODEL_REFRESH seconds re-read Tinfoil's verified model list, so a new model (Kimi K3.1) becomes the
+    private choice without the owner reconnecting. Failures keep the saved connection unchanged."""
+    while MODEL_REFRESH > 0:
+        time.sleep(MODEL_REFRESH)
+        try:
+            s = stored()
+            if not s: continue
+            result = worker('verify', s['key'])
+            with LOCK:
+                cur = stored()
+                if cur and hmac.compare_digest(cur['key'], s['key']): atomic('connection.json',{**cur,**result})
+            reconcile()
+        except Exception: pass
 
 if __name__=='__main__':
     initialize()
     threading.Thread(target=reconcile, daemon=True).start()
+    threading.Thread(target=refresh_models, daemon=True).start()
     ThreadingHTTPServer((os.environ.get('BIND','0.0.0.0'),int(PORT)),Handler).serve_forever()

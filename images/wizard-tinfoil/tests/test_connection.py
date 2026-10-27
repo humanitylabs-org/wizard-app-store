@@ -112,7 +112,7 @@ class Tests(unittest.TestCase):
             self.assertEqual(json.loads(b)['chatIntegration'],'registered')
         (m,path,body),=calls
         self.assertEqual((m,path),('POST','/api/providers/custom-endpoints'))
-        self.assertEqual(body['model'],'glm-5-3');self.assertEqual(body['models'],['glm-5-3','kimi-k3'])
+        self.assertEqual(body['model'],'kimi-k3');self.assertEqual(body['models'],['kimi-k3','glm-5-3'])
         self.assertFalse(body['make_default']);self.assertFalse(body['discover_models'])
         token=json.loads((s.DATA/'gateway-token.json').read_text())['token']
         self.assertEqual(body['api_key'],token);self.assertNotIn(KEY,json.dumps(body))
@@ -161,6 +161,24 @@ class Billing(unittest.TestCase):
         if path.startswith('/api/billing/usage'):return {'cost':1.5}
         if path=='/api/billing/transactions':return {'transactions':[{'date':'2026-10-01T00:00:00Z','type':'Charge','description':'API credit purchase','amount':10,'status':'completed'},{'date':'2026-10-05T00:00:00Z','type':'Charge','description':'API credit purchase','amount':20,'status':'completed'},{'date':'2026-10-06T00:00:00Z','type':'Invoice','description':'Chat subscription','amount':20,'status':'completed'}]}
         raise AssertionError(path)
+    def test_10_newest_kimi_is_the_private_default(self):
+        self.assertEqual(s.ranked(['glm-5-3','kimi-k3','websearch'])[:2],['kimi-k3','glm-5-3'])
+        self.assertEqual(s.ranked(['glm-5-3','kimi-k3','kimi-k3-1'])[:2],['kimi-k3-1','glm-5-3'])
+        self.assertEqual(s.ranked(['kimi-k3','kimi-k3.1-pro','kimi-k3.1-pro-highspeed','glm-5-3'])[:2],['kimi-k3.1-pro','glm-5-3'])
+        self.assertEqual(s.ranked(['llama3-3-70b','nomic-embed-text']),['llama3-3-70b'])
+        self.assertEqual(s.ranked(['nomic-embed-text']),[])
+    def test_11_new_model_on_tinfoil_reregisters_without_reconnect(self):
+        calls=[]
+        def fake(method,path,body=None):calls.append(body);return {}
+        with patch.object(s,'worker',return_value={'models':['glm-5-3','kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
+            self.assertEqual(self.call('/api/connect',{'apiKey':KEY})[0],200)
+        with patch.object(s,'agent_call',side_effect=fake):s.reconcile()
+        self.assertEqual(len(calls),1)  # unchanged choices: no second registration
+        conn=json.loads((s.DATA/'connection.json').read_text())
+        s.atomic('connection.json',{**conn,'models':['glm-5-3','kimi-k3','kimi-k3-1']})
+        with patch.object(s,'agent_call',side_effect=fake):s.reconcile()
+        self.assertEqual(calls[-1]['model'],'kimi-k3-1');self.assertEqual(calls[-1]['models'],['kimi-k3-1','glm-5-3'])
+        with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
     def test_billing_flow(self):
         self.paths=[]
         with patch.object(s,'admin_get',side_effect=self.fake):

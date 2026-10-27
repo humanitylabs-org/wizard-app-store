@@ -36,3 +36,7 @@
 .get-key:hover { color: var(--accent); }
 .key .wz-status { padding: 8px 0 0; }
 button:disabled { opacity: .5; cursor: default; }
+
+/* Add credit: a quiet link under the credit meter, aligned with it. */
+.key-row .topup { margin: 0 8px 4px 56px; min-height: 32px; }
+@container wz-app (max-width: 439px) { .key-row .topup { margin-left: 8px; } }
