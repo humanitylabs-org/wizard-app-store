@@ -59,15 +59,38 @@ def email_hash(email):
     return hashlib.sha256(email.encode()).hexdigest()[:16] if '@' in email else None
 
 
-def same_account(row, email):
+def reports_hashes(result):
+    """Whether the agent's plugin reports `emailHash` (Agent Service #196 and later). It says so in `identity`
+    (#203); a plugin between those two shows it by hashing at least one row."""
+    return bool((result.get('identity') or {}).get('emailHash')) or any(a.get('emailHash') for a in result.get('accounts') or [])
+
+
+def same_account(row, email, exact=False):
     """Whether an agent pool row is the same Claude account as the original sign-in. Exact when the plugin reports an
-    email hash; otherwise, on an alongside box only (where that original sign-in is not what the agent uses), the
-    masked email must match too."""
+    email hash. Only an older plugin, which never reports one (`exact` False), falls back to the masked email, and only
+    on an alongside box (where that original sign-in is not what the agent uses). With a current plugin a row without a
+    hash is an unattested account: it stays its own row, since `h***@e***` is both heidi@ and hank@."""
     if not email:
         return False
     if row.get('emailHash'):
         return hmac.compare_digest(str(row['emailHash']), email_hash(email) or '')
+    if exact:
+        return False
     return alongside(PROVIDER) and bool(masked(email)) and row.get('email') == masked(email)
+
+
+GENERIC_NAME = re.compile(r'^(?:openai-codex|anthropic|claude|chatgpt)-oauth(?:-\d+)?$|^(?:device_code|claude_code)$')
+
+
+def friendly_names(accounts, brand):
+    """Hermes names a sign-in without an email claim `openai-codex-oauth-1`; Home shows the account name whenever the
+    email is masked, so it read that label. Such rows become 'ChatGPT', 'ChatGPT 2', ... by position; an owner's own
+    nickname is kept."""
+    for n, account in enumerate(accounts, 1):
+        name = str(account.get('name') or '')
+        if not name or GENERIC_NAME.match(name):
+            account['name'] = brand if n == 1 else '%s %d' % (brand, n)
+    return accounts
 
 
 def legacy_signin(result):
@@ -107,7 +130,8 @@ def with_legacy(result):
                 result['accounts'] = [a for a in result['accounts'] if not is_mirror(a)]
                 # The same account signed in to the agent too (for example with `hermes auth add anthropic`): the
                 # agent's row is the one it uses, so it stands for both instead of a second row with the same email.
-                duplicate = any(same_account(a, old.get('account')) for a in result['accounts'])
+                exact = reports_hashes(result)
+                duplicate = any(same_account(a, old.get('account'), exact) for a in result['accounts'])
             if old.get('status') != 'not_connected' and not duplicate:
                 # The original sign-in is the first account; added subscriptions follow it.
                 result['accounts'].insert(0, {'id': 'legacy-claude-code', 'name': old.get('account') or 'Claude',
@@ -140,6 +164,9 @@ def connection(result):
         error = {'code': 'provider_error', 'message': 'Subscription state is unavailable.'}
     elif status == 'expired' and not isinstance(error, dict):
         error = {'code': 'expired', 'message': 'Subscription sign-in expired; reconnect it in the app.'}
+    if isinstance(rows, list):
+        rows = friendly_names([dict(a) for a in rows], 'Claude' if PROVIDER == 'claude' else 'ChatGPT')
+        result = {**result, 'accounts': rows}
     answer = {**result, 'contract': 'wizard.ai-connection/2', 'status': status,
               'plan': selected.get('plan'), 'usage': selected.get('usage'),
               'account': selected.get('email') or selected.get('account'), 'error': error}
