@@ -26,6 +26,8 @@ function view(k,s){
 }
 function credit(s){
   const p=s.adminKeyStored&&s.usage&&s.usage.paid,m=el('credit');
+  // Tinfoil has no top-up API; buying credit (or auto-reload) happens on its Billing tab, one tap from here.
+  el('topup').hidden=!s.credentialStored;
   m.hidden=!(p&&p.balanceMinor!=null);if(m.hidden)return;
   const full=Math.max(p.limitMinor||0,p.balanceMinor,1),pct=Math.max(0,Math.min(100,Math.round(p.balanceMinor/full*100)));
   m.querySelector('[data-credit]').textContent='Credit · '+usd(p.balanceMinor)+' left of '+usd(full)+' · '+usd(p.usedMinor)+' spent this period';
