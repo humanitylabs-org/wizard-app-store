@@ -6,44 +6,56 @@
 <meta name="color-scheme" content="dark light">
 <title>Sign in</title>
 <script src="boot.js"></script>
+<link rel="stylesheet" href="wizard-tokens.css">
 <link rel="stylesheet" href="wizard-ui.css">
+<link rel="stylesheet" href="wizard-layout.css">
 <link rel="stylesheet" href="app.css">
 <script defer src="theme-client.js"></script>
+<script defer src="wizard-sheet.js"></script>
 <script defer src="app.js"></script>
 <script src="/wizard-os-home/core/app-identity.js" defer></script>
 </head>
 <body>
 <div class="wz-app">
-  <header class="wz-head"><h1 id="title"></h1><p id="updated" hidden></p></header>
+  <header class="wz-head"><h1 id="title"></h1></header>
   <main class="wz-scroll">
+    <div class="wz-conn"><span class="wz-tile sigil" aria-hidden="true"><img id="sigil" alt=""></span>
+      <span class="wz-main"><b id="conn-name"></b><small id="conn-line"></small></span>
+      <span id="conn-pill" class="wz-pill off">Not connected</span></div>
     <section class="wz-sec" aria-labelledby="subs-h">
-      <h2 class="wz-sec-h" id="subs-h"><span class="wz-sr">Accounts</span><small id="count" hidden></small><button id="refresh" class="icon-btn" type="button" aria-label="Refresh"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></h2>
-      <ul id="accounts" class="wz-list" aria-label="Accounts"></ul>
+      <h2 class="wz-sec-h" id="subs-h">Accounts <span id="count" class="wz-count" hidden></span><button id="refresh" class="icon-btn" type="button" aria-label="Refresh"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></h2>
+      <ul id="accounts" class="wz-list wz-grid" aria-label="Accounts"></ul>
       <div id="problem" class="wz-empty problem" role="alert" hidden>
         <div class="wz-tile" aria-hidden="true">!</div>
         <strong id="problem-text"></strong>
-        <button id="retry" class="primary" type="button">Retry</button>
+        <button id="retry" class="wz-button" type="button">Retry</button>
       </div>
       <div id="empty" class="wz-empty" hidden>
         <div class="wz-tile" aria-hidden="true">+</div>
-        <strong>Not connected</strong>
+        <strong>No accounts yet</strong>
       </div>
     </section>
+    <div class="wz-actions"><button id="add" class="wz-button" type="button" hidden disabled>Connect</button></div>
+    <p id="message" class="wz-status" role="status" aria-live="polite"></p>
+    <details class="wz-more"><summary>Details</summary><dl id="details" class="facts"></dl></details>
   </main>
-  <p id="message" class="wz-status" role="status" aria-live="polite"></p>
-  <div class="add-bar"><button id="add" class="primary" type="button" hidden disabled>Sign in</button></div>
 </div>
-<dialog id="manage" aria-labelledby="dlg-title">
+<dialog id="account" class="wz-sheet" aria-labelledby="acct-title">
+  <h2 id="acct-title"></h2>
+  <p id="acct-text" class="dlg-text"></p>
+  <div id="grants" class="grants"></div>
+</dialog>
+<dialog id="manage" class="wz-sheet" aria-labelledby="dlg-title">
   <h2 id="dlg-title"></h2>
   <p id="dlg-text" class="dlg-text"></p>
   <label id="nick-wrap" class="field" hidden><span class="wz-sr">Nickname</span><input id="nick" class="wz-input" maxlength="40" autocomplete="off" placeholder="Nickname (optional)"></label>
   <ol id="steps" class="steps" hidden>
-    <li id="code-step" hidden><span>Copy this code</span><div class="code-row"><output id="user-code" class="code"></output><button id="copy" type="button" class="ghost">Copy</button></div></li>
-    <li id="signin-step"><a id="signin" class="primary" target="_blank" rel="noopener noreferrer" href="#">Open sign-in</a></li>
-    <li id="paste-step" hidden><span>Paste code</span><div class="code-row"><input id="code" class="wz-input" type="password" autocomplete="off" aria-label="Authorization code"><button id="submit-code" type="button" class="primary">Submit</button></div></li>
+    <li id="code-step" hidden><span>Copy this code</span><div class="code-row"><output id="user-code" class="code"></output><button id="copy" type="button" class="wz-button secondary">Copy</button></div></li>
+    <li id="signin-step"><a id="signin" class="wz-button" target="_blank" rel="noopener noreferrer" href="#">Open sign-in</a></li>
+    <li id="paste-step" hidden><span>Paste code</span><div class="code-row"><input id="code" class="wz-input" type="password" autocomplete="off" aria-label="Authorization code"><button id="submit-code" type="button" class="wz-button secondary">Submit</button></div></li>
   </ol>
   <p id="dlg-status" class="dlg-status" role="status" aria-live="polite"></p>
-  <div class="dlg-actions"><button id="cancel" type="button" class="ghost">Cancel</button><button id="go" type="button" class="primary">Continue</button><button id="close" type="button" class="primary" hidden>Done</button></div>
+  <div class="dlg-actions"><button id="cancel" type="button" class="wz-button secondary">Cancel</button><button id="go" type="button" class="wz-button">Continue</button><button id="close" type="button" class="wz-button" hidden>Done</button></div>
 </dialog>
 </body>
 </html>

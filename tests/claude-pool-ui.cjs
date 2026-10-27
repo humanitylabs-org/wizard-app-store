@@ -26,8 +26,8 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname.includes('/api/operations/')){res.setHeader('Content-Type','application/json');return res.end(JSON.stringify(job));}
   if(url.pathname.includes('/claude-code/')){res.setHeader('Content-Type','text/html');return res.end('<!doctype html><title>Claude Code sign-in</title><h1 id="legacy-page">Claude</h1>');}
   const name=url.pathname.endsWith('/')?'index.html':path.basename(url.pathname);
-  if(!['index.html','app.js','app.css','boot.js','wizard-ui.css','theme-client.js'].includes(name)){res.writeHead(404);return res.end();}
-  res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(path.join(root,name)));
+  if(!['index.html','app.js','app.css','boot.js','wizard-ui.css','wizard-tokens.css','wizard-layout.css','wizard-sheet.js','logo-claude.svg','logo-chatgpt.svg','theme-client.js'].includes(name)){res.writeHead(404);return res.end();}
+  res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/html');res.end(fs.readFileSync(path.join(root,name)));
 });
 (async()=>{
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -42,9 +42,10 @@ const server=http.createServer(async(req,res)=>{
       // 1. original login + three added subscriptions: four rows, four meters, "+ Add" offered
       rows=[legacy('connected'),pool(1),pool(2),pool(3)];management=MANAGED;calls=[];await open();
       assert.equal(await page.locator('.acct').count(),4);
-      assert.equal(await page.locator('.bar').count(),4);
+      assert.equal(await page.locator('.wz-meter').count(),4);
       assert.equal(await page.locator('#count').innerText(),'4');
-      assert.equal(await page.locator('#add').innerText(),'+ Add');assert.equal(await page.locator('#add').isEnabled(),true);
+      assert.equal(await page.locator('#add').innerText(),'Add account');assert.equal(await page.locator('#add').isEnabled(),true);
+      assert.equal(await page.locator('#conn-pill').innerText(),'Connected');
       assert.equal(await page.locator('[data-legacy-signin]').count(),0,'a working original login needs no sign-in link');
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       if(shots)await page.screenshot({path:`${shots}/claude-4-rows-${width}.png`,fullPage:true});
@@ -56,18 +57,18 @@ const server=http.createServer(async(req,res)=>{
         await page.waitForFunction(n=>document.querySelectorAll('.acct').length===n,want);
       }
       assert.deepEqual(calls.filter(c=>c.action==='add').length,2);
-      assert.equal(await page.locator('.bar').count(),6);
+      assert.equal(await page.locator('.wz-meter').count(),6);
       // 3. the original login expired: its row offers "Sign in again" on the original page
       rows=[legacy('expired'),pool(1),pool(2),pool(3)];await open();
       const again=page.locator('[data-legacy-signin]');
       assert.equal(await again.count(),1);assert.equal(await again.getAttribute('href'),'claude-code/');
-      assert.equal(await page.locator('#add').innerText(),'+ Add');
+      assert.equal(await page.locator('#add').innerText(),'Add account');
       // 4. no account broker (older agent plugin / fresh agent / changes off) and no working login:
-      //    "Sign in" opens the original Claude Code sign-in exactly as before
+      //    "Connect" opens the original Claude Code sign-in exactly as before
       for(const m of [{status:'unavailable'},{contract:'wizard.account-management/1',status:'off'}]){
         rows=[legacy('not_connected')];management=m;await open();
         assert.equal(await page.locator('#add').isVisible(),true);
-        assert.equal(await page.locator('#add').innerText(),'Sign in');
+        assert.equal(await page.locator('#add').innerText(),'Connect');
         await Promise.all([page.waitForURL('**/claude-code/'),page.locator('#add').click()]);
         await page.locator('#legacy-page').waitFor();
       }
@@ -81,15 +82,16 @@ const server=http.createServer(async(req,res)=>{
       assert.equal(await page.locator('#add').isVisible(),false);
       assert.equal(await page.locator('#empty').isVisible(),false);
       assert.match(await page.locator('#problem-text').innerText(),/reach your agent/);
+      assert.equal(await page.locator('#conn-pill').innerText(),'Needs attention');
       const before=hits.filter(h=>h.endsWith('/api/accounts')).length;
       extra={};rows=[pool(1)];management=MANAGED;
       await page.locator('#retry').click();
       await page.waitForFunction(()=>document.querySelectorAll('.acct').length===1);
       assert.ok(hits.filter(h=>h.endsWith('/api/accounts')).length>before,'Retry reads the agent again');
       assert.equal(await page.locator('#problem').isVisible(),false);
-      assert.equal(await page.locator('#add').innerText(),'+ Add');
+      assert.equal(await page.locator('#add').innerText(),'Add account');
       assert.deepEqual(errors,[]);await page.close();
     }
-    console.log('PASS 390px+1440px: original login + 3 subscriptions = 4 rows/meters; +2 adds -> 6 rows; expired original login -> Sign in again (claude-code/); no broker -> Sign in opens original Claude Code sign-in; alongside + unreachable agent -> reason + Retry, no Sign in; no JS errors or native dialogs');
+    console.log('PASS 390px+1440px: original login + 3 subscriptions = 4 rows/meters; +2 adds -> 6 rows; expired original login -> Sign in again (claude-code/); no broker -> Connect opens original Claude Code sign-in; alongside + unreachable agent -> reason + Retry, no Sign in; no JS errors or native dialogs');
   }finally{await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;server.close();});

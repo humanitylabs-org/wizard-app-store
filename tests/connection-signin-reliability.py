@@ -187,8 +187,9 @@ class ChatGPTSignin(Base):
         self.assertIn('Device code sign-in for Codex', js)
         self.assertLess(html.index('id="code-step"'), html.index('id="signin-step"'), 'copy the code before opening sign-in')
         self.assertIn('id="retry"', html)
-        for name in ('app.js', 'app.css', 'index.html', 'boot.js', 'theme-client.js', 'wizard-ui.css'):
+        for name in sorted(p.name for p in (STORE / 'wizard-claude/pool-static').iterdir()):
             self.assertEqual((root / name).read_bytes(), (STORE / 'wizard-claude/pool-static' / name).read_bytes(), name)
+        self.assertEqual(sorted(p.name for p in root.iterdir()), sorted(p.name for p in (STORE / 'wizard-claude/pool-static').iterdir()))
         for name in ('pool_server.py', 'pool_client.py'):
             self.assertEqual((STORE / 'wizard-chatgpt' / name).read_bytes(), (STORE / 'wizard-claude' / name).read_bytes(), name)
 

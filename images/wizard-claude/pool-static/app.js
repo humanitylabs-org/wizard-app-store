@@ -1,10 +1,12 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'needs_review']);
-const STATUS = {ready: 'Ready', connected: 'Ready', renewing: 'Renewing', expired: 'Sign in again', cooldown: 'Cooling down', exhausted: 'Limit reached', error: 'Problem'};
+const STATUS = {ready: 'Active', connected: 'Active', ok: 'Active', renewing: 'Renewing', expired: 'Sign in again', cooldown: 'Cooling down', exhausted: 'Limit reached', error: 'Problem'};
+const OK = new Set(['ready', 'connected', 'ok']);
 let snapshot = null, active = null, busy = false, timer = null, intent = null, before = 0;
-let dialogHidden = false, lastRootBack = 0;
-const openManage = new Set();
+let dialogHidden = false, lastRootBack = 0, openAccount = null;
+// Every pop-up is a kit sheet (wizard-sheet.js): ×, Esc, tap outside, Back and swipe down all close it.
+const openSheet = d => { if (window.WzSheet) WzSheet.open(d); else if (!d.open) d.showModal(); };
 const manageable = () => snapshot?.management?.contract === 'wizard.account-management/1' && snapshot.management.status === 'available';
 const allowed = (action, account, credential) => manageable() && (action === 'add' ? snapshot.actions?.add === true : account?.actions?.[action] === true && credential?.managed === true);
 
@@ -12,6 +14,8 @@ const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls)
 const provider = () => snapshot?.provider || (location.pathname.includes('claude') ? 'claude' : 'chatgpt');
 const brand = () => provider() === 'claude' ? 'Claude' : 'ChatGPT';
 const hermesAccounts = () => (snapshot?.accounts || []).filter(a => a.source !== 'legacy-claude-code');
+// One line: what the agent can do with this connection.
+const WHAT = {claude: 'Your agent thinks and works with your Claude plans.', chatgpt: 'Your agent thinks and works with your ChatGPT plans.'};
 
 async function api(path, body) {
   const r = await fetch(path, {cache: 'no-store', ...(body ? {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Wizard-Account-Action': '1'}, body: JSON.stringify(body)} : {})});
@@ -45,81 +49,107 @@ function grantName(c) {
   return generic ? 'Sign-in ' + String(c.id).slice(0, 4) : c.name;
 }
 
-function renderAccount(a) {
+function accountTitle(a) {
   const legacy = a.source === 'legacy-claude-code';
-  const li = el('li', 'acct'); li.dataset.accountId = a.id;
-  const head = el('div', 'wz-row acct-head');
-  // Label each subscription by its signed-in email; the nickname (if different) moves to the second line.
-  const nick = a.name && a.name !== a.email && !legacy ? a.name : '';
   const at = a.email ? a.email.lastIndexOf('@') : -1;
   // Readable on a phone: the name before @ is the title, the domain joins the plan line.
-  const title = at > 0 ? a.email.slice(0, at) : (a.email || a.name || (legacy ? 'Claude Code sign-in' : 'Subscription'));
-  const domain = at > 0 ? a.email.slice(at + 1) : '';
+  return {title: at > 0 ? a.email.slice(0, at) : (a.email || a.name || (legacy ? 'Claude Code sign-in' : 'Subscription')), domain: at > 0 ? a.email.slice(at + 1) : ''};
+}
+
+function renderAccount(a) {
+  const legacy = a.source === 'legacy-claude-code';
+  const creds = legacy ? [] : (a.credentials || []);
+  const li = el('li', 'acct'); li.dataset.accountId = a.id;
+  // A row with sign-ins opens its sheet (reconnect, remove); the original Claude Code row has none.
+  const head = el(creds.length ? 'button' : 'div', 'wz-row');
+  if (creds.length) { head.type = 'button'; head.setAttribute('aria-haspopup', 'dialog'); head.addEventListener('click', () => openAccountSheet(a.id)); }
+  // Label each subscription by its signed-in email; the nickname (if different) moves to the second line.
+  const nick = a.name && a.name !== a.email && !legacy ? a.name : '';
+  const {title, domain} = accountTitle(a);
   const main = el('span', 'wz-main');
   const tb = el('b', null, title); tb.title = a.email || title;
   main.append(tb, el('small', null, [domain, a.plan, nick].filter(Boolean).join(' · ')));
-  const ok = ['ready', 'connected'].includes(a.status);
-  head.append(el('span', 'wz-tile', title.trim().charAt(0).toUpperCase() || '?'), main, el('span', 'pill ' + (ok ? 'ok' : 'warn'), STATUS[a.status] || a.status || 'Unknown'));
+  head.append(el('span', 'wz-tile', title.trim().charAt(0).toUpperCase() || '?'), main, el('span', 'wz-pill ' + (OK.has(a.status) ? 'ok' : 'warn'), STATUS[a.status] || a.status || 'Unknown'));
+  if (creds.length) { const chev = el('span', 'chev', '›'); chev.setAttribute('aria-hidden', 'true'); head.append(chev); }
   li.append(head);
 
   const limits = a.usage?.limits || [];
-  if (limits.length) {
-    const box = el('div', 'meters');
-    for (const l of limits) {
-      const u = usedOf(l), row = el('div', 'meter'), top = el('div', 'meter-top');
-      top.append(el('span', null, l.label), el('span', 'meter-val', u == null ? '—' : `${u}% used`));
-      const bar = el('div', 'bar'), fill = el('i');
-      fill.style.width = Math.max(0, Math.min(100, u || 0)) + '%';
-      if (u >= 90) bar.classList.add('hot');
-      bar.setAttribute('role', 'meter'); bar.setAttribute('aria-label', `${title} ${l.label}`);
-      bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100'); bar.setAttribute('aria-valuenow', String(u ?? 0));
-      bar.append(fill); row.append(top, bar);
-      if (l.resetsAt) row.append(el('small', 'meter-reset', resetText(l.resetsAt)));
-      box.append(row);
-    }
-    li.append(box);
-  } else li.append(el('p', 'muted', 'No usage yet'));
-
-  if (legacy) {
-    // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.
-    if (!['ready', 'connected', 'renewing'].includes(a.status)) {
-      const again = el('a', 'link', 'Sign in again'); again.href = 'claude-code/'; again.dataset.legacySignin = '1';
-      li.append(again);
-    }
-    return li;
+  for (const l of limits) {
+    const u = usedOf(l), pct = Math.max(0, Math.min(100, u || 0));
+    const meter = el('div', 'wz-meter' + (u >= 90 ? ' hot' : '')), label = el('span');
+    label.append(el('span', null, l.label), el('span', 'meter-val', u == null ? '—' : `${u}% used`));
+    if (l.resetsAt) label.append(el('span', 'meter-reset', resetText(l.resetsAt)));
+    const bar = el('i'), fill = el('b');
+    fill.style.setProperty('--v', pct + '%');
+    bar.setAttribute('role', 'meter'); bar.setAttribute('aria-label', `${title} ${l.label}`);
+    bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100'); bar.setAttribute('aria-valuenow', String(u ?? 0));
+    bar.append(fill); meter.append(label, bar); li.append(meter);
   }
-  const creds = a.credentials || [];
-  if (creds.length) {
-    const det = el('details', 'manage');
-    det.open = openManage.has(a.id);
-    det.addEventListener('toggle', () => det.open ? openManage.add(a.id) : openManage.delete(a.id));
-    det.append(el('summary', null, creds.length === 1 ? 'Manage' : `Manage (${creds.length})`));
-    for (const c of creds) {
-      const r = el('div', 'grant');
-      r.append(el('span', 'grant-name', grantName(c)));
-      if (manageable() && c.managed === true) {
-        for (const action of ['reconnect', 'remove']) {
-          if (!allowed(action, a, c)) continue;
-          const b = el('button', 'link' + (action === 'remove' ? ' danger' : ''), action === 'reconnect' ? 'Reconnect' : 'Remove');
-          b.type = 'button'; b.disabled = busy;
-          b.addEventListener('click', () => ask(action, a, c));
-          r.append(b);
-        }
-      }
-      det.append(r);
-    }
-    li.append(det);
+  if (!limits.length) li.append(el('p', 'muted', 'No usage yet'));
+
+  if (legacy && !['ready', 'connected', 'renewing'].includes(a.status)) {
+    // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.
+    const again = el('a', 'link', 'Sign in again'); again.href = 'claude-code/'; again.dataset.legacySignin = '1';
+    li.append(again);
   }
   return li;
+}
+
+/* ---------- account sheet: the rare per-account actions ---------- */
+function fillAccountSheet() {
+  const a = (snapshot?.accounts || []).find(x => x.id === openAccount);
+  if (!a) { if ($('account').open) $('account').close(); return; }
+  const {title, domain} = accountTitle(a);
+  $('acct-title').textContent = a.email || title;
+  $('acct-text').textContent = [a.plan, a.name && a.name !== a.email ? a.name : '', STATUS[a.status] || a.status].filter(Boolean).join(' · ') || domain;
+  const rows = (a.credentials || []).map(c => {
+    const r = el('div', 'grant');
+    r.append(el('span', 'grant-name', grantName(c)));
+    if (manageable() && c.managed === true) {
+      for (const action of ['reconnect', 'remove']) {
+        if (!allowed(action, a, c)) continue;
+        const b = el('button', 'link' + (action === 'remove' ? ' danger' : ''), action === 'reconnect' ? 'Reconnect' : 'Remove');
+        b.type = 'button'; b.disabled = busy;
+        b.addEventListener('click', () => { $('account').close(); ask(action, a, c); });
+        r.append(b);
+      }
+    }
+    return r;
+  });
+  $('grants').replaceChildren(...rows);
+}
+function openAccountSheet(id) { openAccount = id; fillAccountSheet(); openSheet($('account')); }
+$('account').addEventListener('close', () => { openAccount = null; });
+
+function renderDetails(data) {
+  const facts = [
+    ['Service', data.name || brand()],
+    ['Accounts', String(data.accounts.length)],
+    ['Agent sign-ins', data.management?.status || 'unknown'],
+    ['Note', data.management?.message || ''],
+    ['Agent', data.agent || ''],
+    ['Contract', data.management?.contract || ''],
+    ...data.accounts.map(a => ['Account ' + String(a.id).slice(0, 12), [a.source || 'agent', a.status, (a.credentials || []).length + ' sign-in(s)'].filter(Boolean).join(' · ')])
+  ].filter(([, v]) => v);
+  $('details').replaceChildren(...facts.flatMap(([k, v]) => [el('dt', null, k), el('dd', null, v)]));
 }
 
 function render(data) {
   snapshot = data;
   $('title').textContent = data.name || brand();
   document.title = data.name || brand();
+  $('conn-name').textContent = data.name || brand();
+  $('conn-line').textContent = WHAT[provider()] || '';
+  if (!$('sigil').getAttribute('src')) $('sigil').src = `logo-${provider() === 'claude' ? 'claude' : 'chatgpt'}.svg`;
   const n = data.accounts.length;
   $('count').textContent = String(n); $('count').hidden = !n;
   $('accounts').replaceChildren(...data.accounts.map(renderAccount));
+  // One status for the whole connection: Connected when any account works.
+  const [kind, word] = data.inventoryStatus === 'unavailable' ? ['warn', 'Needs attention']
+    : data.accounts.some(a => OK.has(a.status)) ? ['ok', 'Connected'] : n ? ['warn', 'Needs attention'] : ['off', 'Not connected'];
+  $('conn-pill').className = 'wz-pill ' + kind; $('conn-pill').textContent = word;
+  renderDetails(data);
+  if (openAccount) fillAccountSheet();
   // The agent could not be asked (or cannot take sign-ins from here): say why with a Retry, never a dead Sign in.
   const problem = data.inventoryStatus === 'unavailable' ? (data.error?.message || 'Can’t reach your agent right now.')
     : (data.management?.status === 'off' && !n ? (data.management.message || 'Signing in from this app is switched off on your agent.') : '');
@@ -130,7 +160,7 @@ function render(data) {
   const fallback = legacyFallback();
   $('add').hidden = !resume && !allowed('add') && !fallback;
   $('add').disabled = !resume && !fallback && (busy || !allowed('add'));
-  $('add').textContent = resume ? 'Resume sign-in' : (n && !fallback ? '+ Add' : 'Sign in');
+  $('add').textContent = resume ? 'Resume sign-in' : (n && !fallback ? 'Add account' : 'Connect');
 }
 
 // Without the agent's account broker (the fresh-mode Hermes Agent app or an older plugin) Claude still signs in the
@@ -184,7 +214,7 @@ function ask(action, account, credential) {
     $('dlg-text').textContent = `${grantName(credential)} · ${account.name}`;
     showButtons({go: true, goLabel: 'Remove', danger: true});
   }
-  if (!$('manage').open) $('manage').showModal();
+  openSheet($('manage'));
 }
 
 async function start() {
@@ -205,7 +235,7 @@ async function start() {
 function display(job) {
   if (active?.id === job.id && TERMINAL.has(active.status) && !TERMINAL.has(job.status)) return;
   clearTimeout(timer); active = job;
-  if (!$('manage').open && !dialogHidden) $('manage').showModal();
+  if (!$('manage').open && !dialogHidden) openSheet($('manage'));
   $('nick-wrap').hidden = true;
   if (!TERMINAL.has(job.status)) {
     // ChatGPT: copy the code first, then open the sign-in page and paste it there.
@@ -264,7 +294,9 @@ $('cancel').addEventListener('click', async () => {
   catch { setStatus('Checking…'); $('cancel').disabled = false; }
 });
 $('close').addEventListener('click', () => $('manage').close());
-$('manage').addEventListener('cancel', e => { if (busy) e.preventDefault(); });
+// Closing the sheet any way (×, Esc, outside, Back, swipe) while a sign-in runs only hides it: the sign-in keeps
+// going and the main button offers "Resume sign-in". Cancel is the one control that stops it.
+$('manage').addEventListener('close', () => { if (busy) { dialogHidden = true; if (snapshot) render(snapshot); } });
 $('copy').addEventListener('click', async () => {
   const code = $('user-code').textContent;
   try { await navigator.clipboard.writeText(code); $('copy').textContent = 'Copied'; }
@@ -296,9 +328,8 @@ addEventListener('popstate', () => {
     $('manage').close();
     if (snapshot) render(snapshot);
     lastRootBack = 0;
-  } else if (openManage.size) {
-    openManage.clear();
-    if (snapshot) render(snapshot);
+  } else if ($('account').open) {
+    $('account').close();
     lastRootBack = 0;
   } else {
     const now = Date.now();
@@ -315,5 +346,5 @@ const saved = sessionStorage.getItem('account-operation');
 if (saved && /^[A-Za-z0-9_-]{20,64}$/.test(saved)) {
   busy = true; $('add').disabled = true; active = {id: saved};
   $('dlg-title').textContent = 'Signing in'; $('dlg-text').textContent = ''; $('nick-wrap').hidden = true;
-  showButtons({cancel: true, cancelLabel: 'Cancel'}); $('manage').showModal(); poll();
+  showButtons({cancel: true, cancelLabel: 'Cancel'}); openSheet($('manage')); poll();
 }

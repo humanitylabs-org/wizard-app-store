@@ -35,8 +35,8 @@ const server = http.createServer((req,res)=>{
  if(!['chatgpt','claude'].includes(provider)){res.writeHead(404);return res.end()}
  const resource=parts.join('/') || 'index.html';
  if(resource==='api/accounts')return send('application/json',JSON.stringify({provider,accounts:[{id:'fixture-work',name:'Fixture work',status:'connected',plan:'Pro',usage:{limits:[{label:'Session',usedPercent:23}]},credentials:[]},{id:'fixture-personal',name:'Fixture personal',status:'connected',plan:'Pro',usage:{limits:[{label:'Session',usedPercent:67}]},credentials:[]}],actions:{add:true},management:{contract:'wizard.account-management/1',status:'available'}}));
- if(!['index.html','app.js','app.css','boot.js','theme-client.js','wizard-ui.css'].includes(resource)){res.writeHead(404);return res.end()}
- return send(resource.endsWith('.js')?'text/javascript':resource.endsWith('.css')?'text/css':'text/html',fs.readFileSync(path.join(__dirname,'../images/wizard-'+provider+'/pool-static',resource)));
+ if(!['index.html','app.js','app.css','boot.js','theme-client.js','wizard-ui.css','wizard-tokens.css','wizard-layout.css','wizard-sheet.js','logo-claude.svg','logo-chatgpt.svg'].includes(resource)){res.writeHead(404);return res.end()}
+ return send(resource.endsWith('.js')?'text/javascript':resource.endsWith('.css')?'text/css':resource.endsWith('.svg')?'image/svg+xml':'text/html',fs.readFileSync(path.join(__dirname,'../images/wizard-'+provider+'/pool-static',resource)));
 });
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));

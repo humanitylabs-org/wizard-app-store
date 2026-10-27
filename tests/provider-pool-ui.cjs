@@ -22,8 +22,8 @@ const server=http.createServer(async(req,res)=>{
  }
  if(req.url.includes('/api/operations/')) return res.end(JSON.stringify(job));
  const name=req.url.endsWith('/')?'index.html':path.basename(req.url);
- if(!['index.html','app.js','app.css','boot.js','wizard-ui.css','theme-client.js'].includes(name)){res.writeHead(404);return res.end();}
- res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(path.join(root,name)));
+ if(!['index.html','app.js','app.css','boot.js','wizard-ui.css','wizard-tokens.css','wizard-layout.css','wizard-sheet.js','logo-claude.svg','logo-chatgpt.svg','theme-client.js'].includes(name)){res.writeHead(404);return res.end();}
+ res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/html');res.end(fs.readFileSync(path.join(root,name)));
 });
 const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').open);
 (async()=>{
@@ -38,14 +38,30 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    await page.route('**/*',route=>{if(new URL(route.request().url()).hostname!=='127.0.0.1')return route.abort();return route.continue();});
    await page.goto(`http://127.0.0.1:${server.address().port}/wizard-chatgpt/`);await page.waitForLoadState('networkidle');
    // two subscriptions -> two rows, two separate bars, with their own numbers
-   assert.equal(await page.locator('.acct').count(),2);assert.equal(await page.locator('.bar').count(),2);
+   assert.equal(await page.locator('.acct').count(),2);assert.equal(await page.locator('.wz-meter').count(),2);
    assert.deepEqual(await page.locator('.meter-val').allInnerTexts(),['11% used','64% used']);
    assert.equal(await page.locator('#count').innerText(),'2');
+   // Connector pattern: status card says Connected, one primary action, details folded.
+   assert.equal(await page.locator('#conn-pill').innerText(),'Connected');
+   assert.equal(await page.locator('#add').innerText(),'Add account');
+   assert.equal(await page.locator('details.wz-more').evaluate(d=>d.open),false);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-   assert.equal(await page.locator('.grant').first().isVisible(),false,'manage controls folded away by default');
+   assert.equal(await page.locator('.grant').first().isVisible(),false,'per-account actions live in a sheet, closed by default');
    if(shots) await page.screenshot({path:`${shots}/ui-list-${width}.png`});
+   // The account sheet closes every way the design rules ask: ×, Esc, outside tap, Back (__wizardCloseOverlay).
+   const sheetOpen=()=>page.evaluate(()=>document.getElementById('account').open);
+   for(const how of ['x','esc','outside','overlay']){
+    await page.locator('.acct button.wz-row').first().click();assert.equal(await sheetOpen(),true,how);
+    if(how==='x') await page.locator('#account .wz-sheet-x').click();
+    else if(how==='esc') await page.keyboard.press('Escape');
+    else if(how==='outside') await page.mouse.click(5,5);
+    else assert.equal(await page.evaluate(()=>window.__wizardCloseOverlay()),true);
+    await page.waitForFunction(()=>!document.getElementById('account').open);
+   }
+   assert.equal(await page.evaluate(()=>window.__wizardCloseOverlay()),false,'nothing open: Back goes to the shell');
    // remove: cancel first, nothing sent
-   await page.locator('.manage summary').first().click();
+   const acctRow=page.locator('.acct button.wz-row').first();
+   await acctRow.click();await page.waitForFunction(()=>document.getElementById('account').open);
    assert.equal(await page.locator('.grant-name').first().innerText(),'Sign-in a11b');
    await page.getByRole('button',{name:'Remove'}).first().click();await page.locator('#cancel').click();await closed(page);assert.equal(calls.length,0);
    // add: nickname -> start -> big device code visible
@@ -71,21 +87,20 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    await page.waitForFunction(()=>document.getElementById('manage').open);
    if(shots) await page.screenshot({path:`${shots}/ui-code-${width}.png`});
    await page.locator('#cancel').click();await page.locator('#close').waitFor({state:'visible'});await page.locator('#close').click();await closed(page);
-   // reconnect targets the exact sign-in
-   assert.equal(await page.locator('.manage').first().evaluate(d=>d.open),true,'manage stays open across refresh');
-   await page.getByRole('button',{name:'Reconnect'}).first().click();await page.locator('#go').click();
+   // reconnect targets the exact sign-in (from the account's sheet)
+   await acctRow.click();await page.getByRole('button',{name:'Reconnect'}).first().click();await page.locator('#go').click();
    await page.waitForFunction(()=>document.querySelector('#user-code')?.textContent==='ABCD-EFGHI');
    assert.equal(calls.at(-1).target,'a11bb');assert.equal(calls.at(-1).action,'reconnect');
    await page.locator('#cancel').click();await page.locator('#close').waitFor({state:'visible'});await page.locator('#close').click();await closed(page);
    // remove confirmed
-   await page.getByRole('button',{name:'Remove'}).first().click();await page.locator('#go').click();
+   await acctRow.click();await page.getByRole('button',{name:'Remove'}).first().click();await page.locator('#go').click();
    await page.locator('#close').waitFor({state:'visible'});await page.locator('#close').click();
    await page.waitForFunction(()=>document.querySelectorAll('.acct').length===1);assert.equal(calls.at(-1).target,'a11bb');
    // claude: paste-code flow adds a new row -> two bars again
    provider='claude';await page.locator('#add').click();await page.locator('#go').click();
    await page.locator('#code').waitFor({state:'visible'});await page.locator('#code').fill('fixture#state');await page.locator('#submit-code').click();
    await page.locator('#close').waitFor({state:'visible'});assert.equal(await page.locator('#code').inputValue(),'');
-   await page.waitForFunction(()=>document.querySelectorAll('.bar').length===2);
+   await page.waitForFunction(()=>document.querySelectorAll('.wz-meter').length===2);
    await page.locator('#close').click();
    // same-account add explains why no new bar appeared
    provider='chatgpt';sameAccount=true;await page.locator('#add').click();await page.locator('#go').click();
@@ -100,19 +115,22 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    for (const cap of [null, {}, {status:'available'}, {contract:'wizard.account-management/2',status:'available'}, ...['off','blocked','unavailable','unsupported'].map(status=>({contract:'wizard.account-management/1',status}))]) {
      management=cap;await refresh();
      assert.equal(await page.locator('#add').isVisible(),false);
+     await page.locator('.acct button.wz-row').first().click();
      assert.equal(await page.getByRole('button',{name:/^(Reconnect|Remove)$/}).count(),0);
-     assert.equal(await page.locator('.bar').count(),2);
+     await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.getElementById('account').open);
+     assert.equal(await page.locator('.wz-meter').count(),2);
    }
    management={contract:'wizard.account-management/1',status:'available'};await refresh();
    assert.equal(await page.locator('#add').isVisible(),true);
    inventoryError=true;await refresh();
    assert.equal(await page.locator('#add').isVisible(),false);
    assert.equal(await page.getByRole('button',{name:/^(Reconnect|Remove)$/}).count(),0);
-   assert.equal(await page.locator('.bar').count(),2);
+   assert.equal(await page.locator('.wz-meter').count(),2);
    inventoryError=false;
    rows=[];await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelectorAll('.acct').length===0 && !document.querySelector('#empty').hidden);
+   assert.equal(await page.locator('#conn-pill').innerText(),'Not connected');assert.equal(await page.locator('#add').innerText(),'Connect');
    assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('PASS 390px+1440px: two subscriptions = two bars with own %, folded manage, add with nickname + visible 9-char code, exact reconnect/remove with in-app confirm, Claude paste-code, same-account notice, empty state, no native dialogs, no JS errors');
+  console.log('PASS 390px+1440px: two subscriptions = two meters with own %, status card, per-account sheet, add with nickname + visible 9-char code, exact reconnect/remove with in-app confirm, Claude paste-code, same-account notice, empty state, no native dialogs, no JS errors');
  }finally{await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;server.close();});

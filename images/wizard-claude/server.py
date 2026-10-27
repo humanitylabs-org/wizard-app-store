@@ -34,7 +34,7 @@ import inference
 
 import usage
 
-VERSION = "0.2.6"
+VERSION = "0.2.7"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
