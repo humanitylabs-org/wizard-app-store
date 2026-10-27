@@ -1,2 +1,38 @@
-#connect-form{display:flex;flex-direction:column;gap:.7rem;padding:4px 8px}#connect-form[hidden],.actions[hidden]{display:none}#api-key{width:100%;flex:none}.actions{display:flex;flex-wrap:wrap;align-items:center;gap:.7rem;padding:4px 8px}.action{font:inherit;color:var(--ink);border:1px solid var(--line);background:var(--fill);border-radius:var(--r-pill);padding:.65rem 1.1rem;cursor:pointer}.action.primary{background:var(--accent);color:var(--on-accent);border-color:transparent}.action.small{padding:.4rem .8rem;font-size:13px;color:var(--ink-2)}button:disabled{opacity:.5;cursor:default}.get-key{align-self:flex-start;font-size:13px;color:var(--ink-3);text-decoration:none}.get-key:hover{color:var(--accent)}
-.key form{display:flex;flex-direction:column;gap:.7rem;padding:4px 8px}.key form[hidden],.key .actions[hidden],[data-cancel][hidden]{display:none}.key .wz-input{width:100%;flex:none}.key .actions .get-key{margin-left:auto}.wz-sec-h small{text-transform:none;letter-spacing:0;font-weight:600}
+/* App-specific styles only: kit variables, no colours of its own. Layout, pills, meters, the status card and the
+ * sheet come from wizard-layout.css; type, rows and buttons from wizard-ui.css. */
+[hidden] { display: none !important; }
+.wz-conn .sigil { overflow: hidden; padding: 0; background: none; }
+.wz-conn .sigil svg { width: 100%; height: 100%; display: block; }
+.wz-sec { margin-top: var(--wz-space-3); }
+.wz-sec-h .wz-count { margin-left: 0; }
+#keys.wz-grid { gap: 0; }
+.key-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--wz-space-2); padding: 2px 0 var(--wz-space-2); min-width: 0; }
+.key-row + .key-row { border-top: 1px solid var(--line); padding-top: var(--wz-space-2); }
+.key-row .wz-tile { font-weight: 700; color: var(--accent); background: var(--accent-soft); }
+.key-row .wz-main b, .key-row .wz-main small { overflow: hidden; text-overflow: ellipsis; }
+.key-row .ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.key-row .chev { flex: none; color: var(--ink-3); font-size: 20px; line-height: 1; }
+.key-row .wz-meter { margin: 0 8px 4px 56px; }
+@container wz-app (max-width: 439px) { .key-row .wz-meter { margin-left: 8px; } }
+@container wz-app (min-width: 600px) {
+  #keys.wz-grid { gap: var(--wz-space-3); }
+  .key-row, .key-row + .key-row { padding: var(--wz-space-2); border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); align-content: start; }
+  .key-row .wz-meter { margin-left: 8px; }
+}
+.wz-actions .wz-button { min-width: 160px; }
+@container wz-app (max-width: 599px) { .wz-actions .wz-button { flex: 1; } }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; padding: 0 8px 8px; }
+.facts dt { color: var(--ink-3); }
+.facts dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+
+/* Key sheets: the same fields and actions the page had, inside the one pop-up. */
+.key h2 small { font-size: 13px; font-weight: 600; color: var(--ink-3); }
+.key > .wz-row, .key > .wz-row:hover { padding: 0 0 8px; min-height: 0; background: none; cursor: default; }
+.key form { display: flex; flex-direction: column; gap: .7rem; }
+.key .wz-input { width: 100%; flex: none; }
+.key .actions { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; }
+.key .actions .get-key { margin-left: auto; }
+.get-key { min-height: 44px; display: inline-flex; align-items: center; font-size: 13px; color: var(--ink-3); text-decoration: none; }
+.get-key:hover { color: var(--accent); }
+.key .wz-status { padding: 8px 0 0; }
+button:disabled { opacity: .5; cursor: default; }
