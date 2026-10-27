@@ -15,29 +15,35 @@
 .icon-btn.spin svg { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Accounts: list rows when narrow, cards in columns when the window is wider. */
-#accounts.wz-grid { gap: 0; }
-.acct { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--wz-space-2); padding: 2px 0 var(--wz-space-3); min-width: 0; }
-.acct + .acct { border-top: 1px solid var(--line); padding-top: var(--wz-space-2); }
+/* Accounts: one list row per account at every width (connector pattern). Usage meters sit under the
+ * name when the window is narrow and beside it, in the same row, when it is wide. */
+.acct { min-width: 0; padding: 2px 0; }
+.acct + .acct { border-top: 1px solid var(--line); }
+.acct > .wz-row { flex-wrap: wrap; row-gap: var(--wz-space-2); }
 .acct > .wz-row .wz-tile { font-weight: 700; color: var(--accent); background: var(--accent-soft); }
 .acct > div.wz-row, .acct > div.wz-row:hover, .acct > div.wz-row:active { cursor: default; background: none; }
 .acct .wz-main b, .acct .wz-main small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .acct .chev { flex: none; color: var(--ink-3); font-size: 20px; line-height: 1; }
-.acct .wz-meter, .acct .muted, .acct .link { margin: 0 8px 0 56px; }
+.acct .wz-pill { flex: none; }
+.acct .use { order: 9; flex: 1 0 100%; min-width: 0; display: grid; gap: var(--wz-space-2); padding: 0 0 4px 48px; }
+.acct .use .muted { display: block; }
 .acct .wz-meter > span { display: flex; flex-wrap: wrap; gap: 0 6px; }
 .acct .meter-val { color: var(--ink); font-variant-numeric: tabular-nums; }
 .acct .wz-meter > span > span + span::before { content: "·"; margin-right: 6px; color: var(--ink-3); }
+.acct > .link { margin: 0 8px 4px 56px; }
 .wz-meter.hot > i > b { background: var(--danger); }
 .muted { font-size: 13px; color: var(--ink-3); }
 .link { width: fit-content; min-height: 44px; display: inline-flex; align-items: center; color: var(--accent); font-weight: 600; text-decoration: none; }
 .link.danger { color: var(--danger); }
 .link:disabled { opacity: .45; cursor: default; }
-@container wz-app (max-width: 439px) { .acct .wz-meter, .acct .muted, .acct .link { margin-left: 8px; } }
+@container wz-app (max-width: 439px) { .acct .use { padding-left: 0; } .acct > .link { margin-left: 8px; } }
 @container wz-app (min-width: 600px) {
-  #accounts.wz-grid { gap: var(--wz-space-3); }
-  .acct, .acct + .acct { padding: var(--wz-space-2) var(--wz-space-2) var(--wz-space-3); border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); }
-  .acct .wz-meter, .acct .muted, .acct .link { margin-left: 8px; }
+  /* Same columns in every row, so the meters and pills line up down the list. */
+  .acct > .wz-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) minmax(200px, 38%) 132px 12px; column-gap: var(--wz-space-3); }
+  .acct .use { order: 0; padding: 4px 0; }
+  .acct .wz-pill { justify-self: end; }
 }
+@container wz-app (min-width: 960px) { .acct > .wz-row { grid-template-columns: 36px minmax(0, 1fr) minmax(260px, 420px) 132px 12px; } }
 
 .wz-actions .wz-button { min-width: 160px; }
 @container wz-app (max-width: 599px) { .wz-actions .wz-button { flex: 1; } }

@@ -69,23 +69,25 @@ function renderAccount(a) {
   const main = el('span', 'wz-main');
   const tb = el('b', null, title); tb.title = a.email || title;
   main.append(tb, el('small', null, [domain, a.plan, nick].filter(Boolean).join(' · ')));
-  head.append(el('span', 'wz-tile', title.trim().charAt(0).toUpperCase() || '?'), main, el('span', 'wz-pill ' + (OK.has(a.status) ? 'ok' : 'warn'), STATUS[a.status] || a.status || 'Unknown'));
+  // Usage lives inside the row: under the name when narrow, beside it when the window is wide.
+  const use = el('span', 'use');
+  head.append(el('span', 'wz-tile', title.trim().charAt(0).toUpperCase() || '?'), main, use, el('span', 'wz-pill ' + (OK.has(a.status) ? 'ok' : 'warn'), STATUS[a.status] || a.status || 'Unknown'));
   if (creds.length) { const chev = el('span', 'chev', '›'); chev.setAttribute('aria-hidden', 'true'); head.append(chev); }
   li.append(head);
 
   const limits = a.usage?.limits || [];
   for (const l of limits) {
     const u = usedOf(l), pct = Math.max(0, Math.min(100, u || 0));
-    const meter = el('div', 'wz-meter' + (u >= 90 ? ' hot' : '')), label = el('span');
+    const meter = el('span', 'wz-meter' + (u >= 90 ? ' hot' : '')), label = el('span');
     label.append(el('span', null, l.label), el('span', 'meter-val', u == null ? '—' : `${u}% used`));
     if (l.resetsAt) label.append(el('span', 'meter-reset', resetText(l.resetsAt)));
     const bar = el('i'), fill = el('b');
     fill.style.setProperty('--v', pct + '%');
     bar.setAttribute('role', 'meter'); bar.setAttribute('aria-label', `${title} ${l.label}`);
     bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100'); bar.setAttribute('aria-valuenow', String(u ?? 0));
-    bar.append(fill); meter.append(label, bar); li.append(meter);
+    bar.append(fill); meter.append(label, bar); use.append(meter);
   }
-  if (!limits.length) li.append(el('p', 'muted', 'No usage yet'));
+  if (!limits.length) use.append(el('span', 'muted', 'No usage yet'));
 
   if (legacy && !['ready', 'connected', 'renewing'].includes(a.status)) {
     // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.

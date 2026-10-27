@@ -5,7 +5,7 @@ description: Use when the owner wants to connect Claude subscriptions or check s
 
 # Claude subscriptions
 
-- Open the Claude app (`http://<server>:8799`). Each subscription has its own card and usage meter. The owner uses **Sign in / + Add** and completes the official sign-in in the page; never ask for codes, passwords or tokens in chat.
+- Open the Claude app (`http://<server>:8799`). Each account is one row with its own status and usage meter. The owner uses **Connect** (no accounts yet) or **Add account** and completes the official sign-in in the page; never ask for codes, passwords or tokens in chat.
 - Hermes owns its managed sign-ins. Account changes are disabled unless the broker explicitly reports `management.contract=wizard.account-management/1`, `management.status=available` and exact boolean action permissions. Missing/off/unsupported/unavailable brokers fail closed. Server configuration uses the existing authenticated dashboard bridge.
 - Reconnect and remove target an exact managed sign-in after in-app confirmation; remove is not provider-wide logout. Nicknames/emails do not prove distinct subscriptions or additional quota. Never change adoption, provider or model settings as a sign-in side effect.
 - An existing shared Claude Code volume remains a separate, non-removable legacy source. Never copy its login into Hermes or expose anything from `/claude`. Existing DirectSDK settings stay unchanged.
