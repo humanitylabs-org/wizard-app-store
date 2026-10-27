@@ -34,5 +34,5 @@ test("workflow tests before it publishes, then checks the published image", () =
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Read-only")));
   const text = readFileSync(".github/workflows/tinfoil.yml", "utf8");
   expect(text).toContain("linux/amd64,linux/arm64");
-  expect(text).toContain("wizard-tinfoil:0.3.1");
+  expect(text).toContain("wizard-tinfoil:0.3.2");
 });
