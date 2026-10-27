@@ -5,7 +5,7 @@ description: Use when the owner wants to connect ChatGPT subscriptions or check 
 
 # ChatGPT subscriptions
 
-- Open the ChatGPT app (`http://<server>:8800`). Each subscription has its own card and usage meter. The owner uses **Sign in / + Add** and completes the provider's sign-in on the page; never ask for codes, passwords or tokens in chat.
+- Open the ChatGPT app (`http://<server>:8800`). Each account is one row with its own status and usage meter. The owner uses **Connect** (no accounts yet) or **Add account** and completes the provider's sign-in on the page; never ask for codes, passwords or tokens in chat.
 - Hermes owns and renews these credentials. Never read, copy, print or send its auth files. Never change external-login adoption, provider, or model settings as a side effect of connecting.
 - `GET /api/accounts` reads the inventory. Account changes are disabled unless the broker explicitly reports `management.contract=wizard.account-management/1`, `management.status=available` and exact boolean action permissions. Missing/off/unsupported/unavailable brokers fail closed. Server configuration uses the existing authenticated dashboard bridge.
 - Reconnect and remove target an exact managed sign-in, after in-app confirmation. Remove is not a provider-wide logout. Multiple sign-ins for the same principal may share quota; nicknames/emails are not proof of separate subscriptions.
