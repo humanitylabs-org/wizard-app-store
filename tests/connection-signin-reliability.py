@@ -62,6 +62,7 @@ class Dashboard(http.server.BaseHTTPRequestHandler):
     password = 'dash-pass'
     broker = True
     rows = []
+    identity = None
 
     def log_message(self, *args):
         pass
@@ -89,8 +90,11 @@ class Dashboard(http.server.BaseHTTPRequestHandler):
         provider = self.path.rsplit('/', 1)[-1]
         if not self.broker or not self.path.startswith('/api/plugins/wizard-os/provider-accounts/'):
             return self.reply(404, {'detail': 'Not Found'})
-        return self.reply(200, {'owner': 'hermes', 'provider': provider, 'name': provider, 'accounts': list(self.rows),
-                                'actions': {'add': True}, 'management': dict(MANAGEMENT)})
+        body = {'owner': 'hermes', 'provider': provider, 'name': provider, 'accounts': list(self.rows),
+                'actions': {'add': True}, 'management': dict(MANAGEMENT)}
+        if self.identity:
+            body['identity'] = dict(self.identity)
+        return self.reply(200, body)
 
 
 class Base(unittest.TestCase):
@@ -98,7 +102,7 @@ class Base(unittest.TestCase):
     provider = 'chatgpt'
 
     def setUp(self):
-        Dashboard.password, Dashboard.broker, Dashboard.rows = 'dash-pass', True, []
+        Dashboard.password, Dashboard.broker, Dashboard.rows, Dashboard.identity = 'dash-pass', True, [], None
         self.dash = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Dashboard)
         threading.Thread(target=self.dash.serve_forever, daemon=True).start()
         self.app = self.pool.Server(('127.0.0.1', 0), self.pool.Handler)
@@ -165,6 +169,17 @@ class ChatGPTSignin(Base):
         # Starting a sign-in against it fails with the same plain reason, not a fake success.
         code, op = self.post({'action': 'add', 'confirmed': True})
         self.assertEqual(code, 503)
+
+    def test_home_never_shows_hermes_default_labels(self):
+        # Hermes labels a Codex sign-in without an email claim `openai-codex-oauth-1`; Home shows the name whenever the
+        # email is masked, so /api/connection names such rows by position and keeps an owner's own nickname.
+        row = lambda id, name: {'id': id, 'name': name, 'email': 'h***@e***', 'status': 'ready', 'usage': {'limits': []},
+                                'credentials': [], 'actions': {'reconnect': True, 'remove': True}}
+        Dashboard.rows = [row('a1', 'openai-codex-oauth-1'), row('a2', 'Work'), row('a3', 'openai-codex-oauth-3')]
+        conn = self.get('/api/connection')[1]
+        self.assertEqual([a['name'] for a in conn['accounts']], ['ChatGPT', 'Work', 'ChatGPT 3'])
+        # The page keeps the plugin's rows untouched (it labels by email itself).
+        self.assertEqual(self.get('/api/accounts')[1]['accounts'][0]['name'], 'openai-codex-oauth-1')
 
     def test_wrong_dashboard_password(self):
         Dashboard.password = 'rotated'
@@ -238,6 +253,26 @@ class ClaudeSignin(Base):
         # Same mask, different account (hank@example.com): both rows stay.
         Dashboard.rows = [agent_row('h***@e***', emailHash=self.pool.email_hash('hank@example.com'))]
         self.assertEqual(self.ids(), ['legacy-claude-code', 'agent1'])
+
+    def test_current_plugin_never_merges_by_mask(self):
+        # A plugin that reports email hashes (identity marker, Agent Service #203): an agent row without a hash is an
+        # unattested account, so a matching mask alone (heidi@ vs hank@) must not hide the original sign-in.
+        Dashboard.identity = {'emailHash': 'sha256-16'}
+        Dashboard.rows = [agent_row('h***@e***')]
+        self.assertEqual(self.ids(), ['legacy-claude-code', 'agent1'])
+        # Same without the marker when another row carries a hash (#196 before #203).
+        Dashboard.identity = None
+        Dashboard.rows = [agent_row('h***@e***'), {**agent_row('o***@e***', emailHash=self.pool.email_hash('olga@example.com')), 'id': 'agent2'}]
+        self.assertEqual(self.ids(), ['legacy-claude-code', 'agent1', 'agent2'])
+        # And the exact hash still merges under the marker.
+        Dashboard.identity = {'emailHash': 'sha256-16'}
+        Dashboard.rows = [agent_row('h***@e***', emailHash=self.pool.email_hash('Heidi@Example.com'))]
+        self.assertEqual(self.ids(), ['agent1'])
+
+    def test_claude_home_names(self):
+        Dashboard.rows = [agent_row('o***@e***', name='anthropic-oauth-2')]
+        conn = self.get('/api/connection')[1]
+        self.assertEqual([a['name'] for a in conn['accounts']], ['heidi@example.com', 'Claude 2'])
 
     def test_different_accounts_stay_separate(self):
         Dashboard.rows = [agent_row('o***@e***')]
