@@ -47,3 +47,10 @@ button:disabled { opacity: .5; cursor: default; }
 /* Add credit: a quiet link under the credit meter, aligned with it. */
 .key-row .topup { margin: 0 8px 4px 56px; min-height: 32px; }
 @container wz-app (max-width: 439px) { .key-row .topup { margin-left: 8px; } }
+
+/* Apps using Tinfoil: name + what it is for, Remove on the right. */
+.app-li + .app-li { border-top: 1px solid var(--line); }
+.app-row, .app-row:hover { display: flex; align-items: center; gap: var(--wz-space-3); cursor: default; background: none; }
+.app-row .wz-tile { font-weight: 700; color: var(--accent); background: var(--accent-soft); }
+.app-row .wz-main { flex: 1; min-width: 0; }
+.app-row .wz-button { flex: none; width: auto; min-width: 0; min-height: 40px; padding-inline: 16px; }

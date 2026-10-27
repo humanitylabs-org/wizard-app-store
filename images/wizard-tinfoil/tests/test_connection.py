@@ -76,6 +76,23 @@ class Tests(unittest.TestCase):
             code,b=self.call('/v1/chat/completions',{'model':'test-model','messages':[{'role':'user','content':'synthetic'}],'stream':True},h)
             self.assertEqual(code,200);self.assertIn(b'data: [DONE]',b)
         self.call('/api/disconnect',{})
+    def test_03b_app_tokens(self):
+        self.assertEqual(self.call('/api/app-tokens',{'app':'wizard-search'})[0],409)
+        s.atomic('connection.json',{'key':KEY,'models':['gpt-oss-120b','nomic-embed-text'],'verifiedAt':'test','authenticated':True})
+        self.assertEqual(self.call('/api/app-tokens',{'app':'Bad App'})[0],400)
+        self.assertEqual(self.call('/api/app-tokens',{'app':'wizard-search'},{'Origin':''})[0],403)
+        self.assertEqual(self.call('/api/app-tokens',{'app':'wizard-search'},{'Origin':'https://evil.invalid'})[0],403)
+        code,b=self.call('/api/app-tokens',{'app':'wizard-search'});self.assertEqual(code,200);d=json.loads(b)
+        self.assertNotIn(KEY.encode(),b);self.assertEqual(d['models'],['gpt-oss-120b']);self.assertTrue(d['baseUrl'].endswith('/v1'))
+        self.assertEqual((s.DATA/'app-tokens.json').stat().st_mode&0o777,0o600)
+        h={'Origin':'','Authorization':'Bearer '+d['token']}
+        self.assertEqual(self.call('/v1/models',None,h)[0],200)
+        self.assertEqual(s.status()['apps'],['wizard-search'])
+        self.assertEqual(self.call('/v1/models',None,{'Origin':'','Authorization':'Bearer '+d['token'],'X-Forwarded-For':'1.2.3.4'})[0],403)
+        self.assertEqual(self.call('/api/app-tokens/remove',{'app':'wizard-search'})[0],200)
+        self.assertEqual(self.call('/v1/models',None,h)[0],401)
+        self.assertEqual(s.status()['apps'],[])
+        self.call('/api/disconnect',{})
     def test_04_sdk_fail_closed(self):
         calls=[]
         def blocked(**kwargs):calls.append('attestation');raise RuntimeError('simulated attestation failure')
