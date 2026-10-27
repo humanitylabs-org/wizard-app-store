@@ -193,7 +193,7 @@ TOOLS = [{'name':'billing_summary','description':'Read Tinfoil spend and credit 
 def rpc(m):
     i=m.get('id'); method=m.get('method'); p=m.get('params') or {}
     if 'id' not in m: return None
-    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.3'}}
+    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.4'}}
     elif method=='tools/list': r={'tools':TOOLS}
     elif method=='ping': r={}
     elif method=='tools/call' and p.get('name')=='connection_status' and not p.get('arguments'):
@@ -226,7 +226,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         if self.refused(path): return
-        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.3'})
+        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.4'})
         if path in ('/api/connection', '/api/status'): return self.send(200,status())
         if path=='/v1/models': return self.send(200,{'object':'list','data':[{'id':x,'object':'model','owned_by':'tinfoil'} for x in status()['models']]})
         if path=='/openapi.json': return self.send(200,(ROOT/'openapi.json').read_bytes())
