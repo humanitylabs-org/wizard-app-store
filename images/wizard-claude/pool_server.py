@@ -8,7 +8,7 @@ import os
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-from pool_client import Hermes, BridgeError, REASONS, alongside, agent_address
+from pool_client import Hermes, BridgeError, REASONS, alongside, agent_address, adopt_as_agent_default
 import server as owner
 
 PROVIDER = os.environ.get('WIZARD_POOL_PROVIDER', 'chatgpt')
@@ -23,6 +23,8 @@ if PROVIDER == 'claude':
     import server as claude_owner
     LEGACY = claude_owner.CONNECTION
     LEGACY_RENEW = claude_owner.renew_if_expired
+    # Fresh mode: the Claude Code sign-in on this page is the agent's model; give the agent it when it has none.
+    claude_owner.State.after_sign_in = lambda: adopt_as_agent_default(PROVIDER)
 
 
 def is_mirror(row):
