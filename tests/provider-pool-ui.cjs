@@ -64,14 +64,14 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    await acctRow.click();await page.waitForFunction(()=>document.getElementById('account').open);
    assert.equal(await page.locator('.grant-name').first().innerText(),'Sign-in a11b');
    await page.getByRole('button',{name:'Remove'}).first().click();await page.locator('#cancel').click();await closed(page);assert.equal(calls.length,0);
-   // add: nickname -> start -> big device code visible
-   await page.locator('#add').click();await page.locator('#nick').fill('Work');
+   // add (no nickname up front; accounts are labelled by email) -> start -> big device code visible
+   await page.locator('#add').click();assert.equal(await page.locator('#nick').count(),0);
    // ChatGPT refuses device codes until this one-time setting is on: the dialog says so before the code.
    assert.match(await page.locator('#dlg-text').innerText(),/Settings → Security.*Device code sign-in for Codex/);
    if(shots) await page.screenshot({path:`${shots}/ui-add-${width}.png`});
    await page.locator('#go').click();
    await page.waitForFunction(()=>document.querySelector('#user-code')?.textContent==='ABCD-EFGHI' && !document.querySelector('#code-step').hidden);
-   assert.equal(calls[0].action,'add');assert.equal(calls[0].label,'Work');
+   assert.equal(calls[0].action,'add');assert.equal(calls[0].label,'');
    // Copy-first: the code (with Copy) sits above the sign-in link, and the hint stays visible while waiting.
    const [codeY,linkY]=await page.evaluate(()=>[document.querySelector('#code-step').getBoundingClientRect().top,document.querySelector('#signin-step').getBoundingClientRect().top]);
    assert.ok(codeY<linkY,'code above the sign-in link');
@@ -131,6 +131,6 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    assert.equal(await page.locator('#conn-pill').innerText(),'Not connected');assert.equal(await page.locator('#add').innerText(),'Connect');
    assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('PASS 390px+1440px: two subscriptions = two meters with own %, status card, per-account sheet, add with nickname + visible 9-char code, exact reconnect/remove with in-app confirm, Claude paste-code, same-account notice, empty state, no native dialogs, no JS errors');
+  console.log('PASS 390px+1440px: two subscriptions = two meters with own %, status card, per-account sheet, add without a nickname + visible 9-char code, exact reconnect/remove with in-app confirm, Claude paste-code, same-account notice, empty state, no native dialogs, no JS errors');
  }finally{await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;server.close();});
