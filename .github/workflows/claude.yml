@@ -43,8 +43,8 @@ jobs:
       - name: Refuse to overwrite an already published tag
         if: github.event_name != 'pull_request'
         run: |
-          if docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.2.11 >/dev/null 2>&1; then
-            echo "wizard-claude:0.2.11 is already published; bump the tag in this workflow and server.py" >&2; exit 1
+          if docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.2.12 >/dev/null 2>&1; then
+            echo "wizard-claude:0.2.12 is already published; bump the tag in this workflow and server.py" >&2; exit 1
           fi
       - name: Publish tested Claude (amd64 and arm64)
         if: github.event_name != 'pull_request'
@@ -54,11 +54,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/wizard-claude:0.2.11
+          tags: ghcr.io/humanitylabs-org/wizard-claude:0.2.12
       - name: Published image passes the same checks
         if: github.event_name != 'pull_request'
         run: |
-          docker pull ghcr.io/humanitylabs-org/wizard-claude:0.2.11
-          SKIP_BUILD=1 WIZARD_CLAUDE_IMAGE=ghcr.io/humanitylabs-org/wizard-claude:0.2.11 sh images/wizard-claude/test-container.sh
-          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.2.11 | grep -q linux/arm64
-# Publishes only after store, unit and container checks pass. Never re-push 0.2.11: bump the tag.
+          docker pull ghcr.io/humanitylabs-org/wizard-claude:0.2.12
+          SKIP_BUILD=1 WIZARD_CLAUDE_IMAGE=ghcr.io/humanitylabs-org/wizard-claude:0.2.12 sh images/wizard-claude/test-container.sh
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-claude:0.2.12 | grep -q linux/arm64
+# Publishes only after store, unit and container checks pass. Never re-push 0.2.12: bump the tag.
