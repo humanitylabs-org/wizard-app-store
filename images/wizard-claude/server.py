@@ -34,7 +34,7 @@ import inference
 
 import usage
 
-VERSION = "0.2.10"
+VERSION = "0.2.11"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
@@ -249,6 +249,7 @@ class State:
     login: Login | None = None
     login_id = ""
     busy = threading.Lock()  # one test/logout at a time
+    after_sign_in = None  # set by the pool server: make the new sign-in the agent's model when it has none
 
 
 def end_login():
@@ -285,6 +286,11 @@ def submit_code(login_id: str, code: str) -> tuple[int, dict]:
             return 409, {"ok": False, "message": "This sign-in expired. Press Connect again."}
         result = login.submit(code)
         State.login, State.login_id = None, ""
+    if result["ok"] and State.after_sign_in is not None:
+        try:
+            result = {**result, "agent_default": State.after_sign_in()}
+        except Exception:
+            pass
     return (200 if result["ok"] else 400), {**result, "claude": claude_status()}
 
 

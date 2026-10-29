@@ -199,5 +199,84 @@ class ClaudePool(unittest.TestCase):
             self.assertEqual(json.loads(raw)['status'], 'connected')
 
 
+class AgentDefaultAfterSignIn(unittest.TestCase):
+    """Fresh mode: the Hermes Agent app starts with no main model, so a Claude sign-in here must become its model
+    (else the first chat says "not connected to any AI provider"); a model the owner chose is never changed."""
+
+    def serve(self, current):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        seen = self.seen = []
+
+        class Dash(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def reply(self, data):
+                raw = json.dumps(data).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                seen.append(('GET', self.path))
+                if self.path == '/api/model/info':
+                    return self.reply({'provider': current, 'model': 'x' if current else ''})
+                return self.reply({'provider': 'claude-subscription-directsdk-experimental', 'model': 'claude-sonnet-5[1m]'})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                seen.append(('POST', self.path, body))
+                return self.reply({'ok': True})
+
+        httpd = ThreadingHTTPServer(('127.0.0.1', 0), Dash)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        return 'http://127.0.0.1:%d' % httpd.server_address[1]
+
+    def adopt(self, url, **env):
+        import pool_client
+        with patch.dict(os.environ, {'WIZARD_CLAUDE_HERMES_PASSWORD': 'pw', **env}), patch.object(pool_client, 'agent_url', lambda p: url), \
+                patch.object(pool_client, 'alongside', lambda p: False):
+            return pool_client.adopt_as_agent_default('claude')
+
+    def test_no_model_yet_gets_the_claude_subscription(self):
+        self.assertEqual(self.adopt(self.serve('')), 'set')
+        posts = [c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set']
+        self.assertEqual(posts[0][2]['provider'], 'claude-subscription-directsdk-experimental')
+        self.assertEqual(posts[0][2]['model'], 'claude-sonnet-5[1m]')
+        self.assertEqual(posts[0][2]['scope'], 'main')
+
+    def test_a_chosen_model_is_never_changed(self):
+        self.assertEqual(self.adopt(self.serve('openai-codex')), 'kept')
+        self.assertFalse([c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set'])
+
+    def test_alongside_or_no_agent_password_does_nothing(self):
+        import pool_client
+        with patch.dict(os.environ, {'WIZARD_CLAUDE_HERMES_PASSWORD': ''}):
+            self.assertEqual(pool_client.adopt_as_agent_default('claude'), 'skipped')
+
+    def test_the_sign_in_page_calls_it_after_a_good_code_only(self):
+        self.assertIsNotNone(owner.State.after_sign_in)
+        calls = []
+
+        class Login:
+            def alive(self):
+                return True
+
+            def submit(self, code):
+                return {'ok': code == 'good', 'message': ''}
+
+            def close(self):
+                pass
+        with patch.object(owner.State, 'after_sign_in', lambda: calls.append(1) or 'set'), patch.object(owner, 'claude_status', lambda: {}):
+            for code in ('bad', 'good'):
+                owner.State.login, owner.State.login_id = Login(), 'id'
+                status, body = owner.submit_code('id', code)
+        self.assertEqual(calls, [1])
+        self.assertEqual(body.get('agent_default'), 'set')
+
+
 if __name__ == '__main__':
     unittest.main()

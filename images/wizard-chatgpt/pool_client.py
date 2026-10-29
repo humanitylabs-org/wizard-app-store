@@ -98,3 +98,40 @@ class Hermes:
         if result.get('owner') != 'hermes' or result.get('provider') != provider or not isinstance(result.get('accounts'), list):
             raise BridgeError(503, 'no_broker')
         return result
+
+
+SUBSCRIPTION_PROVIDER = 'claude-subscription-directsdk-experimental'
+
+
+def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, timeout=20):
+    """Fresh mode: a Claude sign-in on this app is the agent's only model, but the Hermes Agent app starts with no
+    main model, so its first chat failed with "not connected to any AI provider". After a sign-in, make it the
+    agent's main model through the dashboard's own POST /api/model/set (the same call the model picker uses) with
+    Hermes' recommended default model, only while the owner has chosen nothing. Never changes a chosen model.
+    Returns 'set', 'kept', or 'skipped'; never raises."""
+    if alongside(provider):
+        return 'skipped'
+    prefix = 'WIZARD_' + provider.upper()
+    password = os.environ.get(prefix + '_HERMES_PASSWORD', '')
+    if not password:
+        return 'skipped'
+    origin = agent_url(provider)
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def call(path, body=None):
+        req = urllib.request.Request(origin + path, data=json.dumps(body).encode() if body is not None else None,
+                                     headers={'Content-Type': 'application/json'}, method='POST' if body is not None else 'GET')
+        with opener.open(req, timeout=timeout) as response:
+            return json.load(response)
+    try:
+        call('/auth/password-login', {'provider': 'basic', 'username': os.environ.get(prefix + '_HERMES_USER', 'hermes'), 'password': password})
+        if (call('/api/model/info') or {}).get('provider'):
+            return 'kept'
+        model = (call('/api/model/recommended-default?provider=' + hermes_provider) or {}).get('model') or ''
+        if not model:
+            return 'skipped'
+        # A subscription is flat-rate, so Hermes' per-token price warning does not apply.
+        done = call('/api/model/set', {'scope': 'main', 'provider': hermes_provider, 'model': model, 'confirm_expensive_model': True})
+        return 'set' if isinstance(done, dict) and done.get('ok') is not False else 'skipped'
+    except Exception:
+        return 'skipped'

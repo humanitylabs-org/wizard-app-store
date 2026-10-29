@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inference
 
-VERSION = "0.2.8"
+VERSION = "0.2.9"
 CONTRACT = "wizard.ai-connection/2"
 APP = Path(__file__).resolve().parent
 BIND = os.environ.get("WIZARD_CHATGPT_BIND", "0.0.0.0")
