@@ -58,13 +58,12 @@ const server = http.createServer((req,res)=>{
     assert.equal(await frame.evaluate(()=>getComputedStyle(document.body).backgroundColor),'rgba(0, 0, 0, 0)');
     if(output){await page.screenshot({path:path.join(output,provider+'-'+(mobile?'phone':'desktop')+'-'+skin+'.png')});captures++}
    }
-   await frame.locator('#add').click();await frame.locator('#nick').fill('Unsent nickname');
+   await frame.locator('#add').click();
    await page.locator('#transport').click();
    await frame.waitForFunction(()=>document.documentElement.dataset.appearanceSource==='transport');
    for(const skin of ['nebula','signal']){
     await page.locator('#'+skin).click();
     await frame.waitForFunction(s=>document.documentElement.dataset.skin===s,skin);
-    assert.equal(await frame.locator('#nick').inputValue(),'Unsent nickname');
     assert.equal(await frame.locator('#manage').evaluate(e=>e.open),true);
     assert.equal(await frame.evaluate(()=>window.qaIdentity),'same-document');
    }

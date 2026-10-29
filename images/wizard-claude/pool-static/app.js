@@ -64,7 +64,7 @@ function renderAccount(a) {
   const head = el(creds.length ? 'button' : 'div', 'wz-row');
   if (creds.length) { head.type = 'button'; head.setAttribute('aria-haspopup', 'dialog'); head.addEventListener('click', () => openAccountSheet(a.id)); }
   // Label each subscription by its signed-in email; the nickname (if different) moves to the second line.
-  const nick = a.name && a.name !== a.email && !legacy ? a.name : '';
+  const nick = a.name && a.name !== a.email && !legacy && !/^Subscription( \d+)?$/.test(a.name) ? a.name : '';
   const {title, domain} = accountTitle(a);
   const main = el('span', 'wz-main');
   const tb = el('b', null, title); tb.title = a.email || title;
@@ -173,11 +173,21 @@ function legacyFallback() {
   return !(snapshot?.accounts || []).some(a => ['ready', 'connected', 'renewing'].includes(a.status));
 }
 
+const CONNECT = new URLSearchParams(location.search).get('connect') === '1';
+let connectTried = false;
+function autoConnect() {
+  if (!CONNECT || connectTried || busy || !snapshot) return;
+  connectTried = true;
+  if (hermesAccounts().length || !allowed('add')) return; // already signed in, or sign-in unavailable: show the app as is
+  ask('add'); start();
+}
+
 async function refresh() {
   $('refresh').classList.add('spin');
   try {
     const data = await api('api/accounts');
     render(data);
+    autoConnect();
     $('message').textContent = data.error && data.inventoryStatus !== 'unavailable' ? 'Problem reading accounts.' : '';
   } catch {
     if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
@@ -199,8 +209,7 @@ function ask(action, account, credential) {
   intent = {action, account, credential}; active = null;
   dialogHidden = false;
   const b = brand();
-  $('steps').hidden = true; $('nick').value = ''; setStatus('');
-  $('nick-wrap').hidden = action !== 'add';
+  $('steps').hidden = true; setStatus('');
   if (action === 'add') {
     $('dlg-title').textContent = `Sign in to ${b}`;
     $('dlg-text').textContent = provider() === 'chatgpt'
@@ -226,7 +235,7 @@ async function start() {
   before = hermesAccounts().length;
   setStatus(action === 'remove' ? 'Removing…' : 'Starting…');
   try {
-    display(await api('api/operations', {action, target: credential?.id, label: action === 'add' ? $('nick').value.trim() : '', confirmed: true}));
+    display(await api('api/operations', {action, target: credential?.id, label: '', confirmed: true}));
   } catch (e) {
     busy = false; $('add').disabled = false;
     setStatus(e.status === 409 ? 'Another sign-in is running.' : (e.detail || 'Could not start. Try again.'), 'err');
@@ -238,7 +247,6 @@ function display(job) {
   if (active?.id === job.id && TERMINAL.has(active.status) && !TERMINAL.has(job.status)) return;
   clearTimeout(timer); active = job;
   if (!$('manage').open && !dialogHidden) openSheet($('manage'));
-  $('nick-wrap').hidden = true;
   if (!TERMINAL.has(job.status)) {
     // ChatGPT: copy the code first, then open the sign-in page and paste it there.
     $('dlg-text').textContent = job.userCode ? DEVICE_HINT : '';
@@ -347,6 +355,6 @@ refresh();
 const saved = sessionStorage.getItem('account-operation');
 if (saved && /^[A-Za-z0-9_-]{20,64}$/.test(saved)) {
   busy = true; $('add').disabled = true; active = {id: saved};
-  $('dlg-title').textContent = 'Signing in'; $('dlg-text').textContent = ''; $('nick-wrap').hidden = true;
+  $('dlg-title').textContent = 'Signing in'; $('dlg-text').textContent = '';
   showButtons({cancel: true, cancelLabel: 'Cancel'}); openSheet($('manage')); poll();
 }
