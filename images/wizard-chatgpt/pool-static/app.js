@@ -147,7 +147,10 @@ function render(data) {
   $('count').textContent = String(n); $('count').hidden = !n;
   $('accounts').replaceChildren(...data.accounts.map(renderAccount));
   // One status for the whole connection: Connected when any account works.
-  const [kind, word] = data.inventoryStatus === 'unavailable' ? ['warn', 'Needs attention']
+  // A fresh Wizard has no account broker, so the inventory is "unavailable" by design: its Claude Code sign-in is the
+  // agent's own, so a working one is simply Connected (it said Needs attention while chats worked).
+  const legacyOk = data.legacySignin === true && data.accounts.some(a => a.source === 'legacy-claude-code' && OK.has(a.status));
+  const [kind, word] = legacyOk ? ['ok', 'Connected'] : data.inventoryStatus === 'unavailable' ? ['warn', 'Needs attention']
     : data.accounts.some(a => OK.has(a.status)) ? ['ok', 'Connected'] : n ? ['warn', 'Needs attention'] : ['off', 'Not connected'];
   $('conn-pill').className = 'wz-pill ' + kind; $('conn-pill').textContent = word;
   renderDetails(data);
@@ -178,6 +181,8 @@ let connectTried = false;
 function autoConnect() {
   if (!CONNECT || connectTried || busy || !snapshot) return;
   connectTried = true;
+  // Fresh Wizard (no account broker): the sign-in is the plain Claude Code page; open it straight at its link and code.
+  if (legacyFallback()) { location.replace('claude-code/?connect=1'); return; }
   if (hermesAccounts().length || !allowed('add')) return; // already signed in, or sign-in unavailable: show the app as is
   ask('add'); start();
 }

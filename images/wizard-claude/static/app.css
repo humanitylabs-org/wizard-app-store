@@ -26,3 +26,6 @@ input { background: var(--wz-surface); color: var(--wz-text); width: 100%; font:
 #message { min-height: 1.5em; }
 #message.bad { color: var(--wz-error); }
 #message.ok { color: var(--wz-accent); }
+/* ?connect=1: only the link and the code box */
+body.focus .lead, body.focus #accounts, body.focus .foot, body.focus #login h2, body.focus #cancel { display: none; }
+body.focus section { background: none; border: 0; padding: 0; }
