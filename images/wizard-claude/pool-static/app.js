@@ -8,7 +8,9 @@ let dialogHidden = false, lastRootBack = 0, openAccount = null;
 // Every pop-up is a kit sheet (wizard-sheet.js): ×, Esc, tap outside, Back and swipe down all close it.
 const openSheet = d => { if (window.WzSheet) WzSheet.open(d); else if (!d.open) d.showModal(); };
 const manageable = () => snapshot?.management?.contract === 'wizard.account-management/1' && snapshot.management.status === 'available';
-const allowed = (action, account, credential) => manageable() && (action === 'add' ? snapshot.actions?.add === true : account?.actions?.[action] === true && credential?.managed === true);
+const allowed = (action, account, credential) => manageable() && (action === 'add' ? snapshot.actions?.add === true
+  : action === 'prefer' ? account?.actions?.prefer === true && account.preferred !== true && Boolean(credential?.id)
+  : account?.actions?.[action] === true && credential?.managed === true);
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const provider = () => snapshot?.provider || (location.pathname.includes('claude') ? 'claude' : 'chatgpt');
@@ -34,15 +36,41 @@ function usedOf(l) {
   if (typeof l.remainingPercent === 'number') return Math.round(100 - l.remainingPercent);
   return null;
 }
-function resetText(ts) {
-  const ms = new Date(ts) - Date.now();
+// A clock time reads better than "in 31 h": today/tomorrow by time, later by weekday.
+function whenText(ts) {
+  const d = new Date(ts), ms = d - Date.now();
   if (!Number.isFinite(ms)) return '';
-  if (ms <= 0) return 'Resets now';
-  const m = Math.round(ms / 60000);
-  if (m < 60) return `Resets in ${m} min`;
-  const h = Math.round(m / 60);
-  if (h < 36) return `Resets in ${h} h`;
-  return `Resets in ${Math.round(h / 24)} days`;
+  if (ms <= 60000) return 'now';
+  const time = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+  const day = n => new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+  const days = Math.round((day(d) - day(new Date())) / 86400000);
+  if (days === 0) return ms < 3600000 ? `in ${Math.max(1, Math.round(ms / 60000))} min` : `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  return `${d.toLocaleDateString([], {weekday: 'short'})} ${time}`;
+}
+function resetText(ts) { const w = whenText(ts); return w ? (w === 'now' ? 'Resets now' : `Resets ${w}`) : ''; }
+// A full shared meter (session or all-models weekly) stops the account until it resets. A model-scoped
+// weekly meter (e.g. one model's own allowance) does not, so it never marks the whole account as stopped.
+function blockingLimits(a) {
+  return (a.usage?.limits || []).filter(l => !/^weekly_scoped:/.test(String(l.id || '')) && (usedOf(l) ?? 0) >= 100
+    && (!l.resetsAt || new Date(l.resetsAt) > Date.now()));
+}
+function availability(a) {
+  if (!OK.has(a.status)) return {ok: false, word: STATUS[a.status] || a.status || 'Unknown'};
+  const full = blockingLimits(a);
+  if (!full.length) return {ok: true, word: 'Available'};
+  const until = full.map(l => l.resetsAt).filter(Boolean).sort().pop() || null;
+  const weekly = full.some(l => /week/i.test(String(l.id) + ' ' + String(l.label)));
+  return {ok: false, word: weekly ? 'Weekly limit' : 'Session limit', until};
+}
+const PLAN_NOTE = {claude: {pro: 'Pro has the smallest Claude limits.', 'max 5x': 'Max 5x has about 5× Pro usage.', 'max 20x': 'Max 20x has about 20× Pro usage.'}};
+const planNote = plan => PLAN_NOTE[provider()]?.[String(plan || '').trim().toLowerCase()] || '';
+const ordered = list => [...list].sort((x, y) => (x.priority ?? 1e9) - (y.priority ?? 1e9));
+function limitLabel(l) {
+  const id = String(l.id || '');
+  if (id.startsWith('session:')) return 'Session (5 h)';
+  if (id.startsWith('weekly_all:')) return 'Weekly · all models';
+  return l.label || 'Limit';
 }
 function grantName(c) {
   const generic = !c.name || /^(openai-codex-oauth|anthropic-oauth|claude-oauth)(-\d+)?$|^device_code$|^claude_code$/.test(c.name);
@@ -51,35 +79,43 @@ function grantName(c) {
 
 function accountTitle(a) {
   const legacy = a.source === 'legacy-claude-code';
+  // A masked email (o***@g***) says nothing; the owner's nickname for that sign-in is the readable title.
+  if (a.email && a.email.includes('*') && a.name && a.name !== a.email && !/^Subscription( \d+)?$/.test(a.name)) return {title: a.name, domain: a.email};
   const at = a.email ? a.email.lastIndexOf('@') : -1;
   // Readable on a phone: the name before @ is the title, the domain joins the plan line.
   return {title: at > 0 ? a.email.slice(0, at) : (a.email || a.name || (legacy ? 'Claude Code sign-in' : 'Subscription')), domain: at > 0 ? a.email.slice(at + 1) : ''};
 }
 
-function renderAccount(a) {
+function renderAccount(a, i, all) {
   const legacy = a.source === 'legacy-claude-code';
-  const creds = legacy ? [] : (a.credentials || []);
   const li = el('li', 'acct'); li.dataset.accountId = a.id;
-  // A row with sign-ins opens its sheet (reconnect, remove); the original Claude Code row has none.
-  const head = el(creds.length ? 'button' : 'div', 'wz-row');
-  if (creds.length) { head.type = 'button'; head.setAttribute('aria-haspopup', 'dialog'); head.addEventListener('click', () => openAccountSheet(a.id)); }
+  // Every row opens its sheet: plan, limits, use first, and sign-in actions.
+  const head = el('button', 'wz-row');
+  head.type = 'button'; head.setAttribute('aria-haspopup', 'dialog'); head.addEventListener('click', () => openAccountSheet(a.id));
   // Label each subscription by its signed-in email; the nickname (if different) moves to the second line.
-  const nick = a.name && a.name !== a.email && !legacy && !/^Subscription( \d+)?$/.test(a.name) ? a.name : '';
   const {title, domain} = accountTitle(a);
+  const nick = a.name && a.name !== a.email && a.name !== title && !legacy && !/^Subscription( \d+)?$/.test(a.name) ? a.name : '';
   const main = el('span', 'wz-main');
-  const tb = el('b', null, title); tb.title = a.email || title;
-  main.append(tb, el('small', null, [domain, a.plan, nick].filter(Boolean).join(' · ')));
+  const line = el('b'), tb = el('span', 'name', title); tb.title = a.email || title;
+  line.append(tb);
+  if (a.plan) line.append(el('span', 'plan', a.plan));
+  // Where it sits in the agent's order: the one tried first, then the backups.
+  const order = a.preferred ? 'Used first' : (all.length > 1 && a.priority != null ? 'Backup' : '');
+  main.append(line, el('small', null, [order, domain, nick].filter(Boolean).join(' · ')));
   // Usage lives inside the row: under the name when narrow, beside it when the window is wide.
   const use = el('span', 'use');
-  head.append(el('span', 'wz-tile', title.trim().charAt(0).toUpperCase() || '?'), main, use, el('span', 'wz-pill ' + (OK.has(a.status) ? 'ok' : 'warn'), STATUS[a.status] || a.status || 'Unknown'));
-  if (creds.length) { const chev = el('span', 'chev', '›'); chev.setAttribute('aria-hidden', 'true'); head.append(chev); }
+  const state = availability(a);
+  const pill = el('span', 'wz-pill ' + (state.ok ? 'ok' : 'warn'), state.word);
+  head.append(el('span', 'wz-tile', title.trim().charAt(0).toUpperCase() || '?'), main, use, pill);
+  const chev = el('span', 'chev', '›'); chev.setAttribute('aria-hidden', 'true'); head.append(chev);
   li.append(head);
+  if (state.until) use.append(el('span', 'back', `Back ${whenText(state.until)}`));
 
   const limits = a.usage?.limits || [];
   for (const l of limits) {
     const u = usedOf(l), pct = Math.max(0, Math.min(100, u || 0));
     const meter = el('span', 'wz-meter' + (u >= 90 ? ' hot' : '')), label = el('span');
-    label.append(el('span', null, l.label), el('span', 'meter-val', u == null ? '—' : `${u}% used`));
+    label.append(el('span', null, limitLabel(l)), el('span', 'meter-val', u == null ? '—' : `${u}% used`));
     if (l.resetsAt) label.append(el('span', 'meter-reset', resetText(l.resetsAt)));
     const bar = el('i'), fill = el('b');
     fill.style.setProperty('--v', pct + '%');
@@ -87,7 +123,7 @@ function renderAccount(a) {
     bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100'); bar.setAttribute('aria-valuenow', String(u ?? 0));
     bar.append(fill); meter.append(label, bar); use.append(meter);
   }
-  if (!limits.length) use.append(el('span', 'muted', 'No usage yet'));
+  if (!limits.length) use.append(el('span', 'muted', a.usageStatus === 'unavailable' ? 'Usage unavailable right now' : 'No usage yet'));
 
   if (legacy && !['ready', 'connected', 'renewing'].includes(a.status)) {
     // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.
@@ -101,10 +137,20 @@ function renderAccount(a) {
 function fillAccountSheet() {
   const a = (snapshot?.accounts || []).find(x => x.id === openAccount);
   if (!a) { if ($('account').open) $('account').close(); return; }
+  const legacy = a.source === 'legacy-claude-code';
   const {title, domain} = accountTitle(a);
+  const state = availability(a);
   $('acct-title').textContent = a.email || title;
-  $('acct-text').textContent = [a.plan, a.name && a.name !== a.email ? a.name : '', STATUS[a.status] || a.status].filter(Boolean).join(' · ') || domain;
-  const rows = (a.credentials || []).map(c => {
+  $('acct-text').textContent = [a.plan ? `${a.plan} plan` : '', state.word + (state.until ? ` until ${whenText(state.until)}` : '')].filter(Boolean).join(' · ') || domain;
+  $('acct-plan').textContent = [planNote(a.plan),
+    a.preferred ? 'Your agent uses this account first and moves to the next when it hits a limit.'
+      : (a.priority != null ? 'Your agent uses this account when the ones above it hit a limit.' : '')].filter(Boolean).join(' ');
+  const prefer = (a.credentials || [])[0];
+  $('prefer').hidden = !allowed('prefer', a, prefer); $('prefer').disabled = busy;
+  $('prefer').onclick = () => { $('account').close(); ask('prefer', a, prefer); };
+  // The original Claude Code sign-in signs in and out on its own page.
+  $('legacy-manage').hidden = !legacy;
+  const rows = (legacy ? [] : (a.credentials || [])).map(c => {
     const r = el('div', 'grant');
     r.append(el('span', 'grant-name', grantName(c)));
     if (manageable() && c.managed === true) {
@@ -122,6 +168,16 @@ function fillAccountSheet() {
 }
 function openAccountSheet(id) { openAccount = id; fillAccountSheet(); openSheet($('account')); }
 $('account').addEventListener('close', () => { openAccount = null; });
+
+// One sentence on what the agent can do right now, so a limit is never hidden behind "Active".
+function summary(accounts) {
+  if (!accounts.length) return '';
+  const list = ordered(accounts), open = list.find(a => availability(a).ok);
+  const name = a => accountTitle(a).title + (a.plan ? ` (${a.plan})` : '');
+  if (open) return list.length > 1 ? `Using ${name(open)} now.` : '';
+  const back = list.map(a => availability(a).until).filter(Boolean).sort()[0];
+  return `Every account is at its limit${back ? `; the first is back ${whenText(back)}` : ''}.`;
+}
 
 function renderDetails(data) {
   const facts = [
@@ -141,11 +197,11 @@ function render(data) {
   $('title').textContent = data.name || brand();
   document.title = data.name || brand();
   $('conn-name').textContent = data.name || brand();
-  $('conn-line').textContent = WHAT[provider()] || '';
   if (!$('sigil').getAttribute('src')) $('sigil').src = `logo-${provider() === 'claude' ? 'claude' : 'chatgpt'}.svg`;
   const n = data.accounts.length;
   $('count').textContent = String(n); $('count').hidden = !n;
-  $('accounts').replaceChildren(...data.accounts.map(renderAccount));
+  $('accounts').replaceChildren(...ordered(data.accounts).map(renderAccount));
+  $('conn-line').textContent = summary(data.accounts) || WHAT[provider()] || '';
   // One status for the whole connection: Connected when any account works.
   // A fresh Wizard has no account broker, so the inventory is "unavailable" by design: its Claude Code sign-in is the
   // agent's own, so a working one is simply Connected (it said Needs attention while chats worked).
@@ -221,6 +277,10 @@ function ask(action, account, credential) {
       ? DEVICE_HINT + (hermesAccounts().length ? ' Use an account not listed yet.' : '')
       : '';
     showButtons({go: true, goLabel: 'Continue'});
+  } else if (action === 'prefer') {
+    $('dlg-title').textContent = `Use ${accountTitle(account).title} first?`;
+    $('dlg-text').textContent = 'Your agent will try this account first and move to the others when it hits a limit. Nothing signs out.';
+    showButtons({go: true, goLabel: 'Use first'});
   } else if (action === 'reconnect') {
     $('dlg-title').textContent = `Reconnect ${account.name}`;
     $('dlg-text').textContent = '';
@@ -238,7 +298,7 @@ async function start() {
   if (!allowed(action, account, credential)) return;
   busy = true; $('add').disabled = true; $('go').disabled = true; $('cancel').disabled = true;
   before = hermesAccounts().length;
-  setStatus(action === 'remove' ? 'Removing…' : 'Starting…');
+  setStatus(action === 'remove' ? 'Removing…' : action === 'prefer' ? 'Updating…' : 'Starting…');
   try {
     display(await api('api/operations', {action, target: credential?.id, label: '', confirmed: true}));
   } catch (e) {
@@ -270,7 +330,7 @@ function display(job) {
   busy = false; $('steps').hidden = true;
   showButtons({cancel: false, close: true});
   const done = {
-    succeeded: job.action === 'remove' ? 'Removed.' : 'Connected.',
+    succeeded: job.action === 'remove' ? 'Removed.' : job.action === 'prefer' ? 'Done. Your agent uses this account first.' : 'Connected.',
     cancelled: 'Cancelled.',
     expired: 'Timed out. Try again.',
     failed: 'Did not finish. Try again.',

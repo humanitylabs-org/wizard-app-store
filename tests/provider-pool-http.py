@@ -92,6 +92,18 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(self.request('/api/operations',{'action':action,'target':'aa11bb'},headers={'X-Wizard-Account-Action':'1'})[0],403)
         self.assertEqual(self.calls,[])
 
+    def test_prefer_reorders_listed_sign_in_including_unmanaged_mirror(self):
+        inventory={'actions':{'add':True},'accounts':[{'actions':{'remove':False,'prefer':True},'credentials':[{'id':'cc55dd','managed':False}]}]}
+        m.Hermes.accounts=lambda _:{**inventory,'management':self.management}
+        body={'action':'prefer','target':'cc55dd','confirmed':True}
+        self.assertEqual(self.request('/api/operations',body,headers={'X-Wizard-Account-Action':'1'})[0],200)
+        self.assertEqual(self.calls,[('chatgpt','/operations',body)])
+        for bad in ({**body,'target':'missing'},):
+            self.assertEqual(self.request('/api/operations',bad,headers={'X-Wizard-Account-Action':'1'})[0],403)
+        inventory['accounts'][0]['actions']['prefer']='true'
+        self.assertEqual(self.request('/api/operations',body,headers={'X-Wizard-Account-Action':'1'})[0],403)
+        self.assertEqual(len(self.calls),1)
+
     def test_legacy_expired_preserves_reason_and_renewal_readback(self):
         class Legacy:
             def read(self):return {'status':'expired','usage':None,'error':{'code':'expired','message':'Reconnect through Claude Code'}}
