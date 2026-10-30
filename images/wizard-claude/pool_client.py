@@ -101,10 +101,12 @@ class Hermes:
 
 
 SUBSCRIPTION_PROVIDER = 'claude-subscription-directsdk-experimental'
+# The Hermes provider a ChatGPT sign-in adds (the plugin's account broker runs `hermes auth add openai-codex`).
+CHATGPT_PROVIDER = 'openai-codex'
 
 
 def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, timeout=20):
-    """Fresh mode: a Claude sign-in on this app is the agent's only model, but the Hermes Agent app starts with no
+    """Fresh mode: a sign-in on this app (Claude, or ChatGPT) is the agent's only model, but the Hermes Agent app starts with no
     main model, so its first chat failed with "not connected to any AI provider". After a sign-in, make it the
     agent's main model through the dashboard's own POST /api/model/set (the same call the model picker uses) with
     Hermes' recommended default model, only while the owner has chosen nothing. Never changes a chosen model.
@@ -128,6 +130,13 @@ def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, time
         if (call('/api/model/info') or {}).get('provider'):
             return 'kept'
         model = (call('/api/model/recommended-default?provider=' + hermes_provider) or {}).get('model') or ''
+        if not model:
+            # Hermes recommends a model for some providers only (not openai-codex): then the first model its own
+            # model picker lists for the signed-in provider (Hermes' order, best first).
+            options = call('/api/model/options') or {}
+            row = next((p for p in options.get('providers') or [] if isinstance(p, dict)
+                        and p.get('slug') == hermes_provider and p.get('authenticated') is True), {})
+            model = next((m for m in row.get('models') or [] if isinstance(m, str) and m), '')
         if not model:
             return 'skipped'
         # A subscription is flat-rate, so Hermes' per-token price warning does not apply.

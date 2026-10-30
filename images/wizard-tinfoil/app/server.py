@@ -30,7 +30,7 @@ ORIGINS = csv('WIZARD_TRUSTED_ORIGINS') | {'http://'+h for h in HOSTS if h.start
 
 # The agent on this box (Hermes). Fresh installs reach the Hermes Agent app by name; alongside boxes get the host
 # dashboard address from the App Manager. Connect registers this app's local gateway as a Hermes custom provider:
-# Hermes gets only the box-only gateway bearer, never the Tinfoil key, and its default model is never changed.
+# Hermes gets only the box-only gateway bearer, never the Tinfoil key, and a model it already has is never changed.
 DEFAULT_HERMES = 'http://hermes-agent:9119'
 HERMES_URL = (os.environ.get('WIZARD_TINFOIL_HERMES_URL') or DEFAULT_HERMES).rstrip('/')
 HERMES_USER = os.environ.get('HERMES_DASHBOARD_BASIC_AUTH_USERNAME') or 'hermes'
@@ -89,7 +89,11 @@ def register(models):
     model = picked[0]
     token = json.loads((DATA/'gateway-token.json').read_text())['token']
     try:
-        agent_call('POST', '/api/providers/custom-endpoints', {'id':ENDPOINT_ID,'name':'Tinfoil','base_url':AGENT_BASE,'model':model,'models':picked,'api_key':token,'api_mode':'chat_completions','discover_models':False,'make_default':False})
+        # A fresh Wizard's agent starts with no model: Tinfoil chosen in the Welcome must be the model it chats with,
+        # or its first message fails ("no model configured"). A model the owner (or another app) chose is never changed.
+        try: first = not (agent_call('GET', '/api/model/info') or {}).get('provider')
+        except Exception: first = False
+        agent_call('POST', '/api/providers/custom-endpoints', {'id':ENDPOINT_ID,'name':'Tinfoil','base_url':AGENT_BASE,'model':model,'models':picked,'api_key':token,'api_mode':'chat_completions','discover_models':False,'make_default':first})
         return 'registered'
     except Exception:
         return 'unavailable'
@@ -207,7 +211,7 @@ TOOLS = [{'name':'billing_summary','description':'Read Tinfoil spend and credit 
 def rpc(m):
     i=m.get('id'); method=m.get('method'); p=m.get('params') or {}
     if 'id' not in m: return None
-    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.5'}}
+    if method=='initialize': r={'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'wizard-tinfoil','version':'0.3.6'}}
     elif method=='tools/list': r={'tools':TOOLS}
     elif method=='ping': r={}
     elif method=='tools/call' and p.get('name')=='connection_status' and not p.get('arguments'):
@@ -239,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         if self.refused(path): return
-        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.5'})
+        if path=='/healthz': return self.send(200,{'ok':True,'app':'wizard-tinfoil','version':'0.3.6'})
         if path in ('/api/connection', '/api/status'): return self.send(200,status())
         if path=='/v1/models': return self.send(200,{'object':'list','data':[{'id':x,'object':'model','owned_by':'tinfoil'} for x in status()['models']]})
         if path=='/openapi.json': return self.send(200,(ROOT/'openapi.json').read_bytes())

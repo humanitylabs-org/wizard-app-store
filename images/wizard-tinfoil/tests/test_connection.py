@@ -122,7 +122,9 @@ class Tests(unittest.TestCase):
 
     def test_07_connect_registers_agent_model_without_upstream_key(self):
         calls=[]
-        def fake(method,path,body=None):calls.append((method,path,body));return {}
+        def fake(method,path,body=None):
+            if method=='GET':return {'provider':'claude-subscription-directsdk-experimental','model':'claude-opus-5-5'}
+            calls.append((method,path,body));return {}
         models=['deepseek-v4-1-flash','glm-5-3','kimi-k3','nomic-embed-text','whisper-large-v3-turbo','websearch']
         with patch.object(s,'worker',return_value={'models':models,'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
             code,b=self.call('/api/connect',{'apiKey':KEY});self.assertEqual(code,200)
@@ -138,6 +140,22 @@ class Tests(unittest.TestCase):
         calls.clear()
         with patch.object(s,'agent_call',side_effect=fake):self.assertEqual(self.call('/api/disconnect',{})[0],200)
         self.assertEqual(calls[0][:2],('DELETE','/api/providers/custom-endpoints/wizard-tinfoil'))
+    def test_07b_fresh_agent_without_a_model_gets_tinfoil_as_its_model(self):
+        # Fresh Wizard, Tinfoil chosen in the Welcome: the Hermes Agent app has no model, so its first chat failed
+        # ("no model configured") although Tinfoil was listed as connected. Unreadable agent model: never default.
+        for info,want in (({'provider':'','model':''},True),(OSError('down'),False)):
+            calls=[]
+            def fake(method,path,body=None):
+                if method=='GET':
+                    self.assertEqual(path,'/api/model/info')
+                    if isinstance(info,Exception):raise info
+                    return info
+                calls.append((method,path,body));return {}
+            with patch.object(s,'worker',return_value={'models':['glm-5-3','kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
+                self.assertEqual(self.call('/api/connect',{'apiKey':KEY})[0],200)
+            (m,path,body),=calls
+            self.assertEqual((m,path,body['make_default'],body['model']),('POST','/api/providers/custom-endpoints',want,'kimi-k3'))
+            with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
     def test_08_agent_unreachable_keeps_key_and_reports_it(self):
         with patch.object(s,'worker',return_value={'models':['kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=OSError('down')):
             code,b=self.call('/api/connect',{'apiKey':KEY});self.assertEqual(code,200)
@@ -186,7 +204,9 @@ class Billing(unittest.TestCase):
         self.assertEqual(s.ranked(['nomic-embed-text']),[])
     def test_11_new_model_on_tinfoil_reregisters_without_reconnect(self):
         calls=[]
-        def fake(method,path,body=None):calls.append(body);return {}
+        def fake(method,path,body=None):
+            if method!='GET':calls.append(body)
+            return {}
         with patch.object(s,'worker',return_value={'models':['glm-5-3','kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
             self.assertEqual(self.call('/api/connect',{'apiKey':KEY})[0],200)
         with patch.object(s,'agent_call',side_effect=fake):s.reconcile()
