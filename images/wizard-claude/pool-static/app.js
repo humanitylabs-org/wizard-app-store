@@ -144,6 +144,7 @@ function fillAccountSheet() {
   $('acct-text').textContent = [a.plan ? `${a.plan} plan` : '', state.word + (state.until ? ` until ${whenText(state.until)}` : '')].filter(Boolean).join(' · ') || domain;
   $('acct-plan').textContent = [planNote(a.plan),
     a.preferred ? 'Your agent uses this account first and moves to the next when it hits a limit.'
+      : legacy && a.actions?.prefer === false ? 'Your agent always tries accounts added here before the original Claude Code sign-in, and switches to it on its own when they hit a limit.'
       : (a.priority != null ? 'Your agent uses this account when the ones above it hit a limit.' : '')].filter(Boolean).join(' ');
   const prefer = (a.credentials || [])[0];
   $('prefer').hidden = !allowed('prefer', a, prefer); $('prefer').disabled = busy;
