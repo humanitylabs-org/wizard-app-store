@@ -21,7 +21,7 @@ const server=http.createServer(async(req,res)=>{
   return res.end(JSON.stringify(job));
  }
  if(req.url.includes('/api/operations/')) return res.end(JSON.stringify(job));
- const name=req.url.endsWith('/')?'index.html':path.basename(req.url);
+ const pth=req.url.split('?')[0],name=pth.endsWith('/')?'index.html':path.basename(pth);
  if(!['index.html','app.js','app.css','boot.js','wizard-ui.css','wizard-tokens.css','wizard-layout.css','wizard-sheet.js','logo-claude.svg','logo-chatgpt.svg','theme-client.js'].includes(name)){res.writeHead(404);return res.end();}
  res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/html');res.end(fs.readFileSync(path.join(root,name)));
 });
@@ -129,6 +129,31 @@ const closed=page=>page.waitForFunction(()=>!document.querySelector('#manage').o
    inventoryError=false;
    rows=[];await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelectorAll('.acct').length===0 && !document.querySelector('#empty').hidden);
    assert.equal(await page.locator('#conn-pill').innerText(),'Not connected');assert.equal(await page.locator('#add').innerText(),'Connect');
+   assert.deepEqual(errors,[]);await page.close();
+  }
+  // A sign-in that stopped working: one-tap Reconnect on its row, and ?reconnect= opens it straight away.
+  {
+   const broken=account('x',0);broken.status='expired';broken.usage=null;broken.usageStatus='unavailable';
+   rows=[account('a',11),broken];calls=[];provider='chatgpt';
+   const page=await browser.newPage({viewport:{width:390,height:900}}),errors=[];
+   page.on('pageerror',e=>errors.push(e.message));
+   await page.goto(`http://127.0.0.1:${server.address().port}/wizard-chatgpt/`);await page.waitForLoadState('networkidle');
+   if(shots) await page.screenshot({path:`${shots}/ui-reconnect-row.png`});
+   assert.equal(await page.locator('[data-reconnect]').count(),1,'only the broken row offers Reconnect');
+   assert.equal(await page.locator('.acct[data-account-id="x"] [data-reconnect]').isVisible(),true);
+   await page.locator('[data-reconnect]').click();
+   assert.equal(await page.evaluate(()=>document.getElementById('manage').open),true);
+   assert.match(await page.locator('#dlg-title').innerText(),/^Reconnect /);
+   await page.locator('#cancel').click();await closed(page);
+   for(const q of ['x','1']){
+    await page.goto(`http://127.0.0.1:${server.address().port}/wizard-chatgpt/?reconnect=${q}`);await page.waitForLoadState('networkidle');
+    await page.waitForFunction(()=>document.getElementById('manage').open);
+    assert.match(await page.locator('#dlg-title').innerText(),/^Reconnect Test x/);
+   }
+   await page.goto(`http://127.0.0.1:${server.address().port}/wizard-chatgpt/?reconnect=a`);await page.waitForLoadState('networkidle');
+   await page.waitForFunction(()=>document.getElementById('manage').open);
+   assert.match(await page.locator('#dlg-title').innerText(),/^Reconnect Test a/,'a named healthy account can still be reconnected');
+   assert.equal(calls.length,0,'the deep link only opens the confirm sheet; nothing starts without a tap');
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('PASS 390px+1440px: two subscriptions = two meters with own %, status card, per-account sheet, add without a nickname + visible 9-char code, exact reconnect/remove with in-app confirm, Claude paste-code, same-account notice, empty state, no native dialogs, no JS errors');
