@@ -280,6 +280,18 @@ class Handler(owner.Handler):
                 return self.send(error.status, {'error': 'Operation status unavailable; check inventory'})
             except Exception:
                 return self.send(503, {'error': 'Operation status unavailable; do not restart the operation'})
+        if path == '/api/model-cooldowns':
+            if PROVIDER != 'claude':
+                return self.send(404, {'error': 'not found'})
+            if any(k.lower() in ('tailscale-user-login', 'x-forwarded-for', 'forwarded', 'x-real-ip') or k.lower().startswith('cf-') for k in self.headers):
+                return self.send(403, {'error': 'box-only'})
+            try:
+                evidence = Hermes.request(PROVIDER, '/model-cooldowns')
+                if not isinstance(evidence, dict) or evidence.get('contract') != 'wizard.model-cooldowns/1':
+                    return self.send(503, {'error': 'Cooldown inventory unavailable'})
+                return self.send(200, {'provider': 'claude', 'owner': 'hermes', 'modelCooldowns': evidence})
+            except Exception:
+                return self.send(503, {'error': 'Cooldown inventory unavailable'})
         if path in ('/api/accounts', '/api/connection'):
             if path == '/api/connection' and any(k.lower() in ('tailscale-user-login', 'x-forwarded-for', 'forwarded', 'x-real-ip') or k.lower().startswith('cf-') for k in self.headers):
                 return self.send(403, {'error': 'box-only'})

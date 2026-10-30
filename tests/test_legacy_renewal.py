@@ -101,6 +101,40 @@ class RenewalTests(unittest.TestCase):
         finally:
             http.shutdown();http.server_close();thread.join()
 
+    def test_http_connection_preserves_unfolded_cooldown_grants(self):
+        import json
+        import time
+        import urllib.request
+        class Reader:
+            def read(self): return {'status': 'connected', 'account': 'original@example.com', 'usage': {'limits': []}}
+        spec = importlib.util.spec_from_file_location('claude_pool_cooldowns_fixture', ROOT / 'pool_server.py')
+        pool = importlib.util.module_from_spec(spec)
+        with patch.dict(os.environ, {'WIZARD_POOL_PROVIDER': 'claude'}), patch.dict(sys.modules, {'server': m}), patch.object(m, 'CONNECTION', Reader()):
+            spec.loader.exec_module(pool)
+        pool.PASSWORD = ''
+        evidence = {'contract': 'wizard.model-cooldowns/1', 'observedAt': time.time(), 'grants': [
+            {'id': 'a' * 24, 'models': {'claude-opus-5-5': time.time() + 3600}},
+            {'id': 'b' * 24, 'models': {'claude-opus-5-5': time.time() + 3600}}]}
+        pool.Hermes.accounts = lambda _: {'provider': 'claude', 'owner': 'hermes', 'accounts': [
+            {'id': 'mirror', 'mirror': 'claude-code', 'credentials': [{'name': 'claude_code'}]},
+            {'id': 'manual', 'status': 'ready'}], 'modelCooldowns': evidence}
+        http = pool.Server(('127.0.0.1', 0), pool.Handler)
+        thread = threading.Thread(target=http.serve_forever, daemon=True); thread.start()
+        try:
+            with patch.object(pool.owner.inference, 'models', return_value=[]):
+                with urllib.request.urlopen('http://127.0.0.1:' + str(http.server_port) + '/api/connection') as response:
+                    out = json.load(response)
+            with patch.object(pool.Hermes, 'request', return_value=evidence) as bridge:
+                with urllib.request.urlopen('http://127.0.0.1:' + str(http.server_port) + '/api/model-cooldowns') as response:
+                    projection = json.load(response)
+            bridge.assert_called_once_with('claude', '/model-cooldowns')
+            self.assertEqual(projection, {'provider': 'claude', 'owner': 'hermes', 'modelCooldowns': evidence})
+            self.assertEqual(out['contract'], 'wizard.ai-connection/2')
+            self.assertEqual(out['accountCount'], 2)
+            self.assertEqual(len(projection['modelCooldowns']['grants']), 2)
+        finally:
+            http.shutdown(); http.server_close(); thread.join()
+
     def test_official_cli_is_noninteractive_bounded_and_no_login_command(self):
         from types import SimpleNamespace
         import tempfile
