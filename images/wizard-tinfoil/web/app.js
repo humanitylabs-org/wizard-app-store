@@ -72,4 +72,7 @@ for(const k of ['api','admin']){
 }
 el('connect').onclick=()=>openKey('api');
 el('test').onclick=()=>action('api/test',{});
-request('api/status').then(render).catch(e=>{say(e.message);});
+// ?connect=1 (the Wizard Welcome, same as the Claude/ChatGPT apps): with no key saved yet, open straight to the
+// API key paste box (Miguel: keep onboarding to a minimum). A saved key just shows the page.
+const CONNECT=new URLSearchParams(location.search).get('connect')==='1';
+request('api/status').then(s=>{render(s);if(CONNECT&&!s.credentialStored)openKey('api');}).catch(e=>{say(e.message);});

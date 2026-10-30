@@ -2,6 +2,8 @@
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -245,3 +247,20 @@ class Billing(unittest.TestCase):
         s.atomic('connection.json',{'key':KEY,'models':['m'],'verifiedAt':'t'})
         st=s.status();self.assertEqual(st['apiKeyHint'],'…'+KEY[-4:]);self.assertNotIn(KEY[:-4],json.dumps(st))
         (s.DATA/'connection.json').unlink()
+
+class WelcomeConnectView(unittest.TestCase):
+    """?connect=1 (Wizard Welcome): with no key saved the API key paste box opens by itself, focused."""
+    APP=ROOT/'web/app.js'
+    def test_connect_param_opens_key_box_only_without_a_key(self):
+        js=self.APP.read_text()
+        self.assertIn("get('connect')==='1'",js)
+        self.assertIn("if(CONNECT&&!s.credentialStored)openKey('api')",js)
+    @unittest.skipUnless(shutil.which('node'),'node not installed (the image has none; the store bun test runs it)')
+    def test_connect_param_behaviour_in_page(self):
+        def run(search,stored):
+            out=subprocess.run(['node',str(ROOT/'tests/view_harness.cjs'),str(self.APP),search,
+                json.dumps({'status':'not_connected','credentialStored':stored})],capture_output=True,text=True,timeout=20,check=True)
+            return json.loads(out.stdout)
+        self.assertEqual(run('?connect=1',False),{'open':True,'focused':True})
+        self.assertEqual(run('?connect=1',True)['open'],False)
+        self.assertEqual(run('',False)['open'],False)

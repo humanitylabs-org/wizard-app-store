@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 
@@ -36,5 +37,15 @@ test("workflow tests before it publishes, then checks the published image", () =
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Read-only")));
   const text = readFileSync(".github/workflows/tinfoil.yml", "utf8");
   expect(text).toContain("linux/amd64,linux/arm64");
-  expect(text).toContain("wizard-tinfoil:0.3.6");
+  expect(text).toContain("wizard-tinfoil:0.3.7");
+});
+
+test("?connect=1 (Wizard Welcome) opens straight to the API key paste box, only when no key is saved", () => {
+  const run = (search: string, stored: boolean) =>
+    JSON.parse(
+      execFileSync("node", [`${dir}/tests/view_harness.cjs`, `${dir}/web/app.js`, search, JSON.stringify({ status: "not_connected", credentialStored: stored })], { encoding: "utf8" }),
+    );
+  expect(run("?connect=1", false)).toEqual({ open: true, focused: true });
+  expect(run("?connect=1", true).open).toBe(false);
+  expect(run("", false).open).toBe(false);
 });
