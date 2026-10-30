@@ -49,6 +49,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: images/hermes-agent
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
