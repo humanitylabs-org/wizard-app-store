@@ -8,7 +8,7 @@ import os
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-from pool_client import Hermes, BridgeError, REASONS, alongside, agent_address, adopt_as_agent_default
+from pool_client import Hermes, BridgeError, REASONS, alongside, agent_address, adopt_as_agent_default, CHATGPT_PROVIDER
 import server as owner
 
 PROVIDER = os.environ.get('WIZARD_POOL_PROVIDER', 'chatgpt')
@@ -269,7 +269,13 @@ class Handler(owner.Handler):
             if not PASSWORD and not same_origin(self.headers):
                 return self.send(403, {'error': 'Cross-site request rejected'})
             try:
-                return self.send(200, Hermes.request(PROVIDER, '/operations/' + path.rsplit('/', 1)[1]))
+                result = Hermes.request(PROVIDER, '/operations/' + path.rsplit('/', 1)[1])
+                if PROVIDER == 'chatgpt' and isinstance(result, dict) and result.get('status') == 'succeeded' \
+                        and result.get('action') in ('add', 'reconnect'):
+                    # Fresh mode: a ChatGPT sign-in becomes the agent's model while it has none (as Claude's does);
+                    # a model the owner chose is never changed, and alongside boxes are skipped.
+                    result = {**result, 'agentDefault': adopt_as_agent_default(PROVIDER, CHATGPT_PROVIDER)}
+                return self.send(200, result)
             except BridgeError as error:
                 return self.send(error.status, {'error': 'Operation status unavailable; check inventory'})
             except Exception:

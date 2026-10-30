@@ -12,9 +12,11 @@ test("the Tinfoil key only ever goes to the official attestation-verifying SDK",
   expect(provider).toContain("from tinfoil import TinfoilAI");
   expect(provider).not.toMatch(/base_url|api\.openai\.com|inference\.tinfoil\.sh/);
   const server = readFileSync(`${dir}/app/server.py`, "utf8");
-  // The agent gets the box-only gateway token, never the upstream key; its default model is never changed.
+  // The agent gets the box-only gateway token, never the upstream key; a model it already has is never changed
+  // (Tinfoil becomes the default only for an agent with no model yet: a fresh Wizard's Welcome).
   expect(server).toContain("'api_key':token");
-  expect(server).toContain("'make_default':False");
+  expect(server).toContain("'make_default':first");
+  expect(server).toContain("first = not (agent_call('GET', '/api/model/info') or {}).get('provider')");
   expect(readFileSync(`${dir}/requirements.lock`, "utf8")).toMatch(/^tinfoil==0\.14\.0 /m);
 });
 
@@ -34,5 +36,5 @@ test("workflow tests before it publishes, then checks the published image", () =
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Read-only")));
   const text = readFileSync(".github/workflows/tinfoil.yml", "utf8");
   expect(text).toContain("linux/amd64,linux/arm64");
-  expect(text).toContain("wizard-tinfoil:0.3.5");
+  expect(text).toContain("wizard-tinfoil:0.3.6");
 });

@@ -304,5 +304,62 @@ class ClaudeSignin(Base):
             self.assertEqual((conn['status'], conn['accounts'][0]['id']), ('connected', 'legacy-claude-code'))
 
 
+
+class ModelDashboard(Dashboard):
+    """Adds a broker operation and the agent's model routes (info, recommended default, options, set)."""
+    current = ''
+    op_status = 'succeeded'
+    seen = []
+
+    def do_GET(self):
+        if 'session=ok' not in (self.headers.get('Cookie') or ''):
+            return self.reply(401, {})
+        if '/operations/' in self.path:
+            return self.reply(200, {'id': self.path.rsplit('/', 1)[1], 'provider': 'chatgpt', 'action': 'add',
+                                    'status': self.op_status, 'credentialIds': ['c1']})
+        if self.path == '/api/model/info':
+            return self.reply(200, {'provider': self.current, 'model': 'x' if self.current else ''})
+        if self.path.startswith('/api/model/recommended-default'):
+            return self.reply(200, {'provider': 'openai-codex', 'model': ''})   # what Hermes answers for Codex
+        if self.path == '/api/model/options':
+            return self.reply(200, {'providers': [
+                {'slug': 'moa', 'authenticated': True, 'auth_type': 'virtual', 'models': ['default']},
+                {'slug': 'openai-codex', 'authenticated': True, 'models': ['gpt-6-sol', 'gpt-5.5']}]})
+        return super().do_GET()
+
+    def do_POST(self):
+        if self.path == '/api/model/set':
+            body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)) or b'{}')
+            ModelDashboard.seen.append(body)
+            return self.reply(200, {'ok': True})
+        return super().do_POST()
+
+
+class ChatGPTSignInBecomesAgentModel(Base):
+    """Fresh Wizard, ChatGPT chosen in the Welcome: the Hermes Agent app starts with no model, so a finished ChatGPT
+    sign-in must become the agent's model (else its first chat fails: no provider/model). A chosen model is kept."""
+
+    def setUp(self):
+        super().setUp()
+        self.dash.RequestHandlerClass = ModelDashboard
+        ModelDashboard.current, ModelDashboard.op_status, ModelDashboard.seen = '', 'succeeded', []
+        # The fresh-mode Hermes Agent app (the stand-in listens on loopback, which reads as alongside).
+        self.fresh = patch.dict(self.pool.adopt_as_agent_default.__globals__, {'alongside': lambda p: False})
+        self.fresh.start()
+        self.addCleanup(self.fresh.stop)
+
+    def test_succeeded_sign_in_sets_codex_when_the_agent_has_no_model(self):
+        code, out = self.get('/api/operations/' + 'o' * 24)
+        self.assertEqual((code, out['status'], out['agentDefault']), (200, 'succeeded', 'set'))
+        self.assertEqual(ModelDashboard.seen, [{'scope': 'main', 'provider': 'openai-codex', 'model': 'gpt-6-sol',
+                                                'confirm_expensive_model': True}])
+
+    def test_chosen_model_kept_and_running_sign_in_untouched(self):
+        ModelDashboard.current = 'claude-subscription-directsdk-experimental'
+        self.assertEqual(self.get('/api/operations/' + 'o' * 24)[1]['agentDefault'], 'kept')
+        ModelDashboard.current, ModelDashboard.op_status = '', 'running'
+        self.assertNotIn('agentDefault', self.get('/api/operations/' + 'o' * 24)[1])
+        self.assertEqual(ModelDashboard.seen, [])
+
 if __name__ == '__main__':
     unittest.main()
