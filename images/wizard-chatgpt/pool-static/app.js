@@ -125,6 +125,14 @@ function renderAccount(a, i, all) {
   }
   if (!limits.length) use.append(el('span', 'muted', a.usageStatus === 'unavailable' ? 'Usage unavailable right now' : 'No usage yet'));
 
+  const fix = needsReconnect(a);
+  if (fix) {
+    // A sign-in that stopped working is fixed in one tap, right on its row.
+    const again = el('button', 'link', 'Reconnect'); again.type = 'button'; again.disabled = busy;
+    again.dataset.reconnect = a.id;
+    again.addEventListener('click', () => ask('reconnect', a, fix));
+    li.append(again);
+  }
   if (legacy && !['ready', 'connected', 'renewing'].includes(a.status)) {
     // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.
     const again = el('a', 'link', 'Sign in again'); again.href = 'claude-code/'; again.dataset.legacySignin = '1';
@@ -233,7 +241,29 @@ function legacyFallback() {
   return !(snapshot?.accounts || []).some(a => ['ready', 'connected', 'renewing'].includes(a.status));
 }
 
-const CONNECT = new URLSearchParams(location.search).get('connect') === '1';
+// The managed sign-in to reconnect when an account stopped working (expired, a problem, or no usage reading).
+function needsReconnect(a) {
+  if (a.source === 'legacy-claude-code') return null;
+  if (OK.has(a.status) && a.usageStatus !== 'unavailable') return null;
+  return (a.credentials || []).find(c => allowed('reconnect', a, c)) || null;
+}
+
+const PARAMS = new URLSearchParams(location.search);
+const CONNECT = PARAMS.get('connect') === '1';
+// `?reconnect=<account id>` (or `?reconnect=1`: the first account that needs it) opens Reconnect directly, so
+// Home, the model picker or a notification can send the owner straight to the fix.
+const RECONNECT = PARAMS.get('reconnect');
+let reconnectTried = false;
+function autoReconnect() {
+  if (!RECONNECT || reconnectTried || busy || !snapshot) return;
+  reconnectTried = true;
+  const list = snapshot.accounts || [];
+  const a = RECONNECT === '1' ? list.find(needsReconnect) : list.find(x => x.id === RECONNECT);
+  if (!a) return;
+  const c = needsReconnect(a) || (a.credentials || []).find(x => allowed('reconnect', a, x));
+  if (c) { ask('reconnect', a, c); return; }
+  if (a.source === 'legacy-claude-code') location.replace('claude-code/?connect=1');
+}
 let connectTried = false;
 function autoConnect() {
   if (!CONNECT || connectTried || busy || !snapshot) return;
@@ -250,6 +280,7 @@ async function refresh() {
     const data = await api('api/accounts');
     render(data);
     autoConnect();
+    autoReconnect();
     $('message').textContent = data.error && data.inventoryStatus !== 'unavailable' ? 'Problem reading accounts.' : '';
   } catch {
     if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
