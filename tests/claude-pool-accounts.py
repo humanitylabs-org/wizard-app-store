@@ -203,7 +203,10 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
     """Fresh mode: the Hermes Agent app starts with no main model, so a Claude sign-in here must become its model
     (else the first chat says "not connected to any AI provider"); a model the owner chose is never changed."""
 
-    def serve(self, current):
+    LIVE = ['claude-sonnet-5[1m]', 'claude-haiku-4-5-20251001', 'claude-opus-5-5[1m]', 'claude-opus-5[1m]',
+            'claude-opus-4-8[1m]', 'claude-fable-5-1[1m]']  # the demo's list, 30 Oct 2026
+
+    def serve(self, current, models=LIVE):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         seen = self.seen = []
 
@@ -223,6 +226,10 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
                 seen.append(('GET', self.path))
                 if self.path == '/api/model/info':
                     return self.reply({'provider': current, 'model': 'x' if current else ''})
+                if self.path == '/api/model/options':
+                    return self.reply({'provider': '', 'model': '', 'providers': [
+                        {'slug': 'anthropic', 'models': ['claude-opus-9']},
+                        {'slug': 'claude-subscription-directsdk-experimental', 'models': models}]})
                 return self.reply({'provider': 'claude-subscription-directsdk-experimental', 'model': 'claude-sonnet-5[1m]'})
 
             def do_POST(self):
@@ -245,8 +252,21 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
         self.assertEqual(self.adopt(self.serve('')), 'set')
         posts = [c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set']
         self.assertEqual(posts[0][2]['provider'], 'claude-subscription-directsdk-experimental')
-        self.assertEqual(posts[0][2]['model'], 'claude-sonnet-5[1m]')
+        self.assertEqual(posts[0][2]['model'], 'claude-opus-5-5[1m]')  # newest Opus, not the Sonnet recommended default
         self.assertEqual(posts[0][2]['scope'], 'main')
+
+    def test_newest_opus_wins_whatever_the_order(self):
+        import pool_client
+        opts = lambda models: {'providers': [{'slug': 'claude-subscription-directsdk-experimental', 'models': models}]}
+        self.assertEqual(pool_client.newest_opus(opts(['claude-opus-4-8[1m]', 'claude-opus-5[1m]', 'claude-opus-4-1-20250805'])), 'claude-opus-5[1m]')
+        self.assertEqual(pool_client.newest_opus(opts([{'id': 'claude-opus-5-5'}, {'id': 'claude-opus-5-5[1m]'}])), 'claude-opus-5-5[1m]')
+        self.assertEqual(pool_client.newest_opus(opts(['claude-sonnet-5[1m]'])), '')
+        self.assertEqual(pool_client.newest_opus({}), '')
+
+    def test_no_opus_listed_falls_back_to_the_recommended_default(self):
+        self.assertEqual(self.adopt(self.serve('', models=['claude-sonnet-5[1m]', 'claude-haiku-4-5-20251001'])), 'set')
+        posts = [c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set']
+        self.assertEqual(posts[0][2]['model'], 'claude-sonnet-5[1m]')
 
     def test_a_chosen_model_is_never_changed(self):
         self.assertEqual(self.adopt(self.serve('openai-codex')), 'kept')
@@ -276,6 +296,20 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
                 status, body = owner.submit_code('id', code)
         self.assertEqual(calls, [1])
         self.assertEqual(body.get('agent_default'), 'set')
+
+
+class SignInCodeIsMasked(unittest.TestCase):
+    """The pasted Claude code is a secret, so it shows as dots like a password (Miguel, 30 Oct 2026)."""
+
+    def test_code_inputs_are_password_fields(self):
+        import re
+        for page in ('static/index.html', 'pool-static/index.html'):
+            tag = re.search(r'<input id="code"[^>]*>', (ROOT / page).read_text()).group(0)
+            self.assertIn('type="password"', tag, page)
+            self.assertIn('autocomplete="off"', tag, page)
+        tag = re.search(r'<input id="code"[^>]*>', (ROOT / 'static/index.html').read_text()).group(0)
+        for keep in ('inputmode="text"', 'autocapitalize="off"', 'spellcheck="false"', 'required'):
+            self.assertIn(keep, tag)
 
 
 if __name__ == '__main__':

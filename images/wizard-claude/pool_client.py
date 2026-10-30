@@ -2,6 +2,7 @@
 import http.cookiejar
 import json
 import os
+import re
 import threading
 import urllib.request
 import urllib.error
@@ -103,11 +104,38 @@ class Hermes:
 SUBSCRIPTION_PROVIDER = 'claude-subscription-directsdk-experimental'
 
 
+def _opus_version(model_id):
+    """'claude-opus-5-5[1m]' -> (5, 5); dated snapshots ('...-20250805') drop the date. None if not Opus."""
+    name = model_id.split('[', 1)[0].lower()
+    if 'opus' not in name:
+        return None
+    tail = name.split('opus', 1)[1]
+    return tuple(int(part) for part in re.findall(r'\d+', tail) if len(part) < 8)
+
+
+def newest_opus(options, hermes_provider=SUBSCRIPTION_PROVIDER):
+    """The newest Opus in the provider's model list from the dashboard's GET /api/model/options, or '' when the
+    list has no Opus. On a tie the long-context ('[1m]') id wins."""
+    best, best_key = '', None
+    for entry in (options or {}).get('providers') or []:
+        if not isinstance(entry, dict) or entry.get('slug') != hermes_provider:
+            continue
+        for item in entry.get('models') or []:
+            model_id = item.get('id') if isinstance(item, dict) else item
+            version = _opus_version(model_id) if isinstance(model_id, str) and model_id else None
+            if version is None:
+                continue
+            key = (version, '[1m]' in model_id)
+            if best_key is None or key > best_key:
+                best, best_key = model_id, key
+    return best
+
+
 def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, timeout=20):
     """Fresh mode: a Claude sign-in on this app is the agent's only model, but the Hermes Agent app starts with no
     main model, so its first chat failed with "not connected to any AI provider". After a sign-in, make it the
     agent's main model through the dashboard's own POST /api/model/set (the same call the model picker uses) with
-    Hermes' recommended default model, only while the owner has chosen nothing. Never changes a chosen model.
+    the newest Opus that provider lists (Hermes' recommended default if it lists none), only while the owner has chosen nothing. Never changes a chosen model.
     Returns 'set', 'kept', or 'skipped'; never raises."""
     if alongside(provider):
         return 'skipped'
@@ -127,7 +155,10 @@ def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, time
         call('/auth/password-login', {'provider': 'basic', 'username': os.environ.get(prefix + '_HERMES_USER', 'hermes'), 'password': password})
         if (call('/api/model/info') or {}).get('provider'):
             return 'kept'
-        model = (call('/api/model/recommended-default?provider=' + hermes_provider) or {}).get('model') or ''
+        # Opus, the strongest model, not Hermes' recommended default (Sonnet): Miguel, 30 Oct 2026, "it looks like
+        # it's on Sonnet which is not our default ... Opus is available".
+        model = newest_opus(call('/api/model/options'), hermes_provider) \
+            or (call('/api/model/recommended-default?provider=' + hermes_provider) or {}).get('model') or ''
         if not model:
             return 'skipped'
         # A subscription is flat-rate, so Hermes' per-token price warning does not apply.
