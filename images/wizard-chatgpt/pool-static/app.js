@@ -3,13 +3,16 @@ const $ = id => document.getElementById(id);
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'needs_review']);
 const STATUS = {ready: 'Active', connected: 'Active', ok: 'Active', renewing: 'Renewing', expired: 'Sign in again', cooldown: 'Cooling down', exhausted: 'Limit reached', error: 'Problem'};
 const OK = new Set(['ready', 'connected', 'ok']);
-let snapshot = null, active = null, busy = false, timer = null, intent = null, before = 0;
+let snapshot = null, active = null, busy = false, timer = null, intent = null, before = 0, adopting = false;
 let dialogHidden = false, lastRootBack = 0, openAccount = null;
 // Every pop-up is a kit sheet (wizard-sheet.js): ×, Esc, tap outside, Back and swipe down all close it.
 const openSheet = d => { if (window.WzSheet) WzSheet.open(d); else if (!d.open) d.showModal(); };
 const manageable = () => snapshot?.management?.contract === 'wizard.account-management/1' && snapshot.management.status === 'available';
 const allowed = (action, account, credential) => manageable() && (action === 'add' ? snapshot.actions?.add === true
   : action === 'prefer' ? account?.actions?.prefer === true && account.preferred !== true && Boolean(credential?.id)
+  // The original Claude Code sign-in always follows added ones in Hermes; signing that same account in here once
+  // makes it an added account the agent can put first (the Claude Code sign-in itself stays as it is).
+  : action === 'adopt' ? account?.source === 'legacy-claude-code' && account.actions?.prefer === false && snapshot.actions?.add === true
   : account?.actions?.[action] === true && credential?.managed === true);
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -148,15 +151,16 @@ function fillAccountSheet() {
   const legacy = a.source === 'legacy-claude-code';
   const {title, domain} = accountTitle(a);
   const state = availability(a);
-  $('acct-title').textContent = a.email || title;
+  $('acct-title').textContent = a.email && !a.email.includes('*') ? a.email : title;
   $('acct-text').textContent = [a.plan ? `${a.plan} plan` : '', state.word + (state.until ? ` until ${whenText(state.until)}` : '')].filter(Boolean).join(' · ') || domain;
   $('acct-plan').textContent = [planNote(a.plan),
     a.preferred ? 'Your agent uses this account first and moves to the next when it hits a limit.'
-      : legacy && a.actions?.prefer === false ? 'Your agent always tries accounts added here before the original Claude Code sign-in, and switches to it on its own when they hit a limit.'
+      : legacy && a.actions?.prefer === false ? 'Your agent switches to this account on its own when the others hit a limit.'
       : (a.priority != null ? 'Your agent uses this account when the ones above it hit a limit.' : '')].filter(Boolean).join(' ');
   const prefer = (a.credentials || [])[0];
-  $('prefer').hidden = !allowed('prefer', a, prefer); $('prefer').disabled = busy;
-  $('prefer').onclick = () => { $('account').close(); ask('prefer', a, prefer); };
+  const how = allowed('prefer', a, prefer) ? 'prefer' : allowed('adopt', a) ? 'adopt' : '';
+  $('prefer').hidden = !how; $('prefer').disabled = busy;
+  $('prefer').onclick = () => { $('account').close(); ask(how, a, prefer); };
   // The original Claude Code sign-in signs in and out on its own page.
   $('legacy-manage').hidden = !legacy;
   const rows = (legacy ? [] : (a.credentials || [])).map(c => {
@@ -309,6 +313,10 @@ function ask(action, account, credential) {
       ? DEVICE_HINT + (hermesAccounts().length ? ' Use an account not listed yet.' : '')
       : '';
     showButtons({go: true, goLabel: 'Continue'});
+  } else if (action === 'adopt') {
+    $('dlg-title').textContent = `Use ${accountTitle(account).title} first?`;
+    $('dlg-text').textContent = `Sign in to ${account.email || 'this account'} once more so your agent can put it first. Nothing signs out.`;
+    showButtons({go: true, goLabel: 'Continue'});
   } else if (action === 'prefer') {
     $('dlg-title').textContent = `Use ${accountTitle(account).title} first?`;
     $('dlg-text').textContent = 'Your agent will try this account first and move to the others when it hits a limit. Nothing signs out.';
@@ -331,8 +339,10 @@ async function start() {
   busy = true; $('add').disabled = true; $('go').disabled = true; $('cancel').disabled = true;
   before = hermesAccounts().length;
   setStatus(action === 'remove' ? 'Removing…' : action === 'prefer' ? 'Updating…' : 'Starting…');
+  adopting = action === 'adopt';
   try {
-    display(await api('api/operations', {action, target: credential?.id, label: '', confirmed: true}));
+    display(await api('api/operations', adopting ? {action: 'add', label: '', confirmed: true}
+      : {action, target: credential?.id, label: '', confirmed: true}));
   } catch (e) {
     busy = false; $('add').disabled = false;
     setStatus(e.status === 409 ? 'Another sign-in is running.' : (e.detail || 'Could not start. Try again.'), 'err');
@@ -371,7 +381,10 @@ function display(job) {
   setStatus(done, job.status === 'succeeded' ? 'ok' : (job.status === 'cancelled' ? '' : 'err'));
   $('dlg-text').textContent = provider() === 'chatgpt' && ['failed', 'expired'].includes(job.status)
     ? 'If ChatGPT refused the code: ' + DEVICE_HINT.replace(/^First, in/, 'in') + ' Then try again.' : '';
-  refresh().then(() => {
+  const adopted = adopting && job.action === 'add' && job.status === 'succeeded';
+  adopting = false;
+  refresh().then(async () => {
+    if (adopted) return finishAdopt(job);
     // Success means the agent itself now lists the sign-in; if it does not, say so rather than “Connected”.
     if (job.status === 'succeeded' && job.action !== 'remove' && snapshot?.inventoryStatus === 'unavailable') {
       setStatus('Signed in, but your agent can’t be reached to confirm it. Retry in a moment.', 'err');
@@ -381,6 +394,21 @@ function display(job) {
       setStatus(`That account is already listed. Sign out of ${brand()} in your browser or use a private window.`, 'err');
     }
   });
+}
+
+// After signing the original Claude Code account in once more: when the agent now lists it as an added
+// account (the original row folds into it), put it first in the same step; otherwise say what happened.
+async function finishAdopt(job) {
+  const stillSeparate = (snapshot?.accounts || []).some(a => a.source === 'legacy-claude-code');
+  const id = (job.credentialIds || [])[0];
+  if (stillSeparate || !id) {
+    $('dlg-title').textContent = 'Signed in to a different account';
+    setStatus('It was added as another account. To use the original one first, sign in to that account and try again.', 'err');
+    return;
+  }
+  busy = true; setStatus('Putting it first…', 'wait');
+  try { display(await api('api/operations', {action: 'prefer', target: id, label: '', confirmed: true})); }
+  catch { busy = false; setStatus('Signed in. Open it and choose Use first.', 'err'); }
 }
 
 async function poll() {
