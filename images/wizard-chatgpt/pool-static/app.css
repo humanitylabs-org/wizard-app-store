@@ -22,7 +22,11 @@
 .acct > .wz-row { flex-wrap: wrap; row-gap: var(--wz-space-2); }
 .acct > .wz-row .wz-tile { font-weight: 700; color: var(--accent); background: var(--accent-soft); }
 .acct > div.wz-row, .acct > div.wz-row:hover, .acct > div.wz-row:active { cursor: default; background: none; }
-.acct .wz-main b, .acct .wz-main small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.acct .wz-main b { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.acct .wz-main b .name, .acct .wz-main small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+/* The plan is the first thing that explains different limits, so it is a visible chip, not small print. */
+.acct .plan { flex: none; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 18px; color: var(--accent); background: var(--accent-soft); }
+.acct .back { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .acct .chev { flex: none; color: var(--ink-3); font-size: 20px; line-height: 1; }
 .acct .wz-pill { flex: none; }
 .acct .use { order: 9; flex: 1 0 100%; min-width: 0; display: grid; gap: var(--wz-space-2); padding: 0 0 4px 48px; }
@@ -60,6 +64,8 @@
 .dlg-text { margin: 0 0 14px; font-size: 14px; line-height: 1.45; color: var(--ink-2); }
 .dlg-text:empty { display: none; }
 .grants { display: grid; }
+.acct-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.acct-actions:not(:has(> :not([hidden]))) { display: none; }
 .grant { display: flex; align-items: center; gap: 14px; padding: 4px 0; border-top: 1px solid var(--line); }
 .grant-name { flex: 1; min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
 .field { display: grid; gap: 6px; margin-bottom: 14px; font-size: 13px; color: var(--ink-2); }

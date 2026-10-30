@@ -140,7 +140,11 @@ def with_legacy(result):
                     'source': 'legacy-claude-code', 'email': old.get('account'), 'plan': old.get('plan'),
                     'status': old['status'], 'usage': old.get('usage'), 'error': old.get('error'),
                     'credentials': [c for m in mirrors for c in m.get('credentials') or []],
-                    'actions': {'reconnect': False, 'remove': False}})
+                    # Its Hermes mirror carries the agent's try-first order; reordering never touches the login.
+                    'priority': min((m['priority'] for m in mirrors if isinstance(m.get('priority'), int)), default=None),
+                    'preferred': any(m.get('preferred') is True for m in mirrors),
+                    'actions': {'reconnect': False, 'remove': False,
+                                'prefer': any((m.get('actions') or {}).get('prefer') is True for m in mirrors)}})
             result['legacyStatus'] = old.get('status', 'unknown')
             if duplicate:
                 result['legacyStatus'] = 'same-as-agent'
@@ -347,6 +351,11 @@ class Handler(owner.Handler):
             elif action in ('reconnect', 'remove'):
                 permitted = any((row.get('actions') or {}).get(action) is True and
                     any(c.get('id') == body.get('target') and c.get('managed') is True for c in row.get('credentials', []))
+                    for row in inventory.get('accounts', []))
+            elif action == 'prefer':
+                # Reordering is not destructive: any sign-in the agent lists may be tried first, mirrors included.
+                permitted = any((row.get('actions') or {}).get('prefer') is True and
+                    any(c.get('id') == body.get('target') for c in row.get('credentials', []))
                     for row in inventory.get('accounts', []))
             else:
                 permitted = action in ('submit', 'cancel')
