@@ -68,6 +68,8 @@ EXPECTED_LEGACY_PAID = {"type": "spend", "enabled": False, "currency": "USD", "e
 class Upstream:
     mode = "ok"  # ok | 401 | 500 | down | garbage | redirect
     payload = CURRENT
+    profile = {"account": {"email": "owner@example.com"},
+               "organization": {"organization_type": "claude_max", "rate_limit_tier": "default_claude_max_20x"}}
     hits = []
 
 
@@ -87,7 +89,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         code = {"401": 401, "500": 500}.get(Upstream.mode, 200)
         body = b"not json" if Upstream.mode == "garbage" else json.dumps(
-            Upstream.payload if code == 200 else {"error": {"message": "bad " + TOKEN}}).encode()
+            (Upstream.profile if self.path.endswith("/profile") else Upstream.payload) if code == 200 else {"error": {"message": "bad " + TOKEN}}).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -158,14 +160,35 @@ def main():
     assert h["authorization"] == "Bearer " + TOKEN and h["anthropic-beta"] == "oauth-2025-04-20", h
     assert h["accept"] == "application/json" and h["path"] == "/api/oauth/usage"
 
+    # The stored plan is written at sign-in and never updated: an upgrade shows from the live profile.
+    rp = reader()
+    write_creds(tier="", sub="pro")
+    assert read(rp)["plan"] == "Max 20x"
+    Upstream.profile = {"organization": {"organization_type": "claude_pro"}}
+    clock[0] += 599
+    assert read(rp)["plan"] == "Max 20x", "profile cached for 10 min"
+    clock[0] += 2
+    assert read(rp)["plan"] == "Pro"
+    Upstream.mode = "500"
+    clock[0] += 601
+    assert read(rp)["plan"] == "Pro", "profile failure falls back to the stored plan"
+    Upstream.mode = "ok"
+    Upstream.profile = {"account": {"email": "owner@example.com"},
+                        "organization": {"organization_type": "claude_max", "rate_limit_tier": "default_claude_max_20x"}}
+    write_creds()
+    clock[0] = NOW
+    r = reader()
+    read(r)
+    Upstream.hits[:] = [x for x in Upstream.hits if x["path"] != "/api/oauth/profile"]
+
     # 60 s cache: no second provider call inside the window, one after it.
-    n = len(Upstream.hits)
+    n = sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits)
     clock[0] += 59
     read(r)
-    assert len(Upstream.hits) == n
+    assert sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits) == n
     clock[0] += 2
     read(r)
-    assert len(Upstream.hits) == n + 1
+    assert sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits) == n + 1
 
     # Outage: last good usage kept (error unreachable / provider_error) for at most 30 min, then usage null.
     good_at = clock[0]
@@ -196,23 +219,24 @@ def main():
     assert out["status"] == "error" and out["usage"] is None, out  # no stale rows after an expiry
     assert all(set(x) - {"path"} <= {"host", "authorization", "accept", "anthropic-beta", "user-agent",
                                       "accept-encoding", "connection"} for x in Upstream.hits)
-    assert all(x["path"] == "/api/oauth/usage" for x in Upstream.hits), "only the usage endpoint is called"
+    assert all(x["path"] in ("/api/oauth/usage", "/api/oauth/profile") for x in Upstream.hits), "only usage and profile are read"
     assert open(creds_path, "rb").read() == before, "credentials file must never be rewritten"
 
     # Expired locally (expiresAt in the past): no provider call at all.
     Upstream.mode = "ok"
-    n = len(Upstream.hits)
+    n = sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits)
     write_creds(expires=(clock[0] - 1) * 1000)
     out = read(r)
     assert out["status"] == "expired" and out["plan"] == "Max 20x" and out["usage"] is None, out
-    assert len(Upstream.hits) == n
+    assert sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits) == n
 
     # A new sign-in drops the old cache straight away.
     Upstream.payload = CURRENT
+    Upstream.profile = {"organization": {"organization_type": "claude_pro"}}  # the new sign-in is a Pro account
     write_creds(token=TOKEN + "-2", tier="", sub="pro")
     out = read(r)
     assert out["status"] == "connected" and out["plan"] == "Pro" and out["usage"]["limits"] == EXPECTED_CURRENT_LIMITS
-    assert len(Upstream.hits) == n + 1 and Upstream.hits[-1]["authorization"] == "Bearer " + TOKEN + "-2"
+    assert sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits) == n + 1 and Upstream.hits[-1]["authorization"] == "Bearer " + TOKEN + "-2"
     assert all((TOKEN + "-2") not in a for a in answers)
 
     # Signed out again (logout empties the file): no stale usage.
@@ -221,7 +245,7 @@ def main():
     out = read(r)
     assert out["status"] == "not_connected" and out["usage"] is None
 
-    print(json.dumps({"ok": True, "answers": len(answers), "provider_calls": len(Upstream.hits)}))
+    print(json.dumps({"ok": True, "answers": len(answers), "provider_calls": sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits)}))
     srv.shutdown()
 
 
