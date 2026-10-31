@@ -70,7 +70,11 @@ def main():
     assert engine["restart"] == "unless-stopped" and engine["read_only"] is True and engine["init"] is True
     assert not engine.get("ports"), engine
     assert service["ports"] == ["127.0.0.1:${APP_PORT}:9222"], service["ports"]
-    assert service["networks"] == {"tipi_main_network": {"gw_priority": 1}}
+    # Runtipi isolates sidecars on an app-private network; only the front joins the shared app network.
+    assert service["networks"]["tipi_main_network"] == {"gw_priority": 1}
+    assert "tipi_main_network" not in engine["networks"]
+    assert len(engine["networks"]) == 1
+    assert set(engine["networks"]).issubset(service["networks"])
     report = {"test": "translated recipe + real headful Chromium lifecycle over the app network", "image": engine["image"], "front_image": service["image"],
               "runtipi_revision": translated["revision"]}
     compose["networks"]["tipi_main_network"] = {"name": name, "external": True}
