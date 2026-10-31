@@ -93,26 +93,52 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       });
     }
     if (id === "browser") {
-      test("vanilla pinned headless Chromium, private, generous limits", () => {
+      test("pinned headful engine and private MCP/CDP front, no host powers", () => {
         const s = compose.services[id];
-        expect(Object.keys(compose.services)).toEqual([id]);
-        expect(s.image).toMatch(new RegExp(`^chromedp/headless-shell:${config.version.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`));
-        for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "command", "entrypoint", "volumes"]) expect(s[key]).toBeUndefined();
-        expect(s.user).toBe("1000:1000");
-        expect(s.read_only).toBe(true);
-        expect(s.cap_drop).toEqual(["ALL"]);
-        expect(s.security_opt).toEqual(["no-new-privileges:true"]);
-        expect(s.init).toBe(true);
-        // Unauthenticated DevTools: loopback-only on the host, Runtipi network for other apps.
+        const engine = compose.services["browser-engine"];
+        expect(Object.keys(compose.services)).toEqual([id, "browser-engine"]);
+        expect(s.image).toMatch(/^python:3\.12-alpine@sha256:[a-f0-9]{64}$/);
+        expect(engine.image).toMatch(/^ghcr\.io\/humanitylabs-org\/browser-engine:sha-[a-f0-9]{40}@sha256:[a-f0-9]{64}$/);
+        for (const service of [s, engine]) {
+          for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "entrypoint", "volumes"]) expect(service[key]).toBeUndefined();
+          expect(service.user).toBe("1000:1000");
+          expect(service.read_only).toBe(true);
+          expect(service.cap_drop).toEqual(["ALL"]);
+          expect(service.security_opt).toEqual(["no-new-privileges:true"]);
+        }
+        // Only the front is host-reachable, on loopback. Engine/control/VNC have no host ports.
         expect(s.ports).toEqual(["127.0.0.1:${APP_PORT}:9222"]);
+        expect(engine.ports).toBeUndefined();
         expect(s["x-runtipi"]).toEqual({is_main: true});
-        expect(parseInt(s.mem_limit)).toBeGreaterThanOrEqual(4);
-        expect(s.memswap_limit).toBe(s.mem_limit);
-        expect(s.pids_limit).toBeGreaterThanOrEqual(1024);
-        expect(s.shm_size).toBe("2g");
+        expect(s.depends_on).toEqual(["browser-engine"]);
+        expect(s.environment.UPSTREAM_HOST).toBe("browser-engine");
+        expect(s.environment.UPSTREAM_PORT).toBe("9222");
+        expect(s.environment.BROWSER_PUBLIC_URL).toBe("${BROWSER_PUBLIC_URL:-}");
+        expect(s.command.slice(0, 2)).toEqual(["python", "-c"]);
+        expect(s.command[2]).toContain('"start_handoff"');
+        expect(s.command[2]).toContain('"handoff_status"');
+        expect(s.command[2]).toContain('"MCP is box-only"');
+        expect(s.command[2]).toContain('"owner_done"');
+        expect(s.mem_limit).toBe("256m");
+        expect(engine.init).toBe(true);
+        expect(parseInt(engine.mem_limit)).toBeGreaterThanOrEqual(4);
+        expect(engine.memswap_limit).toBe(engine.mem_limit);
+        expect(engine.pids_limit).toBeGreaterThanOrEqual(1024);
+        expect(engine.shm_size).toBe("2g");
+        expect(engine.tmpfs).toEqual(["/tmp:rw,nosuid,size=2g"]);
         expect(config.exposable).toBe(false);
-        expect(config.form_fields).toEqual([]);
-        expect([8787, 8791, 8792, 9119, 9120]).not.toContain(config.port);
+        expect(config.form_fields).toHaveLength(1);
+        expect(config.form_fields[0].env_variable).toBe("BROWSER_PUBLIC_URL");
+        expect(config.form_fields[0].required).toBe(false);
+        expect(config.port).toBe(8793);
+      });
+      test("ships a portable core-layout manifest and app-owned handoff skill", () => {
+        const manifest = parse(readFileSync(`${dir}/wizard.md`, "utf8").split("---")[1]!);
+        expect(manifest.runtime).toEqual({kind: "runtipi", config: "config.json", compose: "docker-compose.yml"});
+        for (const path of [manifest.runtime.config, manifest.runtime.compose, manifest.icon, manifest.skill]) {
+          expect(existsSync(`${dir}/${path}`)).toBe(true);
+        }
+        expect(readFileSync(`${dir}/${manifest.skill}`, "utf8")).toContain("Done, give it back");
       });
     }
     if (id === "files") {
