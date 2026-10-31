@@ -65,10 +65,17 @@ def main():
     translated = json.loads(run("node", "scripts/translate-video-recipe.mjs", APP, cwd=ROOT))
     compose = translated["compose"]
     service = compose["services"][APP]
-    assert service["restart"] == "unless-stopped" and service["read_only"] is True and service["init"] is True
+    engine = compose["services"]["browser-engine"]
+    assert service["restart"] == "unless-stopped" and service["read_only"] is True
+    assert engine["restart"] == "unless-stopped" and engine["read_only"] is True and engine["init"] is True
+    assert not engine.get("ports"), engine
     assert service["ports"] == ["127.0.0.1:${APP_PORT}:9222"], service["ports"]
-    assert service["networks"] == {"tipi_main_network": {"gw_priority": 1}}
-    report = {"test": "translated recipe + real headless Chromium lifecycle over the app network", "image": service["image"],
+    # Runtipi isolates sidecars on an app-private network; only the front joins the shared app network.
+    assert service["networks"]["tipi_main_network"] == {"gw_priority": 1}
+    assert "tipi_main_network" not in engine["networks"]
+    assert len(engine["networks"]) == 1
+    assert set(engine["networks"]).issubset(service["networks"])
+    report = {"test": "translated recipe + real headful Chromium lifecycle over the app network", "image": engine["image"], "front_image": service["image"],
               "runtipi_revision": translated["revision"]}
     compose["networks"]["tipi_main_network"] = {"name": name, "external": True}
     port = free_port()
@@ -113,7 +120,7 @@ def main():
         try:
             started = time.monotonic()
             run(*cmd, "up", "-d", env=env)
-            cid = run(*cmd, "ps", "-aq", env=env)
+            cid = run(*cmd, "ps", "-aq", APP, env=env)
             # Runtipi 4.8.0 runs this as host root right after compose up.
             run("docker", "run", "--rm", "--network", "none", "--user", "0:0", "--mount",
                 f"type=bind,source={app},target=/fixture", "--entrypoint", "/bin/chmod",
@@ -123,12 +130,18 @@ def main():
             report["browser"] = version["Browser"]
             inspect = json.loads(run("docker", "inspect", cid))[0]
             hc = inspect["HostConfig"]
-            assert hc["ReadonlyRootfs"] and hc["Init"] and inspect["Config"]["User"] == "1000:1000"
-            assert hc["CapDrop"] == ["ALL"] and hc["ShmSize"] == 2 * 1024**3
+            assert hc["ReadonlyRootfs"] and inspect["Config"]["User"] == "1000:1000"
+            assert hc["CapDrop"] == ["ALL"]
+            engine_id = run(*cmd, "ps", "-q", "browser-engine", env=env)
+            engine_inspect = json.loads(run("docker", "inspect", engine_id))[0]
+            ehc = engine_inspect["HostConfig"]
+            assert ehc["ReadonlyRootfs"] and ehc["Init"] and engine_inspect["Config"]["User"] == "1000:1000"
+            assert ehc["CapDrop"] == ["ALL"] and ehc["ShmSize"] == 2 * 1024**3
+            assert not ehc.get("PortBindings"), ehc
             binding = hc["PortBindings"]["9222/tcp"]
             assert all(b["HostIp"] == "127.0.0.1" for b in binding), binding
             report["host_binding"] = binding
-            report["limits"] = {"memory": hc["Memory"], "pids": hc["PidsLimit"], "shm": hc["ShmSize"]}
+            report["limits"] = {"memory": ehc["Memory"], "pids": ehc["PidsLimit"], "shm": ehc["ShmSize"]}
             report["first"] = drive()
             run(*cmd, "up", "-d", "--force-recreate", env=env)
             t0 = time.monotonic()
@@ -138,7 +151,7 @@ def main():
             run(*cmd, "restart", env=env)
             ready()
             report["after_restart"] = drive()
-            cid = run(*cmd, "ps", "-q", env=env)  # recreate gives a new container id
+            cid = run(*cmd, "ps", "-q", "browser-engine", env=env)  # recreate gives a new container id
             stats = run("docker", "stats", "--no-stream", "--format", "{{.MemUsage}} pids={{.PIDs}}", cid)
             report["idle_after_use"] = stats
         finally:
