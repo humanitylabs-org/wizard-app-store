@@ -330,10 +330,11 @@ async function refresh() {
     autoConnect();
     autoReconnect();
     $('message').textContent = data.error && data.inventoryStatus !== 'unavailable' ? 'Problem reading accounts.' : '';
-  } catch {
+  } catch (e) {
     if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
     $('add').hidden = true;
-    $('message').textContent = 'Offline. Showing last reading.';
+    // Browser boundary on: this page's own api/ answers only Wizard's adapter, so a plain tab gets 403.
+    $('message').textContent = e?.status === 403 && !OPAQUE ? 'Open this app from Wizard to see and change your accounts.' : 'Offline. Showing last reading.';
   } finally { $('refresh').classList.remove('spin'); }
 }
 
