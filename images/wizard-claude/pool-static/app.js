@@ -69,6 +69,11 @@ function availability(a) {
 const PLAN_NOTE = {claude: {pro: 'Pro has the smallest Claude limits.', 'max 5x': 'Max 5x has about 5× Pro usage.', 'max 20x': 'Max 20x has about 20× Pro usage.'}};
 const planNote = plan => PLAN_NOTE[provider()]?.[String(plan || '').trim().toLowerCase()] || '';
 const ordered = list => [...list].sort((x, y) => (x.priority ?? 1e9) - (y.priority ?? 1e9));
+// The agent orders accounts by itself: the one whose weekly limit resets soonest (and still has room) goes first,
+// so no quota expires unused. A seeded Claude Code login can't lead until it is signed in to the agent once.
+const autoOn = () => snapshot?.autoOrder?.enabled === true;
+const needsLead = a => autoOn() && snapshot.autoOrder.needsSignIn === true && snapshot.autoOrder.wanted === a?.id && allowed('adopt', a);
+const AUTO_NOTE = 'Order is automatic: the account that resets soonest is used first.';
 function limitLabel(l) {
   const id = String(l.id || '');
   if (id.startsWith('session:')) return 'Session (5 h)';
@@ -104,7 +109,7 @@ function renderAccount(a, i, all) {
   if (a.plan) line.append(el('span', 'plan', a.plan));
   // Where it sits in the agent's order: the one tried first, then the backups.
   const order = a.preferred ? 'Used first' : (all.length > 1 && a.priority != null ? 'Backup' : '');
-  main.append(line, el('small', null, [order, domain, nick].filter(Boolean).join(' · ')));
+  main.append(line, el('small', null, [order, needsLead(a) ? 'Resets soonest' : '', domain, nick].filter(Boolean).join(' · ')));
   // Usage lives inside the row: under the name when narrow, beside it when the window is wide.
   const use = el('span', 'use');
   const state = availability(a);
@@ -136,6 +141,13 @@ function renderAccount(a, i, all) {
     again.addEventListener('click', () => ask('reconnect', a, fix));
     li.append(again);
   }
+  if (needsLead(a)) {
+    // It resets soonest, but the agent can only put it first once it is signed in there too: one tap starts that.
+    const lead = el('button', 'link', 'Sign in to use it first'); lead.type = 'button'; lead.disabled = busy;
+    lead.dataset.lead = a.id;
+    lead.addEventListener('click', () => ask('adopt', a));
+    li.append(lead);
+  }
   if (legacy && !['ready', 'connected', 'renewing'].includes(a.status)) {
     // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.
     const again = el('a', 'link', 'Sign in again'); again.href = 'claude-code/'; again.dataset.legacySignin = '1';
@@ -156,9 +168,12 @@ function fillAccountSheet() {
   $('acct-plan').textContent = [planNote(a.plan),
     a.preferred ? 'Your agent uses this account first and moves to the next when it hits a limit.'
       : legacy && a.actions?.prefer === false ? 'Your agent switches to this account on its own when the others hit a limit.'
-      : (a.priority != null ? 'Your agent uses this account when the ones above it hit a limit.' : '')].filter(Boolean).join(' ');
+      : (a.priority != null ? 'Your agent uses this account when the ones above it hit a limit.' : ''),
+    needsLead(a) ? 'It resets soonest, so it should go first: sign in to it once with Use first.' : ''].filter(Boolean).join(' ');
   const prefer = (a.credentials || [])[0];
   const how = allowed('prefer', a, prefer) ? 'prefer' : allowed('adopt', a) ? 'adopt' : '';
+  $('acct-auto').hidden = !autoOn() || !how;
+  $('acct-auto').textContent = 'The order is automatic (soonest reset first), so a choice made here may change at the next reorder.';
   $('prefer').hidden = !how; $('prefer').disabled = busy;
   $('prefer').onclick = () => { $('account').close(); ask(how, a, prefer); };
   // The original Claude Code sign-in signs in and out on its own page.
@@ -215,6 +230,9 @@ function render(data) {
   $('count').textContent = String(n); $('count').hidden = !n;
   $('accounts').replaceChildren(...ordered(data.accounts).map(renderAccount));
   $('conn-line').textContent = summary(data.accounts) || WHAT[provider()] || '';
+  const lead = data.accounts.find(needsLead);
+  $('order-note').hidden = !autoOn() || n < 2;
+  $('order-note').textContent = AUTO_NOTE + (lead ? ` ${accountTitle(lead).title} resets soonest: sign in to it once so your agent can use it first.` : '');
   // One status for the whole connection: Connected when any account works.
   // A fresh Wizard has no account broker, so the inventory is "unavailable" by design: its Claude Code sign-in is the
   // agent's own, so a working one is simply Connected (it said Needs attention while chats worked).
@@ -315,7 +333,7 @@ function ask(action, account, credential) {
     showButtons({go: true, goLabel: 'Continue'});
   } else if (action === 'adopt') {
     $('dlg-title').textContent = `Use ${accountTitle(account).title} first?`;
-    $('dlg-text').textContent = `Sign in to ${account.email || 'this account'} once more so your agent can put it first. Nothing signs out.`;
+    $('dlg-text').textContent = `Sign in to ${account.email || 'this account'} once more so your agent can put it first. Nothing signs out. If your browser is signed in to another Claude account, use a private window.`;
     showButtons({go: true, goLabel: 'Continue'});
   } else if (action === 'prefer') {
     $('dlg-title').textContent = `Use ${accountTitle(account).title} first?`;
@@ -382,28 +400,36 @@ function display(job) {
   $('dlg-text').textContent = provider() === 'chatgpt' && ['failed', 'expired'].includes(job.status)
     ? 'If ChatGPT refused the code: ' + DEVICE_HINT.replace(/^First, in/, 'in') + ' Then try again.' : '';
   const adopted = adopting && job.action === 'add' && job.status === 'succeeded';
+  const adoptFor = adopting ? intent?.account : null;
   adopting = false;
   refresh().then(async () => {
-    if (adopted) return finishAdopt(job);
+    if (adopted) return finishAdopt(job, adoptFor);
     // Success means the agent itself now lists the sign-in; if it does not, say so rather than “Connected”.
     if (job.status === 'succeeded' && job.action !== 'remove' && snapshot?.inventoryStatus === 'unavailable') {
       setStatus('Signed in, but your agent can’t be reached to confirm it. Retry in a moment.', 'err');
     }
-    if (job.status === 'succeeded' && job.action === 'add' && before > 0 && hermesAccounts().length <= before) {
+    if (job.status === 'succeeded' && job.action === 'add' && (job.duplicateOf || (before > 0 && hermesAccounts().length <= before))) {
+      const same = findByCredential([job.duplicateOf, ...(job.credentialIds || [])]);
       $('dlg-title').textContent = 'Already added';
-      setStatus(`That account is already listed. Sign out of ${brand()} in your browser or use a private window.`, 'err');
+      setStatus(`${same ? `You signed in as ${accountTitle(same).title}, which` : 'That account'} is already listed. Sign out of ${provider() === 'claude' ? 'claude.ai' : brand()} in that browser or use a private window, then try again.`, 'err');
     }
   });
 }
 
 // After signing the original Claude Code account in once more: when the agent now lists it as an added
 // account (the original row folds into it), put it first in the same step; otherwise say what happened.
-async function finishAdopt(job) {
+const findByCredential = ids => (snapshot?.accounts || []).find(a => (a.credentials || []).some(c => ids.includes(c.id)));
+async function finishAdopt(job, account) {
   const stillSeparate = (snapshot?.accounts || []).some(a => a.source === 'legacy-claude-code');
   const id = (job.credentialIds || [])[0];
-  if (stillSeparate || !id) {
+  if (job.duplicateOf || stillSeparate || !id) {
+    // The browser was signed in to another Claude account. A second sign-in to an account the agent already has is
+    // removed again by the agent (when the older one still works), so nothing is left over; a new account is kept.
+    const other = findByCredential([job.duplicateOf, id].filter(Boolean).filter(x => !(account?.credentials || []).some(c => c.id === x)));
+    const me = account ? (account.email && !account.email.includes('*') ? account.email : accountTitle(account).title) : 'this one';
     $('dlg-title').textContent = 'Signed in to a different account';
-    setStatus('It was added as another account. To use the original one first, sign in to that account and try again.', 'err');
+    setStatus(`You signed in as ${other ? accountTitle(other).title : 'another account'}, not ${me}. Sign out of claude.ai in that browser or use a private window, then try again.`
+      + (!job.duplicateOf && other ? ' That account was kept as an extra account.' : ''), 'err');
     return;
   }
   busy = true; setStatus('Putting it first…', 'wait');

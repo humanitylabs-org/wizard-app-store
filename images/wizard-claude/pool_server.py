@@ -4,7 +4,11 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
+import threading
+import time
+from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -116,8 +120,47 @@ def unavailable(error):
             'error': {'code': code, 'message': message}}
 
 
+def fold_same_email(accounts):
+    """Claude only: agent rows with the same exact email hash are one account. An older agent plugin lists every
+    grant as its own row, so a second sign-in to an already-added account (a browser still signed in to it) showed
+    up as a duplicate row. ChatGPT never folds by email: one email can own several workspaces with separate quota."""
+    if PROVIDER != 'claude':
+        return accounts
+    groups, order = {}, []
+    for a in accounts:
+        h = a.get('emailHash')
+        if not h or is_mirror(a):
+            order.append([a])
+        elif h in groups:
+            groups[h].append(a)
+        else:
+            groups[h] = [a]
+            order.append(groups[h])
+    big = 1 << 30
+    rank = lambda v: v if isinstance(v, int) and not isinstance(v, bool) else big
+    out = []
+    for rows in order:
+        if len(rows) == 1:
+            out.append(rows[0])
+            continue
+        lead = sorted(rows, key=lambda a: (a.get('status') not in ('ready', 'connected'), not a.get('usage'), rank(a.get('priority'))))[0]
+        merged = dict(lead)
+        merged['credentials'] = sorted((c for a in rows for c in a.get('credentials') or []),
+                                       key=lambda c: (c.get('managed') is not True, rank(c.get('priority'))))
+        merged['credentialCount'] = len(merged['credentials'])
+        ranks = [a['priority'] for a in rows if rank(a.get('priority')) < big]
+        merged['priority'] = min(ranks) if ranks else None
+        merged['preferred'] = any(a.get('preferred') is True for a in rows)
+        merged['actions'] = {k: any((a.get('actions') or {}).get(k) is True for a in rows)
+                             for a2 in rows for k in (a2.get('actions') or {})}
+        out.append(merged)
+    return out
+
+
 def with_legacy(result):
     result['alongside'] = alongside(PROVIDER)
+    if isinstance(result.get('accounts'), list):
+        result['accounts'] = fold_same_email(result['accounts'])
     if LEGACY is not None:
         try:
             old = LEGACY.read()
@@ -189,6 +232,190 @@ def connection(result):
         answer['models'] = []
         answer['models_error'] = {'code': error.code, 'message': str(error)}
     return answer
+
+
+# ---------- automatic order: the Claude account that resets soonest is used first ----------
+# Quota that is not used before its weekly reset is lost, so the agent should spend the account whose all-models
+# weekly meter resets soonest first, while it still has room. Accounts stopped by a full shared meter (session or
+# all-models weekly) go last. Reordering uses only the agent's own `prefer` action (stock `hermes auth priority`),
+# runs only when the order really changes, and does nothing on missing or stale usage. Off: WIZARD_CLAUDE_AUTO_ORDER=0.
+AUTO_ORDER = PROVIDER == 'claude' and os.environ.get('WIZARD_CLAUDE_AUTO_ORDER', '1').strip().lower() not in ('0', 'off', 'false', 'no')
+AUTO_FRESH = 900          # usage older than this (seconds) is stale: change nothing
+AUTO_MIN_GAP = 60         # at most one reorder attempt a minute
+AUTO_EVERY = 600          # background check interval (seconds), sooner right after a reset
+AUTO_STATE = {'lastRun': 0.0, 'changedAt': None, 'lastChange': None}
+AUTO_LOCK = threading.Lock()
+OK_STATES = ('ready', 'connected', 'ok')
+
+
+def _epoch(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        when = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        return None
+    return when.timestamp()
+
+
+def _meter_kind(limit):
+    """'session' / 'weekly' for the shared meters that stop a whole account; None for model-scoped ones."""
+    lid = str(limit.get('id') or '')
+    if lid.startswith('session:') or lid == 'five_hour':
+        return 'session'
+    if lid.startswith('weekly_all:') or lid == 'seven_day':
+        return 'weekly'
+    return None
+
+
+def _used(limit):
+    used = limit.get('usedPercent')
+    if isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used):
+        return used
+    left = limit.get('remainingPercent')
+    if isinstance(left, (int, float)) and not isinstance(left, bool) and math.isfinite(left):
+        return 100 - left
+    return None
+
+
+def order_plan(result, now=None):
+    """Pure decision over an /api/accounts result (after with_legacy). Never changes anything.
+
+    Returns {status, order (row ids, wanted order), wanted, needsSignIn, moves (credential ids to `prefer`, in this
+    order), reason}. status: 'ok' (nothing to do), 'reorder', 'blocked' (the soonest account can't lead through the
+    agent: a seeded Claude Code login) or 'waiting' (missing/stale usage, unavailable inventory)."""
+    now = time.time() if now is None else now
+    base = {'enabled': AUTO_ORDER, 'rule': 'soonest-reset-first', 'order': [], 'wanted': None, 'needsSignIn': False, 'moves': []}
+    management = result.get('management') or {}
+    if result.get('inventoryStatus') == 'unavailable' or management.get('contract') != 'wizard.account-management/1' \
+            or management.get('status') != 'available':
+        return {**base, 'status': 'waiting', 'reason': 'agent-unavailable'}
+    rows = [a for a in result.get('accounts') or [] if a.get('credentials')]
+    if len(rows) < 2:
+        return {**base, 'status': 'ok', 'reason': 'single-account'}
+    big = float('inf')
+    facts = []
+    for a in rows:
+        prio = a.get('priority') if isinstance(a.get('priority'), int) and not isinstance(a.get('priority'), bool) else 1 << 30
+        if a.get('status') not in OK_STATES:
+            facts.append((2, big, prio, a))      # signed out / broken: last, never decides the leader
+            continue
+        usage = a.get('usage') or {}
+        limits = [l for l in usage.get('limits') or [] if isinstance(l, dict)]
+        fetched = _epoch(usage.get('fetchedAt'))
+        if not limits or fetched is None or now - fetched > AUTO_FRESH:
+            return {**base, 'status': 'waiting', 'reason': 'usage-missing-or-stale'}
+        shared = [(l, _meter_kind(l), _epoch(l.get('resetsAt')), _used(l)) for l in limits if _meter_kind(l)]
+        if not shared or any(used is None for _, _, _, used in shared):
+            return {**base, 'status': 'waiting', 'reason': 'usage-missing-or-stale'}
+        if any(reset is not None and reset <= now - 120 for _, _, reset, _ in shared):
+            return {**base, 'status': 'waiting', 'reason': 'usage-missing-or-stale'}   # a reset passed: wait for a fresh reading
+        full = [reset for _, _, reset, used in shared if used >= 100 and (reset is None or reset > now)]
+        if full:
+            back = max((r for r in full if r is not None), default=big) if None not in full else big
+            facts.append((1, back // 60, prio, a))
+            continue
+        weekly = [reset for _, kind, reset, used in shared if kind == 'weekly' and reset is not None and reset > now]
+        binding = [reset for _, _, reset, used in shared if used < 100 and reset is not None and reset > now]
+        key = min(weekly) if weekly else (min(binding) if binding else big)
+        facts.append((0, key // 60, prio, a))   # whole minutes: reset times jitter by milliseconds between reads
+    facts.sort(key=lambda f: (f[0], f[1], f[2]))
+    order = [f[3] for f in facts]
+    wanted = order[0]
+    leadable = [a for a in order if (a.get('actions') or {}).get('prefer') is True]
+    current = sorted(leadable, key=lambda a: a['priority'] if isinstance(a.get('priority'), int) else 1 << 30)
+    # Fewest `prefer` calls: keep the longest tail of the wanted order that already runs in the agent's order, then
+    # move the others to the front from last to first (each `prefer` puts one sign-in at priority 0).
+    pos = {a['id']: i for i, a in enumerate(current)}
+    t = len(leadable) - 1
+    while t > 0 and pos[leadable[t - 1]['id']] < pos[leadable[t]['id']]:
+        t -= 1
+    moves = [leadable[i]['credentials'][0]['id'] for i in range(t - 1, -1, -1)] if t > 0 else []
+    needs = (wanted.get('actions') or {}).get('prefer') is not True and wanted.get('preferred') is not True
+    status = 'reorder' if moves else ('blocked' if needs else 'ok')
+    return {**base, 'status': status, 'order': [a['id'] for a in order], 'wanted': wanted['id'], 'needsSignIn': needs,
+            'moves': moves, 'reason': 'seeded-login-cannot-lead' if needs else None}
+
+
+def _log(text):
+    print('auto-order: ' + text, flush=True)
+
+
+def _prefer(credential):
+    """One stock `hermes auth priority <id> 0` through the agent's broker; waits for it to finish."""
+    job = Hermes.request(PROVIDER, '/operations', {'action': 'prefer', 'target': credential, 'label': '', 'confirmed': True})
+    deadline = time.time() + 45
+    while job.get('status') not in ('succeeded', 'failed', 'cancelled', 'expired', 'needs_review') and time.time() < deadline:
+        time.sleep(1)
+        job = Hermes.request(PROVIDER, '/operations/' + str(job.get('id')))
+    return job.get('status')
+
+
+def auto_order(result=None, force=False):
+    """Apply order_plan once. Single-flight, rate-limited, fail-safe (any error changes nothing more)."""
+    if not AUTO_ORDER or not AUTO_LOCK.acquire(blocking=False):
+        return None
+    try:
+        if not force and time.monotonic() - AUTO_STATE['lastRun'] < AUTO_MIN_GAP:
+            return None
+        AUTO_STATE['lastRun'] = time.monotonic()
+        if result is None:
+            result = with_legacy(Hermes.accounts(PROVIDER))
+        plan = order_plan(result)
+        if plan['status'] != 'reorder':
+            return plan
+        names = {a['id']: (a.get('name') or a['id']) for a in result.get('accounts') or []}
+        before = [a['id'] for a in sorted(result.get('accounts') or [], key=lambda a: a['priority'] if isinstance(a.get('priority'), int) else 1 << 30)]
+        for credential in plan['moves']:
+            status = _prefer(credential)
+            if status != 'succeeded':
+                _log('stopped: prefer %s -> %s' % (credential, status))
+                return plan
+        change = {'at': datetime.now().astimezone().isoformat(timespec='seconds'), 'from': before, 'to': plan['order'],
+                  'moved': plan['moves'], 'blocked': plan['wanted'] if plan['needsSignIn'] else None}
+        AUTO_STATE.update(changedAt=change['at'], lastChange=change)
+        _log('order %s -> %s (moved %s)%s' % (' > '.join(names.get(i, i) for i in before), ' > '.join(names.get(i, i) for i in plan['order']),
+             ', '.join(plan['moves']), ('; %s resets soonest but needs one agent sign-in to lead' % names.get(plan['wanted'])) if plan['needsSignIn'] else ''))
+        return plan
+    except BridgeError as error:
+        _log('skipped: agent busy or unavailable (%s %s)' % (getattr(error, 'status', ''), getattr(error, 'code', 'error')))
+    except Exception as error:
+        _log('skipped: %s' % type(error).__name__)
+    finally:
+        AUTO_LOCK.release()
+    return None
+
+
+def auto_order_view(result):
+    """Secret-free summary for the page: whether the order is automatic and who should lead."""
+    plan = order_plan(result)
+    return {'enabled': AUTO_ORDER, 'rule': 'soonest-reset-first', 'status': plan['status'], 'wanted': plan['wanted'],
+            'needsSignIn': plan['needsSignIn'] and plan['status'] in ('blocked', 'reorder'), 'order': plan['order'],
+            'changedAt': AUTO_STATE['changedAt']}
+
+
+def _next_wait(result, now=None):
+    now = time.time() if now is None else now
+    resets = [_epoch(l.get('resetsAt')) for a in result.get('accounts') or [] for l in ((a.get('usage') or {}).get('limits') or [])
+              if isinstance(l, dict) and _meter_kind(l)]
+    soon = [r - now + 90 for r in resets if r is not None and r > now]
+    return max(60, min([AUTO_EVERY] + soon))
+
+
+def auto_order_loop():
+    """Background check: every AUTO_EVERY seconds and ~90 s after the next shared reset."""
+    time.sleep(30)
+    while True:
+        wait = AUTO_EVERY
+        try:
+            result = with_legacy(Hermes.accounts(PROVIDER))
+            auto_order(result, force=True)
+            wait = _next_wait(result)
+        except Exception as error:
+            _log('check failed: %s' % type(error).__name__)
+        time.sleep(wait)
 
 
 class Handler(owner.Handler):
@@ -307,6 +534,14 @@ class Handler(owner.Handler):
                 result = with_legacy(unavailable(error))
             except Exception:
                 result = with_legacy(unavailable(BridgeError()))
+            if AUTO_ORDER and path == '/api/accounts':
+                try:
+                    result['autoOrder'] = auto_order_view(result)
+                    if result['autoOrder']['status'] == 'reorder':
+                        # A fresh usage reading changed who should lead: reorder in the background (rate-limited).
+                        threading.Thread(target=auto_order, args=(json.loads(json.dumps(result)),), daemon=True).start()
+                except Exception:
+                    result.pop('autoOrder', None)
             if path == '/api/connection':
                 result = connection(result)
             return self.send(200, result)
@@ -383,6 +618,8 @@ if __name__ == '__main__':
     import threading
     http = Server((os.environ.get('WIZARD_POOL_BIND', owner.BIND), int(os.environ.get('WIZARD_POOL_PORT', owner.PORT))), Handler)
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=http.shutdown, daemon=True).start())
+    if AUTO_ORDER:
+        threading.Thread(target=auto_order_loop, daemon=True).start()
     try:
         http.serve_forever()
     finally:
