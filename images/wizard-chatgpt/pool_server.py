@@ -418,6 +418,158 @@ def auto_order_loop():
         time.sleep(wait)
 
 
+# ---------- Use first for the original Claude Code login: one tap, sign-in included ----------
+# The seeded Claude Code login can only lead once it is signed in to the agent too. Its Use first therefore runs the
+# normal add flow and then puts the new grant first. The intent to do that second step lives here, keyed to the add
+# operation, and a background watcher finishes it, so a page reload, a closed sheet or the app being reopened after
+# signing in never makes the owner tap Use first again. Only the exact same account (email hash) is put first.
+USE_FIRST = {}                  # add operation id -> record (secret-free: ids, hashes, states)
+USE_FIRST_LOCK = threading.Lock()
+USE_FIRST_ACTIVE = ('signing-in', 'checking', 'preferring')
+USE_FIRST_LIMIT = 1200          # seconds an intent may wait for its sign-in (the agent's job expires sooner)
+USE_FIRST_KEEP = 600            # seconds a finished result stays readable for a page that comes back
+USE_FIRST_POLL = 2.0
+
+
+def _use_first_view(record):
+    if not record:
+        return None
+    return {k: record.get(k) for k in ('operation', 'account', 'email', 'state', 'credential', 'signedInAs', 'kept', 'startedAt', 'endedAt')}
+
+
+def use_first_for(operation):
+    with USE_FIRST_LOCK:
+        return _use_first_view(USE_FIRST.get(operation))
+
+
+def use_first_latest(now=None):
+    """The newest intent still worth showing: running, or finished within USE_FIRST_KEEP."""
+    now = time.time() if now is None else now
+    with USE_FIRST_LOCK:
+        for op in [k for k, r in USE_FIRST.items() if r.get('endedAt') and now - r['endedAt'] > USE_FIRST_KEEP]:
+            USE_FIRST.pop(op, None)
+        live = sorted(USE_FIRST.values(), key=lambda r: r['startedAt'], reverse=True)
+        return _use_first_view(live[0]) if live else None
+
+
+def _use_first_set(operation, **change):
+    with USE_FIRST_LOCK:
+        record = USE_FIRST.get(operation)
+        if record is None:
+            return {'state': change.get('state')}
+        record.update(change)
+        if change.get('state') and change['state'] not in USE_FIRST_ACTIVE:
+            record['endedAt'] = time.time()
+            print('use-first: %s %s' % (operation[:8], change['state']), flush=True)
+        return dict(record)
+
+
+def use_first_resolve(operation, job, accounts=None, sleep=time.sleep):
+    """Decide and finish one intent after its add job ended. Returns the final state."""
+    with USE_FIRST_LOCK:
+        record = dict(USE_FIRST.get(operation) or {})
+    if not record or record.get('state') not in USE_FIRST_ACTIVE:
+        return record.get('state')
+    status = job.get('status')
+    if status != 'succeeded':
+        return _use_first_set(operation, state={'cancelled': 'cancelled', 'expired': 'expired'}.get(status, 'failed'))['state']
+    _use_first_set(operation, state='checking')
+    ids = [c for c in job.get('credentialIds') or [] if isinstance(c, str)]
+    reader = accounts or (lambda: with_legacy(Hermes.accounts(PROVIDER)))
+    find = lambda result, cid: next((a for a in result.get('accounts') or [] if any(c.get('id') == cid for c in a.get('credentials') or [])), None)
+    if job.get('duplicateOf'):
+        # The browser was signed in to an account the agent already has (the agent removed the extra sign-in again
+        # when the older one still renews). Change no order.
+        try:
+            other = find(reader(), job['duplicateOf'])
+        except Exception:
+            other = None
+        return _use_first_set(operation, state='wrong-account', signedInAs=(other or {}).get('id'), kept=False)['state']
+    if not ids:
+        return _use_first_set(operation, state='failed')['state']
+    row, result = None, {}
+    for attempt in range(4):
+        try:
+            result = reader()
+            row = find(result, ids[0])
+        except Exception:
+            row = None
+        if row:
+            break
+        sleep(USE_FIRST_POLL)
+    if not row:
+        return _use_first_set(operation, state='failed', credential=ids[0])['state']
+    target = record.get('emailHash') or ''
+    if row.get('emailHash'):
+        same = bool(target) and hmac.compare_digest(str(row['emailHash']), target)
+    else:
+        # An older plugin without email hashes: the original row folds away only when it is the same account.
+        same = not reports_hashes(result) and not any(a.get('source') == 'legacy-claude-code' for a in result.get('accounts') or [])
+    if not same:
+        return _use_first_set(operation, state='wrong-account', signedInAs=row.get('id'), kept=True, credential=ids[0])['state']
+    if row.get('preferred') is True and row.get('priority') == 0 and (row.get('credentials') or [{}])[0].get('id') == ids[0]:
+        return _use_first_set(operation, state='done', credential=ids[0])['state']
+    _use_first_set(operation, state='preferring', credential=ids[0])
+    outcome = 'failed'
+    for attempt in range(3):
+        try:
+            outcome = _prefer(ids[0])
+            break
+        except BridgeError as error:
+            if error.status != 409:      # another account change is running (an automatic reorder): wait and retry
+                break
+            sleep(USE_FIRST_POLL * 2)
+        except Exception:
+            break
+    return _use_first_set(operation, state='done' if outcome == 'succeeded' else 'failed', credential=ids[0])['state']
+
+
+def use_first_watch(operation, sleep=time.sleep, clock=time.time):
+    """Follows the add job without the page and finishes Use first. Never raises."""
+    try:
+        misses = 0
+        while True:
+            with USE_FIRST_LOCK:
+                record = USE_FIRST.get(operation) or {}
+            if record.get('state') != 'signing-in':
+                return
+            if clock() - record.get('startedAt', 0) >= USE_FIRST_LIMIT:
+                break
+            try:
+                job = Hermes.request(PROVIDER, '/operations/' + operation)
+                misses = 0
+            except BridgeError as error:
+                if error.status == 404:
+                    _use_first_set(operation, state='expired')
+                    return
+                job, misses = None, misses + 1
+            except Exception:
+                job, misses = None, misses + 1
+            if job and job.get('status') in ('succeeded', 'failed', 'cancelled', 'expired', 'needs_review'):
+                use_first_resolve(operation, job, sleep=sleep)
+                return
+            sleep(USE_FIRST_POLL if misses < 3 else USE_FIRST_POLL * 5)
+        _use_first_set(operation, state='expired')
+    except Exception as error:
+        print('use-first: watcher stopped: %s' % type(error).__name__, flush=True)
+        try:
+            _use_first_set(operation, state='failed')
+        except Exception:
+            pass
+
+
+def use_first_begin(account):
+    """Checks a Use first sign-in for the original login may start; returns (email hash, email) or raises ValueError.
+    The email is the one the page already shows on that row."""
+    if PROVIDER != 'claude' or LEGACY is None or account != 'legacy-claude-code':
+        raise ValueError('unsupported')
+    old = LEGACY.read()
+    target = email_hash(old.get('account'))
+    if old.get('status') == 'not_connected' or not target:
+        raise ValueError('unsupported')
+    return target, str(old.get('account'))
+
+
 class Handler(owner.Handler):
     def setup(self):
         super().setup()
@@ -506,6 +658,9 @@ class Handler(owner.Handler):
                     # Fresh mode: a ChatGPT sign-in becomes the agent's model while it has none (as Claude's does);
                     # a model the owner chose is never changed, and alongside boxes are skipped.
                     result = {**result, 'agentDefault': adopt_as_agent_default(PROVIDER, CHATGPT_PROVIDER)}
+                pending = use_first_for(path.rsplit('/', 1)[1]) if isinstance(result, dict) else None
+                if pending:
+                    result = {**result, 'useFirst': pending}
                 return self.send(200, result)
             except BridgeError as error:
                 return self.send(error.status, {'error': 'Operation status unavailable; check inventory'})
@@ -542,6 +697,9 @@ class Handler(owner.Handler):
                         threading.Thread(target=auto_order, args=(json.loads(json.dumps(result)),), daemon=True).start()
                 except Exception:
                     result.pop('autoOrder', None)
+            if PROVIDER == 'claude' and path == '/api/accounts':
+                # A Use first sign-in that is running or just ended: a page opened after signing in picks it up.
+                result['useFirst'] = use_first_latest()
             if path == '/api/connection':
                 result = connection(result)
             return self.send(200, result)
@@ -574,7 +732,10 @@ class Handler(owner.Handler):
             if not 0 < size <= 4096:
                 return self.send(413, {'error': 'Request too large'})
             body = json.loads(self.rfile.read(size))
-            if not isinstance(body, dict) or set(body) - {'action', 'target', 'label', 'confirmed', 'operation', 'code'}:
+            if not isinstance(body, dict) or set(body) - {'action', 'target', 'label', 'confirmed', 'operation', 'code', 'useFirst'}:
+                return self.send(400, {'error': 'Invalid request'})
+            use_first = body.pop('useFirst', None)
+            if use_first is not None and body.get('action') != 'add':
                 return self.send(400, {'error': 'Invalid request'})
             inventory = Hermes.accounts(PROVIDER)
             management = inventory.get('management') or {}
@@ -596,7 +757,31 @@ class Handler(owner.Handler):
                 permitted = action in ('submit', 'cancel')
             if not permitted:
                 return self.send(403, {'error': 'Account action unsupported'})
-            return self.send(200, Hermes.request(PROVIDER, '/operations', body))
+            target = None
+            if use_first is not None:
+                # Use first on the original Claude Code login: allowed only while it is still its own row (no added
+                # sign-in of that account yet), which is when the agent cannot put it first by itself.
+                try:
+                    target, shown = use_first_begin(use_first)
+                    rows = with_legacy(json.loads(json.dumps(inventory))).get('accounts') or []
+                    if not any(a.get('id') == use_first and (a.get('actions') or {}).get('prefer') is not True for a in rows):
+                        raise ValueError('unsupported')
+                except ValueError:
+                    return self.send(403, {'error': 'Account action unsupported'})
+            job = Hermes.request(PROVIDER, '/operations', body)
+            if target and isinstance(job, dict) and re.fullmatch(r'[A-Za-z0-9_-]{20,64}', str(job.get('id') or '')):
+                with USE_FIRST_LOCK:
+                    USE_FIRST[job['id']] = {'operation': job['id'], 'account': use_first, 'email': shown, 'emailHash': target,
+                                            'state': 'signing-in', 'startedAt': time.time(), 'endedAt': None,
+                                            'credential': None, 'signedInAs': None, 'kept': None}
+                print('use-first: %s signing in' % job['id'][:8], flush=True)
+                threading.Thread(target=use_first_watch, args=(job['id'],), daemon=True).start()
+                job = {**job, 'useFirst': use_first_for(job['id'])}
+            elif isinstance(job, dict) and body.get('action') in ('submit', 'cancel'):
+                pending = use_first_for(str(body.get('operation') or ''))
+                if pending:
+                    job = {**job, 'useFirst': pending}
+            return self.send(200, job)
         except BridgeError as error:
             if error.status == 409:
                 return self.send(409, {'error': 'Another sign-in is running, or the request was refused; refresh first'})
