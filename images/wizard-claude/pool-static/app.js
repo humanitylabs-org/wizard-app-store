@@ -332,6 +332,7 @@ async function refresh() {
     $('message').textContent = data.error && data.inventoryStatus !== 'unavailable' ? 'Problem reading accounts.' : '';
   } catch (e) {
     if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
+    else { $('conn-name').textContent = $('title').textContent = brand(); if (!$('sigil').getAttribute('src')) $('sigil').src = `logo-${provider() === 'claude' ? 'claude' : 'chatgpt'}.svg`; }
     $('add').hidden = true;
     // Browser boundary on: this page's own api/ answers only Wizard's adapter, so a plain tab gets 403.
     $('message').textContent = e?.status === 403 && !OPAQUE ? 'Open this app from Wizard to see and change your accounts.' : 'Offline. Showing last reading.';
