@@ -303,6 +303,7 @@ async function refresh() {
     render(data);
     autoConnect();
     autoReconnect();
+    resumeUseFirst();
     $('message').textContent = data.error && data.inventoryStatus !== 'unavailable' ? 'Problem reading accounts.' : '';
   } catch {
     if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
@@ -358,11 +359,16 @@ async function start() {
   before = hermesAccounts().length;
   setStatus(action === 'remove' ? 'Removing…' : action === 'prefer' ? 'Updating…' : 'Starting…');
   adopting = action === 'adopt';
+  if (adopting) setStatus(USE_FIRST_WAIT, 'wait');
   try {
-    display(await api('api/operations', adopting ? {action: 'add', label: '', confirmed: true}
-      : {action, target: credential?.id, label: '', confirmed: true}));
+    const job = await api('api/operations', adopting ? {action: 'add', label: '', confirmed: true, useFirst: account.id}
+      : {action, target: credential?.id, label: '', confirmed: true});
+    // Use first = sign in, then put it first. Remember that across reloads, a closed sheet and the app reopening
+    // after the sign-in; the server keeps the same intent and finishes it even when this page is gone.
+    if (adopting && job?.id) savePending({op: job.id, account: account.id, me: meOf(account), at: Date.now()});
+    display(job);
   } catch (e) {
-    busy = false; $('add').disabled = false;
+    busy = false; $('add').disabled = false; adopting = false; clearPending();
     setStatus(e.status === 409 ? 'Another sign-in is running.' : (e.detail || 'Could not start. Try again.'), 'err');
     showButtons({cancel: true, cancelLabel: 'Close'});
   }
@@ -372,6 +378,24 @@ function display(job) {
   if (active?.id === job.id && TERMINAL.has(active.status) && !TERMINAL.has(job.status)) return;
   clearTimeout(timer); active = job;
   if (!$('manage').open && !dialogHidden) openSheet($('manage'));
+  const pending = loadPending(), uf = job.useFirst || null;
+  const useFirst = uf || (pending?.op === job.id ? {state: TERMINAL.has(job.status) ? null : 'signing-in', account: pending.account} : null);
+  if (useFirst) $('dlg-title').textContent = `Use ${useFirstName(useFirst)} first`;
+  if (TERMINAL.has(job.status) && uf && USE_FIRST_ACTIVE.has(uf.state)) {
+    // Signed in; the server is checking it is the same account and putting it first. No second tap.
+    busy = true; $('steps').hidden = true; $('dlg-text').textContent = '';
+    setStatus(job.status === 'succeeded' ? 'Signed in. Putting it first…' : 'Finishing…', 'wait');
+    showButtons({cancel: false});
+    sessionStorage.setItem('account-operation', job.id);
+    timer = setTimeout(poll, 1200);
+    return;
+  }
+  if (TERMINAL.has(job.status) && uf) { adopting = false; return finishUseFirst(uf, job); }
+  if (TERMINAL.has(job.status) && pending?.op === job.id && !(adopting && job.status === 'succeeded')) {
+    // The server no longer knows this intent (it restarted): finish here exactly as before.
+    if (job.status !== 'succeeded') { adopting = false; return finishUseFirst({state: {cancelled: 'cancelled', expired: 'expired'}[job.status] || 'failed', account: pending.account}, job); }
+    adopting = true; intent = {action: 'adopt', account: (snapshot?.accounts || []).find(a => a.id === pending.account) || {id: pending.account, email: pending.me}};
+  }
   if (!TERMINAL.has(job.status)) {
     // ChatGPT: copy the code first, then open the sign-in page and paste it there.
     $('dlg-text').textContent = job.userCode ? DEVICE_HINT : '';
@@ -380,7 +404,7 @@ function display(job) {
     $('signin').textContent = job.userCode ? 'Open sign-in and paste the code' : 'Open sign-in';
     $('code-step').hidden = !job.userCode; $('user-code').textContent = job.userCode || '';
     $('paste-step').hidden = !job.inputRequired;
-    setStatus(job.url ? 'Waiting…' : 'Starting…', 'wait');
+    setStatus(useFirst ? USE_FIRST_WAIT : (job.url ? 'Waiting…' : 'Starting…'), 'wait');
     showButtons({cancel: true, cancelLabel: 'Cancel'});
     sessionStorage.setItem('account-operation', job.id);
     timer = setTimeout(poll, 1500);
@@ -403,7 +427,7 @@ function display(job) {
   const adoptFor = adopting ? intent?.account : null;
   adopting = false;
   refresh().then(async () => {
-    if (adopted) return finishAdopt(job, adoptFor);
+    if (adopted) { clearPending(); return finishAdopt(job, adoptFor); }
     // Success means the agent itself now lists the sign-in; if it does not, say so rather than “Connected”.
     if (job.status === 'succeeded' && job.action !== 'remove' && snapshot?.inventoryStatus === 'unavailable') {
       setStatus('Signed in, but your agent can’t be reached to confirm it. Retry in a moment.', 'err');
@@ -414,6 +438,72 @@ function display(job) {
       setStatus(`${same ? `You signed in as ${accountTitle(same).title}, which` : 'That account'} is already listed. Sign out of ${provider() === 'claude' ? 'claude.ai' : brand()} in that browser or use a private window, then try again.`, 'err');
     }
   });
+}
+
+// The one-tap Use first for the original Claude Code login: what the server reports, in the owner's words.
+function finishUseFirst(uf, job) {
+  clearTimeout(timer); clearPending(); sessionStorage.removeItem('account-operation');
+  try { localStorage.setItem(SHOWN_KEY, uf.operation || job?.id || ''); } catch { /* storage off: shown again at most once */ }
+  busy = false; adopting = false; $('steps').hidden = true; $('dlg-text').textContent = '';
+  showButtons({cancel: false, close: true});
+  // It may have finished while the sheet was closed: bring the outcome back up once.
+  dialogHidden = false; if (!$('manage').open) openSheet($('manage'));
+  const me = useFirstName(uf, true);
+  const say = () => {
+    if (uf.state === 'done') {
+      $('dlg-title').textContent = `Use ${useFirstName(uf)} first`;
+      setStatus(`Done. Your agent uses ${me} first.`, 'ok');
+    } else if (uf.state === 'wrong-account') {
+      const other = (snapshot?.accounts || []).find(a => a.id === uf.signedInAs);
+      $('dlg-title').textContent = 'Signed in to a different account';
+      setStatus(`You signed in as ${other ? accountTitle(other).title : 'another account'}, not ${me}. Sign out of claude.ai in that browser or use a private window, then try again.`
+        + (uf.kept && other ? ' That account was kept as an extra account.' : ''), 'err');
+    } else if (uf.state === 'cancelled') setStatus('Cancelled.', '');
+    else if (uf.state === 'expired') setStatus('Timed out. Try again.', 'err');
+    else setStatus(uf.credential ? 'Signed in, but it could not be put first. Open it and choose Use first.' : 'Did not finish. Try again.', 'err');
+  };
+  say();
+  return refresh().then(say);
+}
+const USE_FIRST_WAIT = 'Signing in… then using this account first.';
+const USE_FIRST_ACTIVE = new Set(['signing-in', 'checking', 'preferring']);
+const PENDING_KEY = 'use-first', SHOWN_KEY = 'use-first-shown', PENDING_MAX = 30 * 60000;
+const meOf = a => a ? (a.email && !a.email.includes('*') ? a.email : accountTitle(a).title) : '';
+function savePending(v) { try { sessionStorage.setItem(PENDING_KEY, JSON.stringify(v)); } catch { /* the server keeps it too */ } }
+function clearPending() { try { sessionStorage.removeItem(PENDING_KEY); } catch { /* nothing to clear */ } }
+function loadPending() {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(PENDING_KEY) || 'null');
+    if (v && /^[A-Za-z0-9_-]{20,64}$/.test(String(v.op)) && Date.now() - v.at < PENDING_MAX) return v;
+  } catch { /* unreadable: treat as none */ }
+  clearPending(); return null;
+}
+function useFirstName(uf, full) {
+  const pending = loadPending();
+  const row = (snapshot?.accounts || []).find(a => a.id === uf?.account)
+    || (uf?.credential && (snapshot?.accounts || []).find(a => (a.credentials || []).some(c => c.id === uf.credential)));
+  const email = uf?.email && !String(uf.email).includes('*') ? String(uf.email) : '';
+  if (full) return email || (pending?.op === uf?.operation && pending?.me) || meOf(row) || 'this account';
+  return email ? email.split('@')[0] : row ? accountTitle(row).title : (pending?.me || 'this account').split('@')[0];
+}
+// A page opened after the sign-in (reloaded, or the app reopened) picks up the Use first that is still running,
+// or shows how it ended once, without asking for another tap.
+function resumeUseFirst() {
+  const uf = snapshot?.useFirst;
+  if (!uf || busy || !/^[A-Za-z0-9_-]{20,64}$/.test(String(uf.operation))) return;
+  const pending = loadPending();
+  let shown = '';
+  try { shown = localStorage.getItem(SHOWN_KEY) || ''; } catch { /* storage off */ }
+  if (USE_FIRST_ACTIVE.has(uf.state)) {
+    busy = true; dialogHidden = false; $('add').disabled = true; active = {id: uf.operation};
+    $('dlg-title').textContent = `Use ${useFirstName(uf)} first`; $('dlg-text').textContent = ''; $('steps').hidden = true;
+    setStatus(uf.state === 'signing-in' ? USE_FIRST_WAIT : 'Signed in. Putting it first…', 'wait');
+    showButtons({cancel: uf.state === 'signing-in', cancelLabel: 'Cancel'});
+    openSheet($('manage')); poll();
+  } else if (pending?.op === uf.operation || shown !== uf.operation) {
+    $('dlg-title').textContent = `Use ${useFirstName(uf)} first`;
+    openSheet($('manage')); finishUseFirst(uf, null);
+  }
 }
 
 // After signing the original Claude Code account in once more: when the agent now lists it as an added
@@ -442,7 +532,8 @@ async function poll() {
   try { const job = await api('api/operations/' + id); if (active?.id === id) display(job); }
   catch (e) {
     if (active?.id !== id || TERMINAL.has(active.status)) return;
-    if (e.status === 404) display({...active, status: 'needs_review'});
+    if (e.status === 404 && snapshot?.useFirst?.operation === id && !USE_FIRST_ACTIVE.has(snapshot.useFirst.state)) finishUseFirst(snapshot.useFirst, null);
+    else if (e.status === 404) display({...active, status: 'needs_review'});
     else { setStatus('Checking…'); timer = setTimeout(poll, 3000); }
   }
 }
