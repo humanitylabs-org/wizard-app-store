@@ -37,6 +37,8 @@
 .acct > .link { margin: 0 8px 4px 56px; }
 .wz-meter.hot > i > b { background: var(--danger); }
 .muted { font-size: 13px; color: var(--ink-3); }
+/* The agent orders accounts on its own (soonest reset first); one quiet line says so under the list. */
+.order-note { margin: var(--wz-space-2) 8px 0; font-size: var(--wz-text-sm, .8125rem); line-height: 1.45; color: var(--ink-3); }
 .link { width: fit-content; min-height: 44px; display: inline-flex; align-items: center; color: var(--accent); font-weight: 600; text-decoration: none; }
 .link.danger { color: var(--danger); }
 .link:disabled { opacity: .45; cursor: default; }
