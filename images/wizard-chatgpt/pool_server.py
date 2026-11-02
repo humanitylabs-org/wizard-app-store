@@ -177,6 +177,11 @@ def with_legacy(result):
                 # agent's row is the one it uses, so it stands for both instead of a second row with the same email.
                 exact = reports_hashes(result)
                 duplicate = any(same_account(a, old.get('account'), exact) for a in result['accounts'])
+                for a in result['accounts']:
+                    # Same account proven by the exact email hash: show the email this page already knows from the
+                    # original login instead of the agent's mask (a title like m*** said nothing).
+                    if exact and a.get('emailHash') and same_account(a, old.get('account'), True) and '*' in str(a.get('email') or '*'):
+                        a['email'] = old.get('account')
             if old.get('status') != 'not_connected' and not duplicate:
                 # The original sign-in is the first account; added subscriptions follow it.
                 result['accounts'].insert(0, {'id': 'legacy-claude-code', 'name': old.get('account') or 'Claude',

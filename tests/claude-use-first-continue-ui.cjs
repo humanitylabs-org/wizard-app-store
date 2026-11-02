@@ -57,6 +57,7 @@ const freePort=()=>new Promise(r=>{const s=net.createServer();s.listen(0,'127.0.
    await page.reload(); await page.waitForSelector('#accounts li');
    assert.equal(await page.locator('[data-account-id="legacy-claude-code"]').count(),0);
    assert.match(await page.textContent('#accounts li:first-child small'),/^Used first/);
+   assert.equal(await page.textContent('#accounts li:first-child .name'),'miguel');
    await page.waitForTimeout(600);
    assert.equal(await page.evaluate(()=>document.querySelector('#manage').open),false);
    assert.deepEqual(errors,[]);await ctx.close();

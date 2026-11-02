@@ -161,6 +161,9 @@ class UseFirstContinues(unittest.TestCase):
         lead = min(rows, key=lambda a: a['priority'])
         self.assertEqual(lead['credentials'][0]['id'], 'b13833')
         self.assertFalse(any(a['id'] == 'legacy-claude-code' for a in rows))   # the original row folded into it
+        # Proven the same account by its hash, it reads as the original login's email, not the agent's mask.
+        self.assertEqual(lead['email'], 'miguel@example.com')
+        self.assertEqual(next(a for a in rows if a['id'] == 'oscar-row')['email'], 'o***@g***')
         # The operation read carries the result too, so a page polling it finishes in place.
         self.assertEqual(self.http('/api/operations/' + OP)[1]['useFirst']['state'], 'done')
 
@@ -177,6 +180,9 @@ class UseFirstContinues(unittest.TestCase):
         uf = self.wait_state('wrong-account')
         self.assertEqual(uf['signedInAs'], 'c0ffee-row')
         self.assertTrue(uf['kept'])
+        rows = self.http('/api/accounts')[1]['accounts']
+        self.assertEqual(next(a for a in rows if a['id'] == 'c0ffee-row')['email'], 's***@e***')   # another account stays masked
+        self.assertTrue(any(a['id'] == 'legacy-claude-code' for a in rows))
         self.assertFalse(any(a[1] == 'prefer' for a in self.broker.actions()))
 
     def test_duplicate_of_an_added_account_changes_no_order(self):
