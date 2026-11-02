@@ -22,7 +22,51 @@ const hermesAccounts = () => (snapshot?.accounts || []).filter(a => a.source !==
 // One line: what the agent can do with this connection.
 const WHAT = {claude: 'Your agent thinks and works with your Claude plans.', chatgpt: 'Your agent thinks and works with your ChatGPT plans.'};
 
+// Browser boundary (draft, default-off): inside Wizard's opaque frame (origin null) this page has no route to its own
+// api/. Reads and steps go through Wizard's typed operations; account changes are queued for the owner to confirm in
+// Wizard's own dialog (never confirm() or an app-side "confirmed"); the sign-in page is opened by Wizard only.
+// Same-origin and standalone: unchanged.
+const OPAQUE = (() => { try { return parent !== window && globalThis.origin === 'null'; } catch { return true; } })();
+const store = (() => { try { const s = window.sessionStorage; s.getItem('x'); return s; } catch { return {getItem: () => null, setItem() {}, removeItem() {}}; } })();
+const coded = (code, status) => Object.assign(new Error('Request failed'), {code, status, detail: ''});
+const STATUS_OF = {conflict: 409, not_found: 404, busy: 409, not_allowed: 403, confirmation_required: 403, rate_limited: 429};
+const ready = () => new Promise(resolve => {
+  if (window.WizBoundaryClient?.ready) return resolve(true);
+  addEventListener('wizard:boundary:connected', () => resolve(true), {once: true});
+  setTimeout(() => resolve(!!window.WizBoundaryClient?.ready), 8000);
+});
+async function boundary(path, body) {
+  if (!(await ready())) throw coded('unavailable', 503);
+  for (let i = 0; i < 40 && !window.WizardApp?.intent; i++) await new Promise(r => setTimeout(r, 50));
+  if (!window.WizardApp?.intent) throw coded('unavailable', 503);
+  const key = () => crypto.randomUUID();
+  try {
+    if (!body) {
+      const m = /^api\/operations\/([A-Za-z0-9_-]{20,64})$/.exec(path);
+      if (m) return await WizardApp.data.call({operation: 'ai_accounts.progress', args: {operation: m[1]}});
+      if (path === 'api/accounts') return await WizardApp.data.call({operation: 'ai_accounts.inventory', args: {}});
+      throw coded('not_found', 404);
+    }
+    if (body.action === 'submit') return await WizardApp.data.call({operation: 'ai_accounts.step', args: {action: 'submit', operation: body.operation, code: body.code}, operationKey: key()});
+    if (body.action === 'cancel') return await WizardApp.data.call({operation: 'ai_accounts.step', args: {action: 'cancel', operation: body.operation}, operationKey: key()});
+    // add / reconnect / remove / prefer: the owner confirms in Wizard; the review names exactly these arguments.
+    return await WizardApp.intent.confirm({operation: 'ai_accounts.change', args: {action: body.action, target: body.target ?? null}, operationKey: key()});
+  } catch (e) {
+    if (e.status) throw e;
+    const err = coded(e.code || 'failed', STATUS_OF[e.code] || (e.code === 'cancelled' ? 499 : 503));
+    err.detail = e.code === 'rate_limited' ? 'Too many requests. Wait a minute.' : e.code === 'outcome_unknown' ? 'Unclear. Check the list first.' : '';
+    throw err;
+  }
+}
+// The sign-in page of a running operation: Wizard checks it against what this app may open, then opens it.
+async function openSignin(job) {
+  if (!job?.signin || !job.id) return;
+  try { await WizardApp.intent.open({target: job.signin, ref: 'ai:' + job.id}); }
+  catch (e) { if (e.code !== 'cancelled' && active?.id === job.id) setStatus(e.code === 'rate_limited' ? 'Too many requests. Wait a minute.' : 'Could not open the sign-in page.', 'err'); }
+}
+
 async function api(path, body) {
+  if (OPAQUE) return boundary(path, body);
   const r = await fetch(path, {cache: 'no-store', ...(body ? {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Wizard-Account-Action': '1'}, body: JSON.stringify(body)} : {})});
   if (!r.ok) {
     const e = new Error('Request failed'); e.status = r.status;
@@ -345,6 +389,7 @@ async function start() {
       : {action, target: credential?.id, label: '', confirmed: true}));
   } catch (e) {
     busy = false; $('add').disabled = false;
+    if (e.code === 'cancelled') { setStatus('Nothing changed.'); showButtons({go: true, goLabel: $('go').textContent, cancel: true}); return; }
     setStatus(e.status === 409 ? 'Another sign-in is running.' : (e.detail || 'Could not start. Try again.'), 'err');
     showButtons({cancel: true, cancelLabel: 'Close'});
   }
@@ -357,18 +402,18 @@ function display(job) {
   if (!TERMINAL.has(job.status)) {
     // ChatGPT: copy the code first, then open the sign-in page and paste it there.
     $('dlg-text').textContent = job.userCode ? DEVICE_HINT : '';
-    $('steps').hidden = !(job.url || job.userCode || job.inputRequired);
-    $('signin').href = job.url || '#'; $('signin-step').hidden = !job.url;
+    $('steps').hidden = !(job.url || job.signin || job.userCode || job.inputRequired);
+    $('signin').href = job.url || '#'; $('signin-step').hidden = !(job.url || job.signin);
     $('signin').textContent = job.userCode ? 'Open sign-in and paste the code' : 'Open sign-in';
     $('code-step').hidden = !job.userCode; $('user-code').textContent = job.userCode || '';
     $('paste-step').hidden = !job.inputRequired;
-    setStatus(job.url ? 'Waiting…' : 'Starting…', 'wait');
+    setStatus(job.url || job.signin ? 'Waiting…' : 'Starting…', 'wait');
     showButtons({cancel: true, cancelLabel: 'Cancel'});
-    sessionStorage.setItem('account-operation', job.id);
+    store.setItem('account-operation', job.id);
     timer = setTimeout(poll, 1500);
     return;
   }
-  sessionStorage.removeItem('account-operation');
+  store.removeItem('account-operation');
   busy = false; $('steps').hidden = true;
   showButtons({cancel: false, close: true});
   const done = {
@@ -422,6 +467,8 @@ async function poll() {
 }
 
 $('go').addEventListener('click', start);
+// Opaque frame: the link has no URL; Wizard opens the reviewed sign-in page after the owner confirms it there.
+$('signin').addEventListener('click', e => { if (!OPAQUE) return; e.preventDefault(); openSignin(active); });
 $('cancel').addEventListener('click', async () => {
   if (!busy || !active?.id) { $('manage').close(); return; }
   $('cancel').disabled = true; setStatus('Cancelling…');
@@ -455,9 +502,15 @@ $('add').addEventListener('click', () => {
 
 // Back closes local UI without cancelling provider work or leaving the app.
 // A plain tab allows exit only on a second root Back within two seconds.
+if (OPAQUE) {
+  // Wizard's Back reaches an opaque page through WizardApp.back: close the open sheet first, then leave.
+  ready().then(() => window.WizardApp?.back?.register({canGoBack: () => $('manage').open || $('account').open,
+    back: () => { if ($('manage').open) { dialogHidden = busy; $('manage').close(); if (snapshot) render(snapshot); } else $('account').close(); return true; }}));
+} else {
 history.replaceState({...history.state, wizardSubscriptions: 'root'}, '');
 history.pushState({...history.state, wizardSubscriptions: 'guard'}, '');
-addEventListener('popstate', () => {
+}
+if (!OPAQUE) addEventListener('popstate', () => {
   if ($('manage').open) {
     dialogHidden = busy;
     $('manage').close();
@@ -477,7 +530,7 @@ addEventListener('popstate', () => {
 setInterval(() => { if (!document.hidden && !$('manage').open) refresh(); }, 60000);
 
 refresh();
-const saved = sessionStorage.getItem('account-operation');
+const saved = store.getItem('account-operation');
 if (saved && /^[A-Za-z0-9_-]{20,64}$/.test(saved)) {
   busy = true; $('add').disabled = true; active = {id: saved};
   $('dlg-title').textContent = 'Signing in'; $('dlg-text').textContent = '';

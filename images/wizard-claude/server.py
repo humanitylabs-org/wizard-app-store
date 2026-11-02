@@ -49,7 +49,8 @@ URL = re.compile(r"https://[^\s\"'<>]+")
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
           "/appearance.css": ("appearance.css", "text/css; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-          "/app.css": ("app.css", "text/css; charset=utf-8"), "/SKILL.md": ("SKILL.md", "text/markdown; charset=utf-8")}
+          "/app.css": ("app.css", "text/css; charset=utf-8"), "/boundary.js": ("boundary.js", "text/javascript; charset=utf-8"),
+          "/SKILL.md": ("SKILL.md", "text/markdown; charset=utf-8")}
 # Owner-data routes are box-only: the same port is published on the tailnet (Serve, tunnels and
 # proxies add these headers), while agents and the Agent Service call the app on the app network.
 PROXY_HEADERS = ("tailscale-user-login", "x-forwarded-for", "forwarded", "x-real-ip")
