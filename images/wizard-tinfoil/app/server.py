@@ -27,6 +27,14 @@ HOSTS = csv('WIZARD_TRUSTED_HOSTS') | {f'127.0.0.1:{PORT}',f'localhost:{PORT}',f
 APP_PORT = os.environ.get('APP_PORT') or PORT
 HOSTS |= {f'127.0.0.1:{APP_PORT}', f'localhost:{APP_PORT}'}
 ORIGINS = csv('WIZARD_TRUSTED_ORIGINS') | {'http://'+h for h in HOSTS if h.startswith(('localhost:','127.0.0.1:'))}
+# The box owner's tailnet login(s), written by the App Manager at install. A request that arrives through Tailscale
+# Serve (or any proxy) reaches the owner's /api/* only as that login. Unset (older installs): exactly one tailnet
+# user login, never a tagged device, a public Funnel visitor or a proxy with no login.
+OWNERS = csv('WIZARD_OWNER_LOGINS')
+def networked(headers): return any(k.lower().startswith(('tailscale-','x-forwarded-','cf-')) or k.lower() in {'forwarded','x-real-ip'} for k in headers)
+def owner_ok(headers):
+    logins=[v.strip().lower() for v in headers.get_all('Tailscale-User-Login') or []]
+    return len(logins)==1 and bool(logins[0]) and (not OWNERS or logins[0] in OWNERS)
 
 # The agent on this box (Hermes). Fresh installs reach the Hermes Agent app by name; alongside boxes get the host
 # dashboard address from the App Manager. Connect registers this app's local gateway as a Hermes custom provider:
@@ -235,6 +243,7 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in ORIGINS or self.headers.get('Sec-Fetch-Site')=='cross-site': self.send(403,{'error':'Cross-site request refused.'}); return True
         if path=='/mcp' or path=='/api/connection' or path.startswith('/v1/'):
             if any(k.lower() in {'tailscale-user-login','x-forwarded-for','forwarded','x-real-ip'} or k.lower().startswith('cf-') for k in self.headers): self.send(403,{'error':'Box-only endpoint.'}); return True
+        if path.startswith('/api/') and networked(self.headers) and not owner_ok(self.headers): self.send(403,{'error':'Open Tinfoil from your Wizard as its owner.'}); return True
         if write and path.startswith('/api/') and (origin not in ORIGINS or self.headers.get('X-Wizard-Request')!='1'): self.send(403,{'error':'Use the trusted connection page.'}); return True
         if path.startswith('/v1/'):
             if origin or not bearer_ok(self.headers.get('Authorization','')): self.send(401,{'error':'Local gateway credential required.'}); return True

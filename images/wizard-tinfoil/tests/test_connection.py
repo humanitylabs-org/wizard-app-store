@@ -62,6 +62,19 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.call('/api/status',None,{'Tailscale-User-Login':'owner-test'})[0],200)
         self.assertEqual(self.call('/api/status',None,{'Origin':'https://evil.invalid'})[0],403)
         self.assertEqual(self.call('/connection.json')[0],404)
+    def test_02b_network_reads_need_the_owner(self):
+        # Through Tailscale Serve every /api/* read (status, key hints, billing, apps) used to answer any tailnet caller.
+        for h in ({'X-Forwarded-For':'100.64.0.9'},{'Tailscale-User-Name':'Guest'},{'Forwarded':'for=1.2.3.4'},{'X-Real-IP':'1.2.3.4'},{'cf-connecting-ip':'1.2.3.4'}):
+            self.assertEqual(self.call('/api/status',None,h)[0],403,h)
+        with patch.object(s,'OWNERS',{'owner@example.com'}):
+            for login in ('stranger@example.com','other@example.com'):
+                self.assertEqual(self.call('/api/status',None,{'Tailscale-User-Login':login,'X-Forwarded-For':'100.64.0.9'})[0],403,login)
+                self.assertEqual(self.call('/api/admin-key/remove',{},{'Tailscale-User-Login':login,'X-Forwarded-For':'100.64.0.9'})[0],403,login)
+            code,b=self.call('/api/status',None,{'Tailscale-User-Login':'Owner@Example.com','X-Forwarded-For':'100.64.0.9'})
+            self.assertEqual(code,200);self.assertEqual(json.loads(b)['provider'],'tinfoil')
+        # The box itself (the Agent Service, agents, the app's checks) carries no network headers and is unchanged.
+        self.assertEqual(self.call('/api/status')[0],200)
+        self.assertEqual(self.call('/api/connection')[0],200)
     def test_03_mcp_and_gateway(self):
         code,b=self.call('/mcp',{'jsonrpc':'2.0','id':1,'method':'tools/list'});self.assertEqual(code,200)
         self.assertEqual([t['name'] for t in json.loads(b)['result']['tools']],['billing_summary','connection_status'])

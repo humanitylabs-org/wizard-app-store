@@ -37,7 +37,7 @@ test("workflow tests before it publishes, then checks the published image", () =
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Read-only")));
   const text = readFileSync(".github/workflows/tinfoil.yml", "utf8");
   expect(text).toContain("linux/amd64,linux/arm64");
-  expect(text).toContain("wizard-tinfoil:0.3.7");
+  expect(text).toContain("wizard-tinfoil:0.3.8");
 });
 
 test("?connect=1 (Wizard Welcome) opens straight to the API key paste box, only when no key is saved", () => {
