@@ -5,6 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const unhandled = [];
+process.on('unhandledRejection', error => unhandled.push(String(error)));
+test.after(() => console.log('Synthetic fixture unhandled rejections: ' + unhandled.length));
 const root = process.env.POOL_SOURCE_ROOT || path.resolve(__dirname, '..');
 const row = (ids = ['old']) => ({id: 'account', email: 'fixture@example.com', status: 'ready',
   credentials: ids.map(id => ({id, managed: true})), actions: {prefer: true}});
@@ -15,10 +18,14 @@ function deferred() { let resolve, reject; const promise = new Promise((a, b) =>
 async function fixture(provider) {
   const nodes = new Map(), calls = [], queue = [];
   function element() {
+    const classes = new Set(), listeners = new Map();
     return {textContent: '', hidden: false, disabled: false, open: false, dataset: {},
-      classList: {add() {}, remove() {}, toggle() {}}, style: {setProperty() {}},
-      append() {}, replaceChildren() {}, setAttribute() {}, getAttribute() {return '';},
-      addEventListener() {}, showModal() {this.open = true;}, close() {this.open = false;}};
+      children: [], classList: {add: c => classes.add(c), remove: c => classes.delete(c),
+        contains: c => classes.has(c), toggle(c, on) {if (on) classes.add(c); else classes.delete(c);}}, style: {setProperty() {}},
+      append(...children) {this.children.push(...children);}, replaceChildren(...children) {this.children = children;},
+      setAttribute() {}, getAttribute() {return '';},
+      addEventListener(event, fn) {listeners.set(event, fn);}, click() {return listeners.get('click')?.({});},
+      showModal() {this.open = true;}, close() {this.open = false; listeners.get('close')?.();}};
   }
   const node = id => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
   const storage = () => {const data = new Map(); return {getItem: k => data.get(k) || null,
@@ -31,6 +38,7 @@ async function fixture(provider) {
       calls.push({url, body: options.body && JSON.parse(options.body)});
       if (!queue.length) throw Error('Unexpected request: ' + url);
       const data = await queue.shift();
+      if (data?.httpError) return {ok: false, status: data.httpError, json: async () => ({error: 'Synthetic HTTP failure'})};
       return {ok: true, json: async () => data};
     }});
   context.window = context; context.parent = context;
@@ -51,7 +59,10 @@ async function fixture(provider) {
 }
 for (const provider of ['claude', 'chatgpt']) {
   const check = (name, fn) => test(provider + ': ' + name, async () => {
+    const before = unhandled.length;
     const f = await fixture(provider); await f.begin(); await fn(f);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(unhandled.length, before, 'no unhandled rejection in this synthetic fixture');
     assert.deepEqual(f.calls.filter(c => c.body).map(c => c.body.action),
       f.calls.filter(c => c.body).map(() => 'add'), 'no prefer, refresh/remove CLI or other credential mutation');
   });
@@ -87,7 +98,8 @@ for (const provider of ['claude', 'chatgpt']) {
     ['hint only retains credential', {duplicateEmailHintOf: 'old'}, ['old', 'new'], 'connected'],
     ['duplicateOf alone retains credential', {duplicateOf: 'old'}, ['old', 'new'], 'connected'],
     ['explicit false retains credential', {duplicateOf: 'old', duplicateRemoved: false}, ['old', 'new'], 'connected'],
-    ['truthful legacy removal', {duplicateOf: 'old', duplicateRemoved: true}, ['old'], 'duplicate'],
+    // Synthetic explicit contract only: neither examined supported service source demonstrates removal.
+    ['explicit removal-contract fixture', {duplicateOf: 'old', duplicateRemoved: true}, ['old'], 'duplicate'],
     ['unconfirmed removal target', {duplicateOf: 'absent', duplicateRemoved: true}, ['old'], 'unconfirmed'],
     ['invalid removal ID', {duplicateOf: {id: 'old'}, duplicateRemoved: true}, ['old'], 'unconfirmed'],
     ['missing removal ID', {duplicateRemoved: true}, ['old'], 'unconfirmed'],
@@ -122,5 +134,65 @@ for (const provider of ['claude', 'chatgpt']) {
     hold.resolve(inventory()); await settle();
     assert.equal(f.node('dlg-status').textContent, 'Connected.');
     assert.notEqual(f.node('dlg-title').textContent, 'Already added');
+  });
+  for (const reject of [false, true]) check('manual refresh wins over old confirmation ' + (reject ? 'reject' : 'resolve'), async f => {
+    const hold = deferred(); f.finish(hold.promise); await settle();
+    const fresh = inventory([{...row(['new']), id: 'fresh-account'}]);
+    f.queue.push(fresh); await f.node('refresh').click(); await settle();
+    assert.equal(f.run('snapshot.accounts[0].id'), 'fresh-account');
+    if (reject) hold.reject(Error('offline')); else hold.resolve(inventory());
+    await settle();
+    assert.equal(f.run('snapshot.accounts[0].id'), 'fresh-account');
+    assert.equal(f.node('accounts').children[0].dataset.accountId, 'fresh-account');
+    assert.equal(f.run("allowed('add')"), true);
+    assert.equal(f.node('message').textContent, '');
+    assert.equal(f.node('refresh').classList.contains('spin'), false);
+  });
+  check('superseded operation balances spinner and still updates inventory', async f => {
+    const hold = deferred(); f.finish(hold.promise); await settle();
+    assert.equal(f.node('refresh').classList.contains('spin'), true);
+    f.run("ask('add')");
+    hold.resolve(inventory([{...row(['new']), id: 'fresh-account'}])); await settle();
+    assert.equal(f.node('refresh').classList.contains('spin'), false);
+    assert.equal(f.run('snapshot.accounts[0].id'), 'fresh-account');
+    assert.equal(f.node('dlg-status').textContent, '');
+  });
+  check('overlapping refreshes keep spinner until last request settles', async f => {
+    const hold = deferred(); f.finish(hold.promise); await settle();
+    f.queue.push(inventory([row(['new'])])); await f.node('refresh').click(); await settle();
+    assert.equal(f.node('refresh').classList.contains('spin'), true);
+    hold.resolve(inventory()); await settle();
+    assert.equal(f.node('refresh').classList.contains('spin'), false);
+    assert.equal(f.run('snapshot.accounts[0].credentials[0].id'), 'new');
+  });
+  for (const fallbackThrows of [false, true]) check('malformed account render' + (fallbackThrows ? ' and fallback exceptions' : '') + ' ends unconfirmed', async f => {
+    if (fallbackThrows) f.run("const realRender = render; render = data => { realRender(data); if (data.management?.status === 'unavailable') throw Error('Synthetic fallback failure'); };");
+    f.finish(inventory([{...row(['new']), email: {malformed: true}}])); await settle();
+    assert.match(f.node('dlg-status').textContent, /could not confirm/);
+    assert.equal(f.run('snapshot.accounts[0].credentials[0].id'), 'old');
+    assert.equal(f.node('accounts').children[0].dataset.accountId, 'account');
+    assert.match(f.node('message').textContent, /confirm|reading accounts/i);
+    assert.doesNotMatch(f.node('message').textContent, /offline/i);
+    assert.equal(f.node('refresh').classList.contains('spin'), false);
+  });
+  check('terminal title renderer exception ends unconfirmed', async f => {
+    f.run("const realTitle = accountTitle; let titleCalls = 0; accountTitle = a => { if (++titleCalls > 1) throw Error('Synthetic terminal title failure'); return realTitle(a); };");
+    f.finish(inventory(), {duplicateOf: 'old', duplicateRemoved: true}); await settle();
+    assert.match(f.node('dlg-status').textContent, /could not confirm/);
+    assert.notEqual(f.node('dlg-title').textContent, 'Already added');
+  });
+  for (const [name, data, banner] of [
+    ['HTTP !ok', {httpError: 503}, /confirm|reading accounts/i],
+    ['malformed', {}, /confirm|reading accounts/i],
+  ]) check(name + ' synthetic response is not called offline', async f => {
+    f.finish(data); await settle();
+    assert.match(f.node('dlg-status').textContent, /confirm/i);
+    assert.match(f.node('message').textContent, banner);
+    assert.doesNotMatch(f.node('message').textContent, /offline/i);
+  });
+  check('actual network rejection retains offline banner', async f => {
+    const hold = deferred(); f.finish(hold.promise); await settle(); hold.reject(TypeError('Synthetic network failure')); await settle();
+    assert.match(f.node('dlg-status').textContent, /confirm/i);
+    assert.match(f.node('message').textContent, /Offline/);
   });
 }

@@ -301,27 +301,47 @@ function autoConnect() {
 const validId = id => typeof id === 'string' && id.trim().length > 0;
 const validInventory = data => data && Array.isArray(data.accounts) && data.accounts.every(a =>
   a && validId(a.id) && Array.isArray(a.credentials) && a.credentials.every(c => c && validId(c.id)));
+let refreshRevision = 0, renderedRevision = 0, refreshInflight = 0, lastGood = null;
 async function refresh({owns = () => true, confirm = false} = {}) {
-  const previous = snapshot;
+  // Inventory ordering is independent of dialog ownership. An old response must not undo a newer reading.
+  const revision = ++refreshRevision;
+  let received = false;
+  refreshInflight++;
   $('refresh').classList.add('spin');
   try {
     const data = await api('api/accounts');
-    if (!owns()) return null;
+    received = true;
+    if (revision < renderedRevision) return null;
     if (confirm && !validInventory(data)) throw new Error('Invalid inventory');
     render(data);
-    autoConnect();
-    autoReconnect();
-    resumeUseFirst();
+    lastGood = data;
+    renderedRevision = revision;
+    if (owns()) {
+      autoConnect();
+      autoReconnect();
+      resumeUseFirst();
+    }
     $('message').textContent = data.error && data.inventoryStatus !== 'unavailable' ? 'Problem reading accounts.' : '';
     return !data.error && (data.inventoryStatus === undefined || data.inventoryStatus === 'available')
       && data.management?.contract === 'wizard.account-management/1' && data.management.status === 'available' ? data : null;
-  } catch {
+  } catch (error) {
+    if (revision < renderedRevision) return null;
+    renderedRevision = revision;
+    // render assigns snapshot before drawing. Never preserve a partly rendered response as good data.
+    snapshot = lastGood;
     if (!owns()) return null;
-    if (previous) render({...previous, management: {status: 'unavailable'}});
+    try {
+      if (lastGood) render({...lastGood, management: {status: 'unavailable'}});
+    } catch {
+      snapshot = lastGood;
+    }
     $('add').hidden = true;
-    $('message').textContent = 'Offline. Showing last reading.';
+    $('message').textContent = received || error instanceof SyntaxError || error.status
+      ? 'Could not confirm accounts. Showing last reading.' : 'Offline. Showing last reading.';
     return null;
-  } finally { if (owns()) $('refresh').classList.remove('spin'); }
+  } finally {
+    if (--refreshInflight === 0) $('refresh').classList.remove('spin');
+  }
 }
 
 /* ---------- dialog ---------- */
@@ -441,20 +461,21 @@ function display(job) {
   adopting = false;
   const confirmAdd = job.action === 'add' && job.status === 'succeeded' && !adopted;
   const owns = () => outcomeRevision === revision && active === job;
+  const unconfirmed = () => setStatus('Signed in, but your agent’s account list could not confirm it. Retry in a moment.', 'err');
   if (confirmAdd) setStatus('Signed in. Checking your agent’s account list…', 'wait');
   refresh(confirmAdd ? {owns, confirm: true} : {}).then(async data => {
     if (confirmAdd && !owns()) return;
     if (adopted) { clearPending(); return finishAdopt(job, adoptFor); }
     if (confirmAdd) {
-      const unconfirmed = () => setStatus('Signed in, but your agent’s account list could not confirm it. Retry in a moment.', 'err');
       if (!data) { unconfirmed(); return; }
       const contains = id => data.accounts.some(a => a.credentials.some(c => c.id === id));
-      // Only an explicit removal confirmed by the retained ID supports the legacy duplicate outcome.
+      // Only an explicit removal confirmed by the retained ID supports a duplicate outcome.
       // duplicateEmailHintOf and duplicateOf alone are advisory, never proof of removal.
       if (job.duplicateRemoved === true && validId(job.duplicateOf) && contains(job.duplicateOf)) {
         const same = data.accounts.find(a => a.credentials.some(c => c.id === job.duplicateOf));
+        const title = accountTitle(same).title;
         $('dlg-title').textContent = 'Already added';
-        setStatus(`You signed in as ${accountTitle(same).title}, which is already listed. Sign out of ${provider() === 'claude' ? 'claude.ai' : brand()} in that browser or use a private window, then try again.`, 'err');
+        setStatus(`You signed in as ${title}, which is already listed. Sign out of ${provider() === 'claude' ? 'claude.ai' : brand()} in that browser or use a private window, then try again.`, 'err');
       } else if (Array.isArray(job.credentialIds) && job.credentialIds.length
         && job.credentialIds.every(id => validId(id) && contains(id))) setStatus('Connected.', 'ok');
       else unconfirmed();
@@ -464,6 +485,8 @@ function display(job) {
     if (job.status === 'succeeded' && job.action !== 'remove' && snapshot?.inventoryStatus === 'unavailable') {
       setStatus('Signed in, but your agent can’t be reached to confirm it. Retry in a moment.', 'err');
     }
+  }).catch(() => {
+    if (confirmAdd && owns()) unconfirmed();
   });
 }
 
