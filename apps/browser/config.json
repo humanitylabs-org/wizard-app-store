@@ -3,28 +3,36 @@
   "id": "browser",
   "wizard_type": "service",
   "available": true,
-  "short_desc": "Service: Shared headless Chromium with a DevTools/Puppeteer endpoint for other apps.",
-  "author": "chromedp (Kenneth Shaw) and the Chromium project; packaged by Humanity Labs",
+  "short_desc": "Service: Shared Chromium for agents and apps, with a phone viewer for human handoffs (CAPTCHA, codes, logins).",
+  "author": "Humanity Labs (packaging, handoff viewer); noVNC authors (MPL-2.0); the Chromium project",
   "port": 8793,
   "categories": [
     "utilities"
   ],
-  "description": "Unmodified chromedp/headless-shell (headless Chromium) pinned by digest. One shared browser that DeFleur Video and other apps drive with Puppeteer or the Chrome DevTools Protocol at http://browser:9222 inside Runtipi. No web page, no settings; stop the app to turn it off.",
-  "tipi_version": 1,
-  "version": "155.0.8059.40",
-  "source": "https://github.com/chromedp/docker-headless-shell",
-  "website": "https://github.com/chromedp/docker-headless-shell",
+  "description": "One shared headful Chromium (Debian package, on a virtual display) that DeFleur Video and other apps drive with Puppeteer or the Chrome DevTools Protocol at http://browser:9222 inside Runtipi, and that agents use through MCP. When a page needs a person (CAPTCHA, one-time code, login, consent, payment) the agent opens a private, expiring handoff link; the owner takes over the same live browser from a phone through a noVNC 1.3.0 viewer with Keyboard, Paste, Up and Down controls, then the agent resumes. Stop the app to turn it off.",
+  "tipi_version": 2,
+  "version": "2.0.0",
+  "source": "https://github.com/humanitylabs-org/browser",
+  "website": "https://github.com/humanitylabs-org/browser",
   "exposable": false,
   "supported_architectures": [
     "amd64",
     "arm64"
   ],
   "created_at": 1791385837084,
-  "updated_at": 1791385837084,
+  "updated_at": 1792303142340,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,
   "gid": 1000,
-  "form_fields": [],
+  "form_fields": [
+    {
+      "type": "url",
+      "label": "Wizard owner gateway Browser prefix (optional)",
+      "hint": "Owner-authenticated gateway app prefix, e.g. https://your-wizard.example/browser (not a direct CDP port). Default links are relative to /browser.",
+      "required": false,
+      "env_variable": "BROWSER_PUBLIC_URL"
+    }
+  ],
   "no_gui": true
 }

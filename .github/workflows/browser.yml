@@ -28,4 +28,4 @@ jobs:
         with:
           name: browser-verification
           path: ${{ runner.temp }}/browser-lifecycle.json
-# The image is the unmodified upstream chromedp/headless-shell pinned by digest; nothing is published here.
+# Headful engine candidate and Python front are pinned by multiarch digest; nothing is published here.
