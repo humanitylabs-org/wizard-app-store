@@ -19,6 +19,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Account Add outcomes (production scripts, synthetic inventory only)
+        run: node --test tests/provider-add-outcome.cjs
       - name: Subscription compatibility and owning CLI renewal fixtures (no provider access)
         run: |
           python3 tests/provider-pool-http.py

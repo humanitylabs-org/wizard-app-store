@@ -3,7 +3,8 @@ const $ = id => document.getElementById(id);
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'expired', 'needs_review']);
 const STATUS = {ready: 'Active', connected: 'Active', ok: 'Active', renewing: 'Renewing', expired: 'Sign in again', cooldown: 'Cooling down', exhausted: 'Limit reached', error: 'Problem'};
 const OK = new Set(['ready', 'connected', 'ok']);
-let snapshot = null, active = null, busy = false, timer = null, intent = null, before = 0, adopting = false;
+let snapshot = null, active = null, busy = false, timer = null, intent = null, adopting = false;
+let outcomeRevision = 0;
 let dialogHidden = false, lastRootBack = 0, openAccount = null;
 // Every pop-up is a kit sheet (wizard-sheet.js): ×, Esc, tap outside, Back and swipe down all close it.
 const openSheet = d => { if (window.WzSheet) WzSheet.open(d); else if (!d.open) d.showModal(); };
@@ -296,20 +297,31 @@ function autoConnect() {
   ask('add'); start();
 }
 
-async function refresh() {
+// Add outcomes need an independent, well-formed inventory, not the last rendered snapshot.
+const validId = id => typeof id === 'string' && id.trim().length > 0;
+const validInventory = data => data && Array.isArray(data.accounts) && data.accounts.every(a =>
+  a && validId(a.id) && Array.isArray(a.credentials) && a.credentials.every(c => c && validId(c.id)));
+async function refresh({owns = () => true, confirm = false} = {}) {
+  const previous = snapshot;
   $('refresh').classList.add('spin');
   try {
     const data = await api('api/accounts');
+    if (!owns()) return null;
+    if (confirm && !validInventory(data)) throw new Error('Invalid inventory');
     render(data);
     autoConnect();
     autoReconnect();
     resumeUseFirst();
     $('message').textContent = data.error && data.inventoryStatus !== 'unavailable' ? 'Problem reading accounts.' : '';
+    return !data.error && (data.inventoryStatus === undefined || data.inventoryStatus === 'available')
+      && data.management?.contract === 'wizard.account-management/1' && data.management.status === 'available' ? data : null;
   } catch {
-    if (snapshot) render({...snapshot, management: {status: 'unavailable'}});
+    if (!owns()) return null;
+    if (previous) render({...previous, management: {status: 'unavailable'}});
     $('add').hidden = true;
     $('message').textContent = 'Offline. Showing last reading.';
-  } finally { $('refresh').classList.remove('spin'); }
+    return null;
+  } finally { if (owns()) $('refresh').classList.remove('spin'); }
 }
 
 /* ---------- dialog ---------- */
@@ -322,6 +334,7 @@ function showButtons({go = false, goLabel = 'Continue', danger = false, cancel =
 
 function ask(action, account, credential) {
   if (busy || !allowed(action, account, credential)) return;
+  outcomeRevision++;
   intent = {action, account, credential}; active = null;
   dialogHidden = false;
   const b = brand();
@@ -356,7 +369,6 @@ async function start() {
   const {action, account, credential} = intent;
   if (!allowed(action, account, credential)) return;
   busy = true; $('add').disabled = true; $('go').disabled = true; $('cancel').disabled = true;
-  before = hermesAccounts().length;
   setStatus(action === 'remove' ? 'Removing…' : action === 'prefer' ? 'Updating…' : 'Starting…');
   adopting = action === 'adopt';
   if (adopting) setStatus(USE_FIRST_WAIT, 'wait');
@@ -376,6 +388,7 @@ async function start() {
 
 function display(job) {
   if (active?.id === job.id && TERMINAL.has(active.status) && !TERMINAL.has(job.status)) return;
+  const revision = ++outcomeRevision;
   clearTimeout(timer); active = job;
   if (!$('manage').open && !dialogHidden) openSheet($('manage'));
   const pending = loadPending(), uf = job.useFirst || null;
@@ -426,16 +439,30 @@ function display(job) {
   const adopted = adopting && job.action === 'add' && job.status === 'succeeded';
   const adoptFor = adopting ? intent?.account : null;
   adopting = false;
-  refresh().then(async () => {
+  const confirmAdd = job.action === 'add' && job.status === 'succeeded' && !adopted;
+  const owns = () => outcomeRevision === revision && active === job;
+  if (confirmAdd) setStatus('Signed in. Checking your agent’s account list…', 'wait');
+  refresh(confirmAdd ? {owns, confirm: true} : {}).then(async data => {
+    if (confirmAdd && !owns()) return;
     if (adopted) { clearPending(); return finishAdopt(job, adoptFor); }
+    if (confirmAdd) {
+      const unconfirmed = () => setStatus('Signed in, but your agent’s account list could not confirm it. Retry in a moment.', 'err');
+      if (!data) { unconfirmed(); return; }
+      const contains = id => data.accounts.some(a => a.credentials.some(c => c.id === id));
+      // Only an explicit removal confirmed by the retained ID supports the legacy duplicate outcome.
+      // duplicateEmailHintOf and duplicateOf alone are advisory, never proof of removal.
+      if (job.duplicateRemoved === true && validId(job.duplicateOf) && contains(job.duplicateOf)) {
+        const same = data.accounts.find(a => a.credentials.some(c => c.id === job.duplicateOf));
+        $('dlg-title').textContent = 'Already added';
+        setStatus(`You signed in as ${accountTitle(same).title}, which is already listed. Sign out of ${provider() === 'claude' ? 'claude.ai' : brand()} in that browser or use a private window, then try again.`, 'err');
+      } else if (Array.isArray(job.credentialIds) && job.credentialIds.length
+        && job.credentialIds.every(id => validId(id) && contains(id))) setStatus('Connected.', 'ok');
+      else unconfirmed();
+      return;
+    }
     // Success means the agent itself now lists the sign-in; if it does not, say so rather than “Connected”.
     if (job.status === 'succeeded' && job.action !== 'remove' && snapshot?.inventoryStatus === 'unavailable') {
       setStatus('Signed in, but your agent can’t be reached to confirm it. Retry in a moment.', 'err');
-    }
-    if (job.status === 'succeeded' && job.action === 'add' && (job.duplicateOf || (before > 0 && hermesAccounts().length <= before))) {
-      const same = findByCredential([job.duplicateOf, ...(job.credentialIds || [])]);
-      $('dlg-title').textContent = 'Already added';
-      setStatus(`${same ? `You signed in as ${accountTitle(same).title}, which` : 'That account'} is already listed. Sign out of ${provider() === 'claude' ? 'claude.ai' : brand()} in that browser or use a private window, then try again.`, 'err');
     }
   });
 }
