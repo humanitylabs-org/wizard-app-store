@@ -132,7 +132,7 @@ services:
               if ":" in line:
                   k, v = line.split(":", 1)
                   headers[k.strip().lower()] = v.strip()
-          if any(k.startswith("x-forwarded-") or k in ("forwarded", "x-real-ip", "x-wizard-origin") for k in headers):
+          if any(k.startswith(("x-forwarded-", "tailscale-user-")) or k in ("forwarded", "via", "x-real-ip", "x-wizard-origin") for k in headers):
               return await respond(writer, 403, {"error": "MCP is only available to agents on the private app network"})
           if MCP_TOKEN:
               import hmac
@@ -188,7 +188,7 @@ services:
               if ":" in item:
                   k, v = item.split(":", 1)
                   parsed_headers[k.strip().lower()] = v.strip()
-          forwarded = any(k.startswith("x-forwarded-") or k in ("forwarded", "x-real-ip", "x-wizard-origin") for k in parsed_headers)
+          forwarded = any(k.startswith(("x-forwarded-", "tailscale-user-")) or k in ("forwarded", "via", "x-real-ip", "x-wizard-origin") for k in parsed_headers)
           public_paths = {"/", "/reader", "/index.html", "/app.js", "/styles.css", "/wizard-ui.css", "/wizard-tokens.css", "/boot.js", "/health", "/api/reader", "/api/image"}
           if path in public_paths:
               if parts[0] not in ("GET", "HEAD") or parsed_headers.get("upgrade") or parsed_headers.get("transfer-encoding") or int(parsed_headers.get("content-length") or "0") != 0:
