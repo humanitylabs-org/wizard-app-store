@@ -14,7 +14,7 @@ services:
     mem_limit: 256m
     environment:
       WIZARD_APP: browser
-      APP_VERSION: 155.0.8059.41
+      APP_VERSION: 155.0.8059.42
       FRONT_PORT: '9222'
       UPSTREAM_HOST: browser-engine
       UPSTREAM_PORT: '9222'
@@ -42,6 +42,7 @@ services:
       import urllib.parse
       import urllib.request
       import uuid
+      import re
 
       APP = os.environ.get("WIZARD_APP", "app")
       VERSION = os.environ.get("APP_VERSION", "0")
@@ -190,9 +191,17 @@ services:
                   parsed_headers[k.strip().lower()] = v.strip()
           forwarded = any(k.startswith(("x-forwarded-", "tailscale-user-")) or k in ("forwarded", "via", "x-real-ip", "x-wizard-origin") for k in parsed_headers)
           public_paths = {"/", "/reader", "/index.html", "/app.js", "/styles.css", "/wizard-ui.css", "/wizard-tokens.css", "/boot.js", "/health", "/api/reader", "/api/image"}
-          if path in public_paths:
-              if parts[0] not in ("GET", "HEAD") or parsed_headers.get("upgrade") or parsed_headers.get("transfer-encoding") or int(parsed_headers.get("content-length") or "0") != 0:
-                  return await respond(writer, 405, {"error": "GET only"})
+          is_list = path == "/api/list" or bool(re.fullmatch(r"/api/list/[a-f0-9-]{36}", path))
+          if path in public_paths or is_list:
+              allowed = ("GET", "HEAD", "POST") if path == "/api/list" else (("PATCH", "DELETE") if is_list else ("GET", "HEAD"))
+              lengths = [v.split(":", 1)[1].strip() for v in rest.decode("latin-1").split("\r\n") if v.lower().startswith("content-length:")]
+              if len(lengths) > 1 or (lengths and not lengths[0].isdigit()):
+                  return await respond(writer, 400, {"error": "invalid request length"})
+              n = int(lengths[0]) if lengths else 0
+              if parts[0] not in allowed or parsed_headers.get("upgrade") or parsed_headers.get("transfer-encoding") or (n and parts[0] in ("GET", "HEAD")):
+                  return await respond(writer, 405, {"error": "method not supported"})
+              if n > 16384:
+                  return await respond(writer, 413, {"error": "request too large"})
               try:
                   ur, uw = await asyncio.open_connection(os.environ.get("READER_HOST", "browser-reader"), int(os.environ.get("READER_PORT", "8080")))
               except OSError:
@@ -275,6 +284,27 @@ services:
 
 
       # ---- tools for this app ----
+      def _reading_list(method="GET", data=None):
+          host = os.environ.get("READER_HOST", "browser-reader")
+          port = int(os.environ.get("READER_PORT", "8080"))
+          body = None if data is None else json.dumps(data).encode()
+          request = urllib.request.Request("http://%s:%d/api/list" % (host, port), data=body,
+                                           method=method, headers={"Content-Type": "application/json"})
+          with urllib.request.urlopen(request, timeout=60) as response:
+              return json.load(response)
+
+
+      @tool("reading_list_add", "Save a public article to the owner's Reading list. Fetches fresh safe Reader metadata, deduplicates the canonical address and stores no article body or cookies.",
+            {"url": {"type": "string"}}, ["url"])
+      def reading_list_add(url):
+          return _reading_list("POST", {"url": url})
+
+
+      @tool("reading_list_list", "List the owner's saved article metadata, newest first, including read status. Does not fetch article bodies.")
+      def reading_list_list():
+          return _reading_list()
+
+
       PAGE_TEXT_MAX = 100000
 
 
@@ -430,7 +460,7 @@ services:
     x-runtipi:
       is_main: true
   browser-reader:
-    image: ghcr.io/humanitylabs-org/browser-reader:sha-1ee3bd4c6d2f588c93bcbc8ae3583e94f7fad34c@sha256:f92f6a8fc201a793ef7b6f528f919b32ba2838abd889358aa5f13128ef4117fe
+    image: ghcr.io/humanitylabs-org/browser-reader:sha-04f94544e7f22d8196c65e4e3954da08e5e49c38@sha256:fb7e1e543b5fd341d10c8805fe49d1f65500c9f08b0df84e0f60e4a236550c32
     user: 1000:1000
     read_only: true
     init: true
@@ -441,7 +471,10 @@ services:
     # Playwright's CDP client needs a writable temp directory (artifacts) on a read-only root.
     tmpfs:
     - /tmp:rw,nosuid,nodev,noexec,size=64m
+    volumes:
+    - reading-list:/data
     environment:
+      READER_DATA_DIR: /data
       TMPDIR: /tmp
       UPSTREAM_HOST: browser-engine
       UPSTREAM_PORT: "9222"
@@ -465,6 +498,8 @@ services:
     - /tmp:rw,nosuid,size=2g
     environment:
       HOME: /tmp
+volumes:
+  reading-list: {}
 x-runtipi:
   schema_version: 2
   overrides: []
