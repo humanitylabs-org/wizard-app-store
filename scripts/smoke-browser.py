@@ -71,7 +71,8 @@ def main():
     assert engine["read_only"] is True and engine["init"] is True
     assert reader["read_only"] is True and reader["environment"]["TMPDIR"] == "/tmp"
     assert service["ports"] == ["127.0.0.1:${APP_PORT}:9222"], service["ports"]
-    assert service["networks"] == {"tipi_main_network": {"gw_priority": 1}}
+    assert service["networks"] == {"browser_release-smoke_network": {"gw_priority": 0}, "tipi_main_network": {"gw_priority": 1}}
+    assert engine["networks"] == reader["networks"] == {"browser_release-smoke_network": {"gw_priority": 0}}
     report = {"test": "translated recipe + real headless Chromium lifecycle over the app network", "image": service["image"],
               "runtipi_revision": translated["revision"]}
     compose["networks"]["tipi_main_network"] = {"name": name, "external": True}
