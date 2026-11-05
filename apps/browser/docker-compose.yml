@@ -460,7 +460,7 @@ services:
     x-runtipi:
       is_main: true
   browser-reader:
-    image: ghcr.io/humanitylabs-org/browser-reader:sha-e0326c523371243b7e335702beae4c2331e63d1f@sha256:636b62bc6e07ad3d7f06db07c5b3f67bbe91e3361e38c76432536fca2d0cc68c
+    image: ghcr.io/humanitylabs-org/browser-reader:sha-04f94544e7f22d8196c65e4e3954da08e5e49c38@sha256:fb7e1e543b5fd341d10c8805fe49d1f65500c9f08b0df84e0f60e4a236550c32
     user: 1000:1000
     read_only: true
     init: true
