@@ -438,7 +438,11 @@ services:
     security_opt: ["no-new-privileges:true"]
     pids_limit: 256
     mem_limit: 768m
+    # Playwright's CDP client needs a writable temp directory (artifacts) on a read-only root.
+    tmpfs:
+    - /tmp:rw,nosuid,nodev,noexec,size=64m
     environment:
+      TMPDIR: /tmp
       UPSTREAM_HOST: browser-engine
       UPSTREAM_PORT: "9222"
       READER_DENY_PROXY: http://browser-reader:8081
