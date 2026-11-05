@@ -150,7 +150,7 @@ def main():
             stats = run("docker", "stats", "--no-stream", "--format", "{{.MemUsage}} pids={{.PIDs}}", cid)
             report["idle_after_use"] = stats
         finally:
-            subprocess.run([*cmd, "down", "--remove-orphans"], env=env, capture_output=True)
+            subprocess.run([*cmd, "down", "--volumes", "--remove-orphans"], env=env, capture_output=True)
             subprocess.run(["docker", "network", "rm", name], capture_output=True)
             subprocess.run(["docker", "run", "--rm", "--network", "none", "--user", "0:0", "--mount",
                             f"type=bind,source={tmp},target=/fixture", "--entrypoint", "/bin/chmod",

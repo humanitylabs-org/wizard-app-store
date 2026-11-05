@@ -103,8 +103,14 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
           expect(service.read_only).toBe(true);
           expect(service.cap_drop).toEqual(["ALL"]);
           expect(service.security_opt).toEqual(["no-new-privileges:true"]);
-          for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "volumes"]) expect(service[key]).toBeUndefined();
+          for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build"]) expect(service[key]).toBeUndefined();
         }
+        expect(s.volumes).toBeUndefined();
+        expect(engine.volumes).toBeUndefined();
+        expect(reader.volumes).toEqual(["reading-list:/data"]);
+        expect(compose.volumes).toEqual({"reading-list": {}});
+        expect(reader.environment.READER_DATA_DIR).toBe("/data");
+        expect(reader.tmpfs).toContain("/tmp:rw,nosuid,nodev,noexec,size=64m");
         expect(engine.user).toBe("1000:1000");
         expect(engine.init).toBe(true);
         expect(engine.ports).toBeUndefined();
