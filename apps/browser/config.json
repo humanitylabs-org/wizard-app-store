@@ -1,30 +1,30 @@
 {
   "name": "Browser",
   "id": "browser",
-  "wizard_type": "service",
+  "wizard_type": "view",
   "available": true,
-  "short_desc": "Service: Shared headless Chromium with a DevTools/Puppeteer endpoint for other apps.",
+  "short_desc": "View: Read web pages inside Wizard.",
   "author": "chromedp (Kenneth Shaw) and the Chromium project; packaged by Humanity Labs",
   "port": 8793,
   "categories": [
-    "utilities"
+    "media"
   ],
-  "description": "Unmodified chromedp/headless-shell (headless Chromium) pinned by digest. One shared browser that DeFleur Video and other apps drive with Puppeteer or the Chrome DevTools Protocol at http://browser:9222 inside Runtipi. No web page, no settings; stop the app to turn it off.",
-  "tipi_version": 1,
-  "version": "155.0.8059.40",
-  "source": "https://github.com/chromedp/docker-headless-shell",
-  "website": "https://github.com/chromedp/docker-headless-shell",
+  "description": "A clean Reader for public web pages. Agent MCP and DevTools stay private and use separate disposable Reader contexts.",
+  "tipi_version": 3,
+  "version": "155.0.8059.41",
+  "source": "https://github.com/humanitylabs-org/browser",
+  "website": "https://github.com/humanitylabs-org/browser",
   "exposable": false,
   "supported_architectures": [
     "amd64",
     "arm64"
   ],
   "created_at": 1791385837084,
-  "updated_at": 1791385837084,
+  "updated_at": 1791563214951,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,
   "gid": 1000,
   "form_fields": [],
-  "no_gui": true
+  "no_gui": false
 }
