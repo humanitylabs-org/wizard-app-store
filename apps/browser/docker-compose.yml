@@ -14,7 +14,7 @@ services:
     mem_limit: 256m
     environment:
       WIZARD_APP: browser
-      APP_VERSION: 155.0.8059.42
+      APP_VERSION: 155.0.8059.43
       FRONT_PORT: '9222'
       UPSTREAM_HOST: browser-engine
       UPSTREAM_PORT: '9222'
@@ -460,7 +460,7 @@ services:
     x-runtipi:
       is_main: true
   browser-reader:
-    image: ghcr.io/humanitylabs-org/browser-reader:sha-04f94544e7f22d8196c65e4e3954da08e5e49c38@sha256:fb7e1e543b5fd341d10c8805fe49d1f65500c9f08b0df84e0f60e4a236550c32
+    image: ghcr.io/humanitylabs-org/browser-reader:sha-84ba57472b84265476c31f9e6415bf443f4ee82e@sha256:66ff42aa220e28f4ef7b01370e0cb195f33b10d0ee8f7a9c284f385263071bcb
     user: 1000:1000
     read_only: true
     init: true

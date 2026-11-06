@@ -10,8 +10,8 @@
     "media"
   ],
   "description": "A clean Reader for public web pages. Agent MCP and DevTools stay private and use separate disposable Reader contexts.",
-  "tipi_version": 4,
-  "version": "155.0.8059.42",
+  "tipi_version": 5,
+  "version": "155.0.8059.43",
   "source": "https://github.com/humanitylabs-org/browser",
   "website": "https://github.com/humanitylabs-org/browser",
   "exposable": false,
