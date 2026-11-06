@@ -7,13 +7,16 @@ so a refresh here would sign out every agent sharing the login. An expired token
 
 The limit/paid/plan normalization is a line-for-line port of wizard-agent-service
 `server/ai-usage.mjs` (claudePlan, claudeLimitLabel, claudeLimits, claudePaid, usageRow), so the rows
-are exactly what `GET /wizard/ai-usage` already returns and the shell needs no change.
+are exactly what `GET /wizard/ai-usage` already returns. Purchased credits are read separately
+from the same OAuth origin's profile and subscription prepaid/credits endpoint. They are not
+inferred from spend or the monthly cap; a failed credit read leaves the balance unknown.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import math
+import re
 import threading
 import time
 import urllib.error
@@ -257,6 +260,41 @@ def get_usage(url: str, token: str, timeout: float) -> dict:
     return payload if payload is not None else {}
 
 
+def credit_balance(usage_url: str, token: str, paid: dict, timeout: float, deadline=None):
+    """Purchased subscription credits, not monthly cap minus spend. Same OAuth origin only.
+
+    The profile is used internally solely to address that subscription's credit wallet;
+    no profile fields, organization identifier or upstream errors enter the public answer.
+    A balance-only failure must not discard successfully read weekly quota windows.
+    """
+    if paid.get("enabled") is not True:
+        return None
+    base = usage_url.rsplit("/", 1)[0]
+    deadline = time.monotonic() + 4 if deadline is None else deadline
+    def read(path):
+        budget = min(timeout, 2, deadline - time.monotonic())
+        if budget < 0.1:
+            raise UsageError(UNREACHABLE)
+        return get_usage(base + path, token, budget)
+    try:
+        profile = read("/profile")
+        org = get(get(profile, "organization"), "uuid")
+        if not isinstance(org, str) or not re.fullmatch(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", org):
+            return None
+        credits = read("/organizations/" + org + "/prepaid/credits")
+        amount, currency, exponent = get(credits, "amount"), get(credits, "currency"), get(credits, "decimal_places")
+        # This endpoint reports USD cents when decimal_places is absent (including null).
+        if exponent is None and currency == "USD":
+            exponent = 2
+        if (not is_finite_number(amount) or currency != paid.get("currency") or
+                not isinstance(exponent, int) or isinstance(exponent, bool) or not 0 <= exponent <= 6):
+            return None
+        return js_round(amount * 10 ** (paid["exponent"] - exponent))
+    except Exception:  # no auth errors/profile/private response bodies cross this boundary
+        return None
+
+
 class ConnectionReader:
     """GET /api/connection. Provider reads are cached 60 s; on unreachable/provider_error the last good
     usage is kept for at most 30 min, marked by `error`. A different sign-in drops the cache."""
@@ -307,6 +345,7 @@ class ConnectionReader:
         return result
 
     def _attempt(self, token: str, now: float) -> dict:
+        deadline = time.monotonic() + 6  # leave caller headroom; optional credits never extend a slow usage read
         try:
             payload = get_usage(self.usage_url, token, self.timeout_s)
         except UsageError as e:
@@ -314,8 +353,11 @@ class ConnectionReader:
         except Exception:  # noqa: BLE001 - nothing about the failure may leak into the answer
             code = UNREACHABLE
         else:
+            paid = claude_paid(payload)
+            if paid is not None:
+                paid["balanceMinor"] = credit_balance(self.usage_url, token, paid, self.timeout_s, deadline)
             usage = {"fetchedAt": iso_ms(datetime.fromtimestamp(now, timezone.utc)),
-                     "limits": claude_limits(payload), "paid": claude_paid(payload)}
+                     "limits": claude_limits(payload), "paid": paid}
             self.last_good, self.last_good_at = usage, now
             return self.base("connected", usage=usage)
         if code == EXPIRED:

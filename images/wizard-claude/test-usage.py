@@ -154,7 +154,7 @@ def main():
     assert out["usage"]["limits"] == EXPECTED_CURRENT_LIMITS and out["usage"]["paid"] == EXPECTED_CURRENT_PAID
     assert out["usage"]["fetchedAt"] == "2026-10-14T17:46:40.000Z", out["usage"]["fetchedAt"]
     assert out["error"] is None
-    h = Upstream.hits[-1]
+    h = next(x for x in reversed(Upstream.hits) if x["path"] == "/api/oauth/usage")
     assert h["authorization"] == "Bearer " + TOKEN and h["anthropic-beta"] == "oauth-2025-04-20", h
     assert h["accept"] == "application/json" and h["path"] == "/api/oauth/usage"
 
@@ -165,7 +165,7 @@ def main():
     assert len(Upstream.hits) == n
     clock[0] += 2
     read(r)
-    assert len(Upstream.hits) == n + 1
+    assert len(Upstream.hits) == n + 2
 
     # Outage: last good usage kept (error unreachable / provider_error) for at most 30 min, then usage null.
     good_at = clock[0]
@@ -196,7 +196,7 @@ def main():
     assert out["status"] == "error" and out["usage"] is None, out  # no stale rows after an expiry
     assert all(set(x) - {"path"} <= {"host", "authorization", "accept", "anthropic-beta", "user-agent",
                                       "accept-encoding", "connection"} for x in Upstream.hits)
-    assert all(x["path"] == "/api/oauth/usage" for x in Upstream.hits), "only the usage endpoint is called"
+    assert all(x["path"] in ("/api/oauth/usage", "/api/oauth/profile") for x in Upstream.hits), "only usage and internal profile discovery are called"
     assert open(creds_path, "rb").read() == before, "credentials file must never be rewritten"
 
     # Expired locally (expiresAt in the past): no provider call at all.
@@ -212,7 +212,7 @@ def main():
     write_creds(token=TOKEN + "-2", tier="", sub="pro")
     out = read(r)
     assert out["status"] == "connected" and out["plan"] == "Pro" and out["usage"]["limits"] == EXPECTED_CURRENT_LIMITS
-    assert len(Upstream.hits) == n + 1 and Upstream.hits[-1]["authorization"] == "Bearer " + TOKEN + "-2"
+    assert len(Upstream.hits) == n + 2 and Upstream.hits[-1]["authorization"] == "Bearer " + TOKEN + "-2"
     assert all((TOKEN + "-2") not in a for a in answers)
 
     # Signed out again (logout empties the file): no stale usage.
