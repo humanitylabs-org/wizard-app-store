@@ -1,0 +1,21 @@
+{
+  "version": "0.1.0",
+  "image": "ghcr.io/humanitylabs-org/wizard-private-client@sha256:c562bef2166e6e1054be8eed34229cf0ead4574002da28f8fe5d4f09ad0e6631",
+  "source_sha": "c3a4345ff68363dfff7435f80344ca1a235624be",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "publication_run": "https://github.com/humanitylabs-org/wizard-app-store/actions/runs/40115387940",
+  "anonymous_verification_job": "https://github.com/humanitylabs-org/wizard-app-store/actions/runs/40115387940/job/120936192906",
+  "backend_pin_target": "ops/agent-runtime/private_providers.py:CLIENT_IMAGE",
+  "runtime_source_unchanged_since_publication": true,
+  "attestation": {
+    "attestation_endpoint": "https://atc.tinfoil.sh/attestation",
+    "enclave": "inference.tinfoil.sh",
+    "verification": "official Verifier.verifyBundle then attested-key EHBP",
+    "http_relay": "authenticated bundle fetch; no HTTPS-only high-level SecureClient downgrade",
+    "key_free_live_probe": "node tests/live-attestation.mjs",
+    "paid_inference_retested": false
+  }
+}
