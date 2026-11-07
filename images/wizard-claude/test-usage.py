@@ -156,7 +156,7 @@ def main():
     assert out["usage"]["limits"] == EXPECTED_CURRENT_LIMITS and out["usage"]["paid"] == EXPECTED_CURRENT_PAID
     assert out["usage"]["fetchedAt"] == "2026-10-14T17:46:40.000Z", out["usage"]["fetchedAt"]
     assert out["error"] is None
-    h = Upstream.hits[-1]
+    h = next(x for x in reversed(Upstream.hits) if x["path"] == "/api/oauth/usage")
     assert h["authorization"] == "Bearer " + TOKEN and h["anthropic-beta"] == "oauth-2025-04-20", h
     assert h["accept"] == "application/json" and h["path"] == "/api/oauth/usage"
 
