@@ -1,0 +1,124 @@
+name: Build Hermes Agent slim (Wizard build, new tag)
+# Publishes ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard-slim1 from images/hermes-agent-slim.
+# Stock Hermes source at v2026.9.24 (f97608f), packaging only. Never touches the v2026.9.24-wizard2 tag (rollback).
+on:
+  push:
+    branches: [feature/hermes-agent-slim-20261012]
+    paths: ['images/hermes-agent-slim/**', '.github/workflows/hermes-agent-slim.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+env:
+  IMAGE: ghcr.io/humanitylabs-org/hermes-agent
+  TAG: v2026.9.24-wizard-slim1
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    steps:
+      - name: Free runner disk
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (native ${{ matrix.arch }})
+        uses: docker/build-push-action@v6
+        with:
+          context: images/hermes-agent-slim
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          provenance: false
+          tags: hermes-slim:test
+      - name: Smoke test (same checks as the wizard2 image, plus boot and the browser runtime)
+        run: |
+          set -eux
+          docker image inspect hermes-slim:test --format 'size {{.Size}}'
+          # Plain-number sizes, measured the same way for both: gzip of `docker save` (≈ registry download) and files on disk.
+          docker pull -q nousresearch/hermes-agent:v2026.9.24 >/dev/null
+          for img in nousresearch/hermes-agent:v2026.9.24 hermes-slim:test; do
+            gz=$(docker save "$img" | gzip -6 | wc -c)
+            disk=$(docker run --rm --entrypoint sh "$img" -c 'du -sxb / 2>/dev/null | cut -f1')
+            echo "SIZE $img download_gzip_bytes=$gz unpacked_bytes=$disk"
+          done
+          docker run --rm --entrypoint sh hermes-slim:test -c '
+            claude --version | grep -q "^2.1.296 " &&
+            test -f /opt/hermes/plugins/model-providers/claude-subscription-directsdk-experimental/plugin.yaml &&
+            /opt/hermes/.venv/bin/hermes --version &&
+            /opt/hermes/.venv/bin/python -c "import anthropic, telegram, mcp, fastapi, uvloop; print(\"imports ok\")" &&
+            ls /opt/hermes/.playwright/ && ldd $(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-*/chrome-headless-shell | head -1) | grep -c "not found" | grep -q "^0$" &&
+            test -f /opt/hermes/hermes_cli/web_dist/index.html && test -f /opt/hermes/ui-tui/dist/entry.js &&
+            ! command -v gcc && ! command -v docker &&
+            hs=$(ls -d /opt/hermes/.playwright/chromium_headless_shell-*/chrome-*/chrome-headless-shell | head -1) &&
+            timeout 60 "$hs" --no-sandbox --disable-gpu --dump-dom "data:text/html,<title>ok</title><p>CHROMIUM_OK</p>" | grep -q CHROMIUM_OK && echo CHROMIUM_OK &&
+            cd /opt/hermes &&
+            timeout 20 node --expose-gc ui-tui/dist/entry.js --help >/dev/null 2>&1; echo "tui exit $?" && echo SMOKE_OK'
+          # Boot both images the same way (API server needs a real-length key) and require the same answers.
+          KEY=$(openssl rand -hex 24)
+          docker pull -q nousresearch/hermes-agent:v2026.9.24
+          for img in nousresearch/hermes-agent:v2026.9.24 hermes-slim:test; do
+            cid=$(docker run -d -e API_SERVER_KEY=$KEY -e API_SERVER_HOST=0.0.0.0 -e API_SERVER_PORT=8642 -p 127.0.0.1::8642 "$img" gateway run)
+            port=$(docker port "$cid" 8642/tcp | head -1 | awk -F: '{print $NF}')
+            ok=""
+            for i in $(seq 1 80); do
+              if curl -fsS -m 5 -H "Authorization: Bearer $KEY" "http://127.0.0.1:$port/v1/models" > "/tmp/models-${img//[\/:]/_}.json"; then ok=1; break; fi
+              sleep 3
+            done
+            docker logs "$cid" 2>&1 | tail -15
+            docker rm -f "$cid" >/dev/null
+            [ -n "$ok" ] || { echo "API_BOOT_FAIL $img"; exit 1; }
+            echo "API_BOOT_OK $img after ${i} tries: $(cat /tmp/models-${img//[\/:]/_}.json | head -c 200)"
+          done
+      - name: Same Wizard checks as the published wizard2 image (provider discovery, plugin tests, shared /claude volume, /opt/data parity)
+        run: |
+          set -eux
+          sh images/wizard-ai-accounts/test-container.sh
+          TMPDIR="$RUNNER_TEMP" HERMES_IMAGE=hermes-slim:test python3 scripts/smoke-ai-accounts.py
+      - uses: docker/login-action@v3
+        if: github.repository_owner == 'humanitylabs-org'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push by digest
+        if: github.repository_owner == 'humanitylabs-org'
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: images/hermes-agent-slim
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - if: github.repository_owner == 'humanitylabs-org'
+        run: mkdir -p /tmp/d && touch "/tmp/d/${DIGEST#sha256:}"
+        env: { DIGEST: "${{ steps.push.outputs.digest }}" }
+      - if: github.repository_owner == 'humanitylabs-org'
+        uses: actions/upload-artifact@v4
+        with: { name: "digest-${{ matrix.arch }}", path: /tmp/d/*, retention-days: 1 }
+  manifest:
+    needs: build
+    if: github.repository_owner == 'humanitylabs-org'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: digest-*, merge-multiple: true, path: /tmp/d }
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the multi-arch image
+        working-directory: /tmp/d
+        run: |
+          docker buildx imagetools create -t "$IMAGE:$TAG" $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:$TAG"
