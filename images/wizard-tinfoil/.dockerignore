@@ -1,0 +1,8 @@
+*
+!app/
+!app/*.py
+!Dockerfile
+!web/
+!web/*
+!openapi.json
+!requirements.lock

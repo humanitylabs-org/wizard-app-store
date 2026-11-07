@@ -1,0 +1,30 @@
+# One-time, CAS-guarded repair of the 0.1.2 pointer. Normal releases never retag.
+name: Restore Router 0.1.2 release pointer
+on: workflow_dispatch
+permissions:
+  contents: read
+  packages: write
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore only the known accidentally moved pointer
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=ghcr.io/humanitylabs-org/wizard-connection-router
+          original=sha256:4ade407a102235a02ec5ac5644768f9a48c9dfb2a11eb93899508239c826fa58
+          accidental=sha256:1fc3a473e66fafede9a1fe5356df386e67191f0690f33fc5c4c5d090b05c98e5
+          digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
+          current=$(digest "$image:0.1.2")
+          if [ "$current" = "$original" ]; then exit 0; fi
+          test "$current" = "$accidental" || { printf 'Refusing unknown concurrent pointer\n'; exit 1; }
+          docker buildx imagetools create --tag "$image:0.1.2" "$image@$original"
+          test "$(digest "$image:0.1.2")" = "$original"

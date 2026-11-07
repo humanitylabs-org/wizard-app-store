@@ -63,9 +63,19 @@ function render(accounts) {
   }
 }
 
+// ?connect=1 (the Wizard Welcome, or Connect on a fresh Wizard): just the sign-in link and the code box (Miguel, 30 Oct
+// 2026: "a link and a place to paste the code; all the steps in between are unnecessary"). It starts by itself.
+const FOCUS = new URLSearchParams(location.search).get("connect") === "1";
+if (FOCUS) document.body.classList.add("focus");
+let started = false;
+
 async function refresh() {
   const data = await call("api/accounts");
   if (data.accounts) render(data.accounts);
+  if (FOCUS && !started && !busy && (data.accounts || []).some((a) => a.status === "not_connected")) {
+    started = true;
+    connect();
+  }
 }
 
 async function run(text, fn) {
@@ -115,6 +125,9 @@ $("code-form").addEventListener("submit", (ev) => {
     $("login").hidden = true;
     loginId = "";
     $("code").value = "";
+    if (FOCUS && data.ok) return say("Claude is connected.", "ok");
+    // A sign-in is single use: a wrong code gets a fresh link, and the reason stays on screen.
+    if (FOCUS && !data.ok) { setTimeout(() => connect().then(() => say(data.message, "bad")), 0); return; }
     say(data.ok ? "Connected. Press Test to check it works." : data.message, data.ok ? "ok" : "bad");
   });
 });

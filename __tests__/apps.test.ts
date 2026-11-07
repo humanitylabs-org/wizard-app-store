@@ -60,8 +60,8 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
     test("isolated data, no host privileges or auth bypass", () => {
       const s = compose.services[id];
       expect(Object.keys(compose.services)).toEqual([id]);
-      expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data", "claude-login:/claude"]);
-      expect(compose.volumes).toEqual({"claude-login": {name: "wizard-ai-accounts-claude"}});
+      expect(s.volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data"]);
+      expect(compose.volumes).toBeUndefined();
       for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build"]) expect(s[key]).toBeUndefined();
       expect(s.environment.HERMES_DASHBOARD_INSECURE).toBeUndefined();
       expect(s.environment.HERMES_UMBREL_APP_PROXY_AUTH).toBeUndefined();
@@ -93,26 +93,44 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       });
     }
     if (id === "browser") {
-      test("vanilla pinned headless Chromium, private, generous limits", () => {
-        const s = compose.services[id];
-        expect(Object.keys(compose.services)).toEqual([id]);
-        expect(s.image).toMatch(new RegExp(`^chromedp/headless-shell:${config.version.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`));
-        for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build", "command", "entrypoint", "volumes"]) expect(s[key]).toBeUndefined();
-        expect(s.user).toBe("1000:1000");
-        expect(s.read_only).toBe(true);
-        expect(s.cap_drop).toEqual(["ALL"]);
-        expect(s.security_opt).toEqual(["no-new-privileges:true"]);
-        expect(s.init).toBe(true);
-        // Unauthenticated DevTools: loopback-only on the host, Runtipi network for other apps.
+      test("Reader front preserves private pinned Chrome and agent network endpoint", () => {
+        const s = compose.services[id], engine = compose.services["browser-engine"], reader = compose.services["browser-reader"];
+        expect(Object.keys(compose.services).sort()).toEqual(["browser", "browser-engine", "browser-reader"]);
+        expect(engine.image).toMatch(/^chromedp\/headless-shell:155\.0\.8059\.40@sha256:[a-f0-9]{64}$/);
+        expect(s.image).toMatch(/^python:3\.12-alpine@sha256:[a-f0-9]{64}$/);
+        expect(reader.image).toMatch(/^ghcr\.io\/humanitylabs-org\/browser-reader:/);
+        for (const service of [s, engine, reader]) {
+          expect(service.read_only).toBe(true);
+          expect(service.cap_drop).toEqual(["ALL"]);
+          expect(service.security_opt).toEqual(["no-new-privileges:true"]);
+          for (const key of ["privileged", "network_mode", "pid", "devices", "cap_add", "build"]) expect(service[key]).toBeUndefined();
+        }
+        expect(s.volumes).toBeUndefined();
+        expect(engine.volumes).toBeUndefined();
+        expect(reader.volumes).toEqual(["reading-list:/data"]);
+        expect(compose.volumes).toEqual({"reading-list": {}});
+        expect(reader.environment.READER_DATA_DIR).toBe("/data");
+        expect(reader.tmpfs).toContain("/tmp:rw,nosuid,nodev,noexec,size=64m");
+        expect(engine.user).toBe("1000:1000");
+        expect(engine.init).toBe(true);
+        expect(engine.ports).toBeUndefined();
+        expect(reader.ports).toBeUndefined();
         expect(s.ports).toEqual(["127.0.0.1:${APP_PORT}:9222"]);
         expect(s["x-runtipi"]).toEqual({is_main: true});
-        expect(parseInt(s.mem_limit)).toBeGreaterThanOrEqual(4);
-        expect(s.memswap_limit).toBe(s.mem_limit);
-        expect(s.pids_limit).toBeGreaterThanOrEqual(1024);
-        expect(s.shm_size).toBe("2g");
+        expect(s.environment.UPSTREAM_HOST).toBe("browser-engine");
+        expect(reader.environment.READER_DENY_PROXY).toBe("http://browser-reader:8081");
+        const code = s.command.join("\n");
+        expect(code).toContain("DevTools and MCP are private agent interfaces");
+        expect(code).toContain("async def relay_once");
+        expect(code).toContain('"/api/reader"');
+        expect(parseInt(engine.mem_limit)).toBeGreaterThanOrEqual(4);
+        expect(engine.memswap_limit).toBe(engine.mem_limit);
+        expect(engine.pids_limit).toBeGreaterThanOrEqual(1024);
+        expect(engine.shm_size).toBe("2g");
         expect(config.exposable).toBe(false);
+        expect(config.no_gui).toBe(false);
+        expect(config.wizard_type).toBe("view");
         expect(config.form_fields).toEqual([]);
-        expect([8787, 8791, 8792, 9119, 9120]).not.toContain(config.port);
       });
     }
     if (id === "files") {

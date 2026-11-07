@@ -34,7 +34,7 @@ import inference
 
 import usage
 
-VERSION = "0.2.2"
+VERSION = "0.2.24"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
@@ -64,20 +64,37 @@ class Renew:
     as the page's Test button). This app never refreshes a token. At most one attempt per RENEW_GAP_S."""
     lock = threading.Lock()
     at = 0.0
+    thread: threading.Thread | None = None
 
 
 RENEW_GAP_S = 600
 
 
-def renew_if_expired(answer: dict) -> dict:
+def renew_if_expired(answer: dict, reader=None) -> dict:
     if answer.get("status") != "expired" or os.environ.get("WIZARD_CLAUDE_AUTO_RENEW", "1") == "0":
         return answer
     with Renew.lock:
+        if Renew.thread is not None and Renew.thread.is_alive():
+            return {**answer, "status": "renewing"}
         if time.monotonic() - Renew.at < RENEW_GAP_S and Renew.at:
             return answer
-        Renew.at = time.monotonic()
-    code, _ = run_test()
-    return CONNECTION.read() if code == 200 else answer
+        # Only scheduling happens on the HTTP thread. The official CLI may take
+        # 120 seconds; never hold a GET (or this lock) through its execution.
+        Renew.thread = threading.Thread(target=_renew, args=(reader or CONNECTION,), daemon=True)
+        Renew.thread.start()
+    return {**answer, "status": "renewing"}
+
+
+def _renew(reader):
+    try:
+        code, _ = run_test()
+        if code == 200:
+            reader.read()  # same credential owner; the next GET reads fresh state
+    except Exception:
+        pass  # Never expose CLI/challenge output; expired state remains readable.
+    finally:
+        with Renew.lock:
+            Renew.at = time.monotonic()  # completion-based cooldown, including failure
 
 
 CONNECTION = usage.ConnectionReader(CLAUDE_DIR, os.environ.get("WIZARD_CLAUDE_USAGE_URL", usage.USAGE_URL))
@@ -232,6 +249,7 @@ class State:
     login: Login | None = None
     login_id = ""
     busy = threading.Lock()  # one test/logout at a time
+    after_sign_in = None  # set by the pool server: make the new sign-in the agent's model when it has none
 
 
 def end_login():
@@ -268,6 +286,11 @@ def submit_code(login_id: str, code: str) -> tuple[int, dict]:
             return 409, {"ok": False, "message": "This sign-in expired. Press Connect again."}
         result = login.submit(code)
         State.login, State.login_id = None, ""
+    if result["ok"] and State.after_sign_in is not None:
+        try:
+            result = {**result, "agent_default": State.after_sign_in()}
+        except Exception:
+            pass
     return (200 if result["ok"] else 400), {**result, "claude": claude_status()}
 
 

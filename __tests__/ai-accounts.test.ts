@@ -10,7 +10,8 @@ const hermes = parse(readFileSync("apps/hermes-agent/docker-compose.yml", "utf8"
 const workflow = parse(readFileSync(".github/workflows/ai-accounts.yml", "utf8"));
 
 test("private, versioned, own port, optional page password", () => {
-  expect(config.available).toBe(true);
+  expect(config.available).toBe(false);
+  expect(config.description).toContain("Deprecated");
   expect(config.exposable).toBe(false);
   expect(config.port).toBe(8795);
   for (const other of readdirSync("apps").filter((d) => d !== id)) {
@@ -41,12 +42,18 @@ test("bounded, unprivileged, read-only; only the shared login volume", () => {
   expect(JSON.stringify(compose)).not.toContain("/media");
 });
 
-test("the login volume is declared identically in both apps, with a fixed name", () => {
-  const volume = { "claude-login": { name: "wizard-ai-accounts-claude" } };
-  expect(compose.volumes).toEqual(volume);
-  expect(hermes.volumes).toEqual(volume);
-  expect(hermes.services["hermes-agent"].volumes).toContain("claude-login:/claude");
-  // Both sides run as 1000:1000 so Claude Code can refresh the login in place from either app.
+test("legacy AI Accounts keeps its volume for migration; Hermes consumes only the Claude app share", () => {
+  expect(compose.volumes).toEqual({ "claude-login": { name: "wizard-ai-accounts-claude" } });
+  expect(hermes.volumes).toBeUndefined();
+  expect(hermes.services["hermes-agent"].volumes).toEqual(["${APP_DATA_DIR}/data:/opt/data"]);
+  const text = readFileSync("apps/hermes-agent/wizard.md", "utf8");
+  const manifest = parse(text.split("---", 3)[1]!);
+  expect(manifest.id).toBe("hermes-agent");
+  expect(manifest.runtime).toEqual({ kind: "runtipi", config: "config.json", compose: "docker-compose.yml" });
+  expect(manifest.mounts).toEqual([{ app: "wizard-claude", share: "claude-login", path: "/claude" }]);
+  expect(JSON.stringify(hermes)).not.toContain("wizard-ai-accounts-claude");
+  expect(JSON.stringify(hermes)).not.toContain("claude-login:/claude");
+  // Official Claude Code processes use the same UID/GID and whole-directory refresh lock.
   expect(hermes.services["hermes-agent"].environment.HERMES_UID).toBe("1000");
   expect(hermes.services["hermes-agent"].environment.HERMES_GID).toBe("1000");
   expect(config.uid).toBe(1000);

@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 CONTRACT = "wizard.ai-connection/1"
 IDENTITY = {"provider": "claude", "name": "Claude"}
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 CACHE_S = 60
 STALE_LIMIT_S = 30 * 60
 TIMEOUT_S = 8
@@ -311,11 +312,36 @@ class ConnectionReader:
         self.result: dict | None = None
         self.last_good: dict | None = None
         self.last_good_at = 0.0
+        self.profile_for, self.profile_at, self.email, self.live_plan = "", 0.0, None, None
 
-    def account(self) -> str | None:
+    def profile(self, token: str) -> tuple:
+        """(email, plan) from Anthropic's profile, at most every 10 min per sign-in. The plan stored in the
+        credentials file is written at sign-in and never updated, so an upgrade (Pro -> Max) only shows live."""
+        if not token or not self.usage_url.endswith("/api/oauth/usage"):
+            return None, None
+        login = hashlib.sha256(token.encode()).hexdigest()
+        now = self.now()
+        if self.profile_for == login and now - self.profile_at < 600:
+            return self.email, self.live_plan
+        email = plan = None
+        try:
+            payload = get_usage(self.usage_url[: -len("/usage")] + "/profile", token, self.timeout_s)
+            raw = js_str(get(get(payload, "account"), "email")).strip()
+            email = raw[:120] if "@" in raw and len(raw) <= 120 and not any(c.isspace() for c in raw) else None
+            org = get(payload, "organization")
+            kind = js_str(get(org, "organization_type")).strip().lower()
+            plan = CLAUDE_TIERS.get(js_str(get(org, "rate_limit_tier")).strip()) \
+                or CLAUDE_SUBSCRIPTIONS.get(kind[len("claude_"):] if kind.startswith("claude_") else kind)
+        except Exception:  # noqa: BLE001 - a missing label never breaks status or usage
+            email = plan = None
+        self.profile_for, self.profile_at, self.email, self.live_plan = login, now, email, plan
+        return email, plan
+
+    def account(self, token: str = "") -> str | None:
         acct = get(read_json(self.account_path), "oauthAccount")
         label = js_str(get(acct, "emailAddress") or get(acct, "organizationName")).strip()[:120]
-        return label or None
+        # No .claude.json (e.g. a host login dir): Anthropic's profile has the signed-in email.
+        return label or self.profile(token)[0]
 
     def base(self, status, plan=None, account=None, usage=None, error=None) -> dict:
         return {"contract": CONTRACT, **IDENTITY, "status": status, "plan": plan, "account": account,
@@ -328,11 +354,12 @@ class ConnectionReader:
             with self.lock:
                 self.login, self.result, self.last_good = "", None, None
             return self.base("not_connected", error=SIGNED_OUT)
-        plan, account = claude_plan(creds), self.account()
+        plan = claude_plan(creds)
         expires = creds.get("expiresAt")
         now = self.now()
         if is_finite_number(expires) and expires <= now * 1000:
-            return self.base("expired", plan, account, error=EXPIRED)
+            return self.base("expired", plan, self.account(), error=EXPIRED)
+        plan, account = self.profile(token)[1] or plan, self.account(token)
         login = hashlib.sha256(token.encode()).hexdigest()
         with self.lock:  # one provider request at a time; concurrent callers share its result
             if login != self.login:

@@ -1,0 +1,86 @@
+/* App-specific styles only. Type, rows, colours and skins come from wizard-ui.css (kit variables only);
+ * window-width layout, pills, meters, the status card and the sheet come from wizard-layout.css. */
+[hidden] { display: none !important; }
+
+/* Status card: the service's own logo fills its tile. */
+.wz-conn .sigil { overflow: hidden; padding: 0; background: none; }
+.wz-conn .sigil img { width: 100%; height: 100%; display: block; }
+.wz-sec { margin-top: var(--wz-space-3); }
+
+.wz-sec-h .wz-count { margin-left: 0; }
+.wz-sec-h .icon-btn { margin-left: auto; }
+.icon-btn { width: 44px; height: 44px; margin: -10px -6px -10px auto; border-radius: 50%; display: grid; place-items: center; color: var(--ink-3); }
+.icon-btn:hover { background: var(--fill); color: var(--ink); }
+.icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn.spin svg { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Accounts: one list row per account at every width (connector pattern). Usage meters sit under the
+ * name when the window is narrow and beside it, in the same row, when it is wide. */
+.acct { min-width: 0; padding: 2px 0; }
+.acct + .acct { border-top: 1px solid var(--line); }
+.acct > .wz-row { flex-wrap: wrap; row-gap: var(--wz-space-2); }
+.acct > .wz-row .wz-tile { font-weight: 700; color: var(--accent); background: var(--accent-soft); }
+.acct > div.wz-row, .acct > div.wz-row:hover, .acct > div.wz-row:active { cursor: default; background: none; }
+.acct .wz-main b { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.acct .wz-main b .name, .acct .wz-main small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+/* The plan is the first thing that explains different limits, so it is a visible chip, not small print. */
+.acct .plan { flex: none; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 18px; color: var(--accent); background: var(--accent-soft); }
+.acct .back { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.acct .chev { flex: none; color: var(--ink-3); font-size: 20px; line-height: 1; }
+.acct .wz-pill { flex: none; }
+.acct .use { order: 9; flex: 1 0 100%; min-width: 0; display: grid; gap: var(--wz-space-2); padding: 0 0 4px 48px; }
+.acct .use .muted { display: block; }
+.acct .wz-meter > span { display: flex; flex-wrap: wrap; gap: 0 6px; }
+.acct .meter-val { color: var(--ink); font-variant-numeric: tabular-nums; }
+.acct .wz-meter > span > span + span::before { content: "·"; margin-right: 6px; color: var(--ink-3); }
+.acct > .link { margin: 0 8px 4px 56px; }
+.wz-meter.hot > i > b { background: var(--danger); }
+.muted { font-size: 13px; color: var(--ink-3); }
+/* The agent orders accounts on its own (soonest reset first); one quiet line says so under the list. */
+.order-note { margin: var(--wz-space-2) 8px 0; font-size: var(--wz-text-sm, .8125rem); line-height: 1.45; color: var(--ink-3); }
+.link { width: fit-content; min-height: 44px; display: inline-flex; align-items: center; color: var(--accent); font-weight: 600; text-decoration: none; }
+.link.danger { color: var(--danger); }
+.link:disabled { opacity: .45; cursor: default; }
+@container wz-app (max-width: 439px) { .acct .use { padding-left: 0; } .acct > .link { margin-left: 8px; } }
+@container wz-app (min-width: 600px) {
+  /* Same columns in every row, so the meters and pills line up down the list. */
+  .acct > .wz-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) minmax(200px, 38%) 132px 12px; column-gap: var(--wz-space-3); }
+  .acct .use { order: 0; padding: 4px 0; }
+  .acct .wz-pill { justify-self: end; }
+}
+@container wz-app (min-width: 960px) { .acct > .wz-row { grid-template-columns: 36px minmax(0, 1fr) minmax(260px, 420px) 132px 12px; } }
+
+.wz-actions .wz-button { min-width: 160px; }
+@container wz-app (max-width: 599px) { .wz-actions .wz-button { flex: 1; } }
+.wz-button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.wz-button.danger { background: var(--danger); color: var(--on-accent); }
+.problem strong { font-weight: 600; font-size: 15px; line-height: 1.4; max-width: 34ch; margin: 0 auto 16px; }
+
+/* Details: ids, scopes and diagnostics, collapsed. */
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; padding: 0 8px 8px; }
+.facts dt { color: var(--ink-3); }
+.facts dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+
+/* Sheets: per-account actions and the sign-in steps. */
+.dlg-text { margin: 0 0 14px; font-size: 14px; line-height: 1.45; color: var(--ink-2); }
+.dlg-text:empty { display: none; }
+.grants { display: grid; }
+.acct-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.acct-actions:not(:has(> :not([hidden]))) { display: none; }
+.grant { display: flex; align-items: center; gap: 14px; padding: 4px 0; border-top: 1px solid var(--line); }
+.grant-name { flex: 1; min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.field { display: grid; gap: 6px; margin-bottom: 14px; font-size: 13px; color: var(--ink-2); }
+.steps { margin: 0 0 14px; padding: 0; list-style: none; display: grid; gap: 20px; }
+.steps li { display: grid; gap: 8px; font-size: 14px; color: var(--ink-2); }
+.steps .wz-button { width: 100%; }
+.code-row { display: flex; gap: 8px; align-items: stretch; }
+.code-row .wz-button { width: auto; min-width: 84px; }
+.code { flex: 1; min-height: 52px; display: grid; place-items: center; border-radius: var(--r); background: var(--fill); font: 700 24px/1 var(--wz-font-mono); letter-spacing: .12em; color: var(--ink); user-select: all; }
+.code-row .wz-input { flex: 1; height: auto; min-height: 44px; }
+.dlg-status { min-height: 20px; margin: 0 0 14px; font-size: 13px; line-height: 1.45; color: var(--ink-3); }
+.dlg-status.err { color: var(--danger); }
+.dlg-status.ok { color: var(--accent); }
+.dlg-status.wait::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); vertical-align: 1px; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.dlg-actions { display: flex; justify-content: flex-end; gap: 8px; }

@@ -181,10 +181,18 @@ def two_apps(tmp: Path):
     try:
         for app, image in (("wizard-ai-accounts", AIA), ("hermes-agent", HERMES)):
             c = translated(app)
-            assert c["volumes"] == {"claude-login": {"name": "wizard-ai-accounts-claude"}}, c["volumes"]
-            c["volumes"]["claude-login"]["name"] = vol  # test-only name, never the real one
-            c["networks"]["tipi_main_network"] = {"name": net, "external": True}
             s = c["services"][app]
+            if app == "hermes-agent":
+                # Hermes no longer declares the login; App Manager adds /claude only after the owner grants
+                # the claude-login share. Simulate that grant with the same test volume.
+                assert "claude-login" not in (c.get("volumes") or {}), c.get("volumes")
+                assert not any(str(v).split(":")[1:2] == ["/claude"] for v in s.get("volumes", [])), s.get("volumes")
+                c.setdefault("volumes", {})["claude-login"] = {"name": vol}
+                s.setdefault("volumes", []).append("claude-login:/claude")
+            else:
+                assert c["volumes"] == {"claude-login": {"name": "wizard-ai-accounts-claude"}}, c["volumes"]
+                c["volumes"]["claude-login"]["name"] = vol  # test-only name, never the real one
+            c["networks"]["tipi_main_network"] = {"name": net, "external": True}
             s["image"] = image
             s["ports"] = ["127.0.0.1::" + s["ports"][0].split(":")[-1]]
             s.pop("labels", None)

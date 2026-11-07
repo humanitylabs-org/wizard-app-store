@@ -1,8 +1,11 @@
 """Focused purchased-credit regressions. Synthetic data only; no login files or real network."""
 import json
+import os
+import sys
 import unittest
 from unittest.mock import patch
-import usage
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import usage  # noqa: E402
 
 URL = 'https://api.anthropic.com/api/oauth/usage'
 ORG = '00000000-0000-0000-0000-000000000001'

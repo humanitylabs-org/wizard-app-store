@@ -1,0 +1,45 @@
+/* Wizard app layout rules v0 (wizard-os style/APP-DESIGN-RULES.md, PR humanitylabs-org/wizard-os#265).
+ * Vendored copy for apps until the shell's live kit (/wizard-os-home/kit/wizard-ui.css) carries these rules.
+ * Load AFTER wizard-ui.css and BEFORE the app's styles.css. Delete this file once the live kit has them. */
+.wz-app { max-width: none; margin: 0; }
+/* The window is the page (APP-DESIGN-RULES.md rule 1-2): no max-width; columns grow with the window, measured on .wz-app. */
+.wz-app { --wz-gutter: 12px; display: flex; flex-direction: column; height: 100%; container: wz-app / inline-size; }
+@container wz-app (min-width: 600px) { .wz-scroll, .wz-head { --wz-gutter: 20px; } }
+@container wz-app (min-width: 960px) { .wz-scroll, .wz-head { --wz-gutter: 28px; } }
+.wz-scroll { padding-left: var(--wz-gutter, 10px); padding-right: var(--wz-gutter, 10px); }
+
+/* ---------- layout helpers (rules 1, 2, 5) ---------- */
+.wz-grid { display: grid; gap: var(--wz-space-3); grid-template-columns: 1fr; }
+@container wz-app (min-width: 600px) { .wz-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container wz-app (min-width: 960px) { .wz-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); } }
+.wz-prose { max-width: 72ch; }
+.wz-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--r-pill); font-size: 12.5px; font-weight: 650; color: var(--ink-2); background: var(--fill); white-space: nowrap; }
+.wz-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.wz-pill.ok { color: var(--wz-success, var(--accent)); }
+.wz-pill.warn { color: var(--wz-warning, var(--danger)); }
+.wz-pill.off { color: var(--ink-3); }
+.wz-meter { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-3); }
+.wz-meter > i { display: block; height: 6px; border-radius: 3px; background: var(--fill-2); overflow: hidden; }
+.wz-meter > i > b { display: block; height: 100%; width: var(--v, 0%); border-radius: inherit; background: var(--accent); }
+.wz-conn { display: flex; align-items: center; gap: var(--wz-space-3); padding: var(--wz-space-4); border: 1px solid var(--line); border-radius: var(--r); background: var(--fill); }
+.wz-conn .wz-tile { width: 48px; height: 48px; border-radius: 14px; }
+.wz-conn .wz-main { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.wz-conn .wz-main b { font-size: 17px; font-weight: 700; }
+.wz-conn .wz-main small { font-size: 13px; color: var(--ink-3); }
+.wz-actions { display: flex; flex-wrap: wrap; gap: var(--wz-space-2); padding: var(--wz-space-3) 0; }
+.wz-more { margin-top: var(--wz-space-4); color: var(--ink-3); font-size: 13px; }
+.wz-more > summary { cursor: pointer; padding: 8px; list-style: none; font-weight: 650; color: var(--ink-2); }
+.wz-more > summary::-webkit-details-marker { display: none; }
+
+/* ---------- the one pop-up (rule 4): bottom sheet when narrow, centred card when wide. Behaviour: style/sheet.js ---------- */
+.wz-sheet { color: var(--ink); background: var(--wz-overlay); border: 1px solid var(--line-2); border-radius: var(--r); padding: var(--wz-space-4); width: min(520px, calc(100% - 24px)); max-width: none; max-height: 85%; overflow: auto; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+.wz-sheet::backdrop { background: color-mix(in srgb, var(--wz-base) 74%, transparent); }
+.wz-sheet-x { position: sticky; top: 0; float: right; width: 36px; height: 36px; margin: -6px -6px 0 8px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-2); background: var(--fill); font-size: 18px; line-height: 1; z-index: 1; }
+.wz-sheet-grip { display: none; }
+.wz-sheet > h2 { margin: 0 0 var(--wz-space-3); font-size: 17px; font-weight: 700; }
+@media (max-width: 599px) {
+  .wz-sheet { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 22px 22px 0 0; border-bottom: 0; max-height: 88%; padding: 6px var(--wz-space-4) calc(var(--wz-space-4) + env(safe-area-inset-bottom, 0px)); }
+  .wz-sheet[open] { animation: wz-sheet-up 220ms var(--ease, ease-out); }
+  .wz-sheet-grip { display: block; width: 40px; height: 5px; margin: 4px auto 10px; border-radius: 3px; background: var(--line-2); touch-action: none; }
+}
+@keyframes wz-sheet-up { from { transform: translateY(40px); opacity: .6; } }
