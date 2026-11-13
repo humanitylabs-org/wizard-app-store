@@ -10,6 +10,7 @@ for (const path of [
   "images/wizard-chatgpt/pool-static/index.html",
   "images/wizard-claude/static/index.html",
   "images/wizard-chatgpt/static/index.html",
+  "images/wizard-tinfoil/web/index.html",
 ]) {
   test(`${path}: loads the shared app client before its own scripts`, () => {
     const head = readFileSync(path, "utf8").split("</head>")[0]!;

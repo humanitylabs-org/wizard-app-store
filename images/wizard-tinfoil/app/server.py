@@ -229,6 +229,10 @@ def rpc(m):
     else: return {'jsonrpc':'2.0','id':i,'error':{'code':-32602,'message':'Unknown method, tool or arguments.'}}
     return {'jsonrpc':'2.0','id':i,'result':r}
 
+def web_asset(path):
+    name=path[1:]
+    return path.startswith('/') and name!='index.html' and '/' not in name and not name.startswith('.') and Path(name).suffix in TYPES and (ROOT/'web'/name).is_file()
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*a): pass
     def send(self,code,obj=None,kind='application/json'):
@@ -240,6 +244,9 @@ class Handler(BaseHTTPRequestHandler):
     def refused(self,path,write=False):
         if self.headers.get('Host','').lower() not in HOSTS: self.send(403,{'error':'Untrusted host.'}); return True
         origin=self.headers.get('Origin','').lower()
+        # Under the browser boundary (wizard-os#133) the page runs in a sandboxed window: its scripts and styles load
+        # cross-site with Origin null. Those public files (never the page itself, the API or a write) still load.
+        if self.command in ('GET','HEAD') and web_asset(path) and origin in ('','null'): return False
         if origin and origin not in ORIGINS or self.headers.get('Sec-Fetch-Site')=='cross-site': self.send(403,{'error':'Cross-site request refused.'}); return True
         if path=='/mcp' or path=='/api/connection' or path.startswith('/v1/'):
             if any(k.lower() in {'tailscale-user-login','x-forwarded-for','forwarded','x-real-ip'} or k.lower().startswith('cf-') for k in self.headers): self.send(403,{'error':'Box-only endpoint.'}); return True
