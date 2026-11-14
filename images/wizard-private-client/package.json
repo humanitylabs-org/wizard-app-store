@@ -1,0 +1,9 @@
+{
+  "name": "wizard-private-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {"start": "node server.mjs", "test": "node --test tests/*.unit.mjs"},
+  "dependencies": {"tinfoil": "1.2.2", "ehbp": "0.3.3"}
+}
