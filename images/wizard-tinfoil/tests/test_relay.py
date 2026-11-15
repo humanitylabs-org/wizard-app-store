@@ -88,6 +88,7 @@ class RelayTests(unittest.TestCase):
 
     def test_management_refuses_relay_peer_even_with_owner_headers(self):
         handler = object.__new__(s.Handler)
+        handler.command = 'GET'
         handler.client_address = ('10.252.4.3', 1234)
         handler.headers = {'Host':'localhost:18804','Origin':'http://localhost:18804','X-Wizard-Request':'1'}
         with patch.object(handler, 'send') as send:
