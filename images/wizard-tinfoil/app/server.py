@@ -84,12 +84,11 @@ def stored():
     try: return json.loads((DATA/'connection.json').read_text())
     except FileNotFoundError: return None
 
-# Relay mode for the Private agent (wizard-os spec/PRIVATE_PROVIDERS.md, DECISIONS #66), behind the off-by-default
-# 'private-relay' switch. The Agent Service mints one client token per private agent (box-only route); only its
+# Relay mode for the Private agent (wizard-os spec/PRIVATE_PROVIDERS.md, DECISIONS #66), on for everyone (its
+# 'private-relay' switch was retired in wizard-tinfoil#16). The Agent Service mints one client token per private agent (box-only route); only its
 # SHA-256 is stored. A token works only on the ciphertext relay (app/relay.py, relay_port 8090), never on /v1 or /api.
-RELAY_SWITCH = 'private-relay'
 RELAY_PORT = 8090
-def relay_on(): return switch_on(RELAY_SWITCH)
+RETIRED_SWITCHES = ('private-relay',)  # now always on; forget any saved on/off value
 
 def private_clients():
     try: return json.loads((DATA/'private-clients.json').read_text())
@@ -117,7 +116,7 @@ def revoke_private_client(agent):
         atomic('private-clients.json', clients)
 
 def private_token_ok(token):
-    if not relay_on() or not isinstance(token, str) or not 43 <= len(token) <= 128: return False
+    if not isinstance(token, str) or not 43 <= len(token) <= 128: return False
     digest = hashlib.sha256(token.encode()).hexdigest()
     return any(hmac.compare_digest(digest, saved) for saved in private_clients().values())
 
@@ -283,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.command!='HEAD': self.wfile.write(b)
     def refused(self,path,write=False):
         # Relay-network peers (10.252.x) only ever reach the relay port, never management.
-        if relay_on() and self.client_address[0].startswith('10.252.'):
+        if self.client_address[0].startswith('10.252.'):
             self.send(403,{'error':'Box-only endpoint.'}); return True
         if self.headers.get('Host','').lower() not in HOSTS: self.send(403,{'error':'Untrusted host.'}); return True
         origin=self.headers.get('Origin','').lower()
@@ -312,7 +311,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         path=urlsplit(self.path).path
         if self.refused(path,True): return
-        if not relay_on() or not path.startswith('/api/private-clients/'): return self.send(404,{'error':'Not found.'})
+        if not path.startswith('/api/private-clients/'): return self.send(404,{'error':'Not found.'})
         try: revoke_private_client(path[len('/api/private-clients/'):])
         except ValueError: return self.send(400,{'error':'Invalid agent id.'})
         self.send(204,b'')
@@ -326,7 +325,6 @@ class Handler(BaseHTTPRequestHandler):
             body=json.loads(self.rfile.read(n))
             if not isinstance(body,dict): raise ValueError()
             if path=='/api/private-clients':
-                if not relay_on(): return self.send(404,{'error':'Not found.'})
                 if set(body)!={'agent'}: raise ValueError()
                 return self.send(200,private_client(body['agent']))
             if path=='/mcp':
@@ -453,12 +451,7 @@ import time as _sw_time
 from pathlib import Path as _SwPath
 from urllib.parse import urlsplit as _sw_urlsplit
 
-SWITCHES = [
-    {'id': 'private-relay', 'name': 'Private agent relay',
-     'description': "Lets the Private agent use Tinfoil through an encrypted relay: this app forwards only ciphertext "
-                    "and keeps the key. Off: the relay port and /api/private-clients answer 404.",
-     'default': False, 'issues': ['humanitylabs-org/wizard-tinfoil#2']},
-]
+SWITCHES = []
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
 _SW_LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}
@@ -622,10 +615,21 @@ def wizard_switches_install(handler_cls):
 wizard_switches_install(Handler)
 
 
+def forget_retired_switches():
+    """Drop saved values of switches that are now always on, so switches.json holds no stale private-relay entry."""
+    saved = _sw_saved()
+    if not any(k in saved for k in RETIRED_SWITCHES): return
+    with _sw_lock:
+        f = _sw_file(); tmp = f.with_name(f.name + '.tmp')
+        tmp.write_text(json.dumps({k: v for k, v in saved.items() if k not in RETIRED_SWITCHES}))
+        os.replace(tmp, f)
+
+
 if __name__=='__main__':
     initialize()
-    # Always listening so the switch works without a restart; with the switch off every request gets 404.
-    private_relay = relay.make_server(('0.0.0.0',RELAY_PORT),private_token_ok,stored,relay_on)
+    try: forget_retired_switches()
+    except OSError: pass
+    private_relay = relay.make_server(('0.0.0.0',RELAY_PORT),private_token_ok,stored)
     threading.Thread(target=private_relay.serve_forever, daemon=True).start()
     threading.Thread(target=reconcile, daemon=True).start()
     threading.Thread(target=refresh_models, daemon=True).start()

@@ -26,27 +26,23 @@ class RelayTests(unittest.TestCase):
         s.initialize()
         self.env = patch.dict(os.environ, {'WIZARD_SWITCHES_DIR': self.temp.name})
         self.env.start()
-        self.set_switch(True)
 
     def tearDown(self):
         self.env.stop()
         self.temp.cleanup()
 
-    def set_switch(self, on):
-        (Path(self.temp.name)/'switches.json').write_text(json.dumps({'private-relay': on}))
-
-    def test_switch_declared_off_by_default_with_issue(self):
-        (Path(self.temp.name)/'switches.json').unlink()
-        sw = next(x for x in s.switches_doc()['switches'] if x['id'] == 'private-relay')
-        self.assertFalse(sw['default']); self.assertFalse(sw['on'])
-        self.assertEqual(sw['issues'], ['humanitylabs-org/wizard-tinfoil#2'])
-        self.assertFalse(s.relay_on())
-
-    def test_switch_off_tokens_never_admitted(self):
+    def test_relay_always_on_switch_retired(self):
+        # wizard-tinfoil#16: private-relay is on for everyone; a saved 'off' no longer matters and is forgotten.
+        self.assertEqual(s.switches_doc()['switches'], [])
+        self.assertFalse(hasattr(s, 'relay_on'))
+        f = Path(self.temp.name)/'switches.json'
+        f.write_text(json.dumps({'private-relay': False, 'other': True}))
         token = s.private_client('agent-one')['token']
         self.assertTrue(s.private_token_ok(token))
-        self.set_switch(False)
-        self.assertFalse(s.private_token_ok(token))
+        s.forget_retired_switches()
+        self.assertEqual(json.loads(f.read_text()), {'other': True})
+        s.forget_retired_switches()  # idempotent, and fine with no file
+        f.unlink(); s.forget_retired_switches(); self.assertFalse(f.exists())
 
     def test_token_rotate_revoke_restart_hash_only(self):
         first = s.private_client('agent-one')
@@ -97,9 +93,6 @@ class RelayTests(unittest.TestCase):
         handler.headers = {'Host': f'localhost:{s.PORT}'}
         with patch.object(handler, 'send'):
             self.assertTrue(handler.refused('/healthz'))
-        self.set_switch(False)  # off: today's management behaviour, unchanged
-        with patch.object(handler, 'send'):
-            self.assertFalse(handler.refused('/healthz'))
 
     def test_strict_enclave_origin(self):
         for good in ('https://inference.tinfoil.sh', 'https://enclave-1.tinfoil.sh/', 'https://a.b.tinfoil.sh:443'):
@@ -124,7 +117,7 @@ class RelayTests(unittest.TestCase):
             def send(self, data): calls.append(('body', data))
             def getresponse(self): return Response()
             def close(self): pass
-        http = s.relay.make_server(('127.0.0.1', 0), s.private_token_ok, s.stored, s.relay_on)
+        http = s.relay.make_server(('127.0.0.1', 0), s.private_token_ok, s.stored)
         threading.Thread(target=http.serve_forever, daemon=True).start()
         def call(path, method='GET', body=None, headers=None):
             c = http_module.HTTPConnection('127.0.0.1', http.server_port, timeout=3)
@@ -133,13 +126,6 @@ class RelayTests(unittest.TestCase):
         http_module = __import__('http.client', fromlist=['HTTPConnection'])
         log = io.StringIO()
         try:
-            self.set_switch(False)
-            with contextlib.redirect_stderr(log), patch.object(s.relay, 'peer_allowed', return_value=True), patch.object(s.relay.http.client, 'HTTPSConnection', Connection):
-                self.assertEqual(call('/healthz')[0], 404)
-                self.assertEqual(call('/attestation', headers={'Authorization':'Bearer '+token})[0], 404)
-                self.assertEqual(call('/v1/chat/completions','POST', b'ciphertext', {'Authorization': 'Bearer '+token, 'X-Tinfoil-Enclave-Url':'https://inference.tinfoil.sh', 'Ehbp-Encapsulated-Key':'k'})[0], 404)
-            self.assertEqual(calls, [])
-            self.set_switch(True)
             with contextlib.redirect_stderr(log), patch.object(s.relay, 'peer_allowed', return_value=False):
                 self.assertEqual(call('/healthz')[0], 403)
             with contextlib.redirect_stderr(log), patch.object(s.relay, 'peer_allowed', return_value=True), patch.object(s.relay.http.client, 'HTTPSConnection', Connection):
@@ -185,11 +171,6 @@ class RelayTests(unittest.TestCase):
         http_client = __import__('http.client', fromlist=['HTTPConnection'])
         try:
             valid={'Origin':base,'X-Wizard-Request':'1','Content-Type':'application/json'}
-            self.set_switch(False)
-            self.assertEqual(call('POST','/api/private-clients',valid,'{"agent":"probe"}')[0],404)
-            self.assertEqual(call('DELETE','/api/private-clients/probe',valid)[0],404)
-            self.assertFalse((s.DATA/'private-clients.json').exists())
-            self.set_switch(True)
             for bad in ({}, {**valid,'Origin':'https://evil.invalid'}, {**valid,'Host':'evil.invalid'}, {**valid,'X-Wizard-Request':''}, {**valid,'Sec-Fetch-Site':'cross-site'}, {**valid,'X-Forwarded-For':'10.252.4.10'}):
                 self.assertEqual(call('POST','/api/private-clients',bad,'{"agent":"probe"}')[0],403)
                 self.assertEqual(call('DELETE','/api/private-clients/probe',bad)[0],403)
