@@ -83,8 +83,7 @@ def upstream_connection(host):
     return upstream
 
 
-def make_server(address, token_ok, connection, enabled=lambda: True):
-    """enabled() is read on every request: off answers 404 to everyone, before any check or upstream call."""
+def make_server(address, token_ok, connection):
     class RelayHandler(BaseHTTPRequestHandler):
         # HTTP/1.0 connection-close response framing also works for streams.
         def log_message(self, *args): pass
@@ -103,8 +102,6 @@ def make_server(address, token_ok, connection, enabled=lambda: True):
             self.wfile.write(body)
 
         def admitted(self):
-            if not enabled():
-                self.reply(404); return False
             if not peer_allowed(self.client_address[0]):
                 self.reply(403); return False
             if self.command == 'GET' and self.path == '/healthz':

@@ -174,7 +174,7 @@
     },
     "/api/private-clients": {
       "post": {
-        "description": "Box-only (Agent Service): mint or rotate the relay client token for one private agent. Only its SHA-256 is stored; the token works only on the relay port (8090). Needs the off-by-default 'private-relay' switch; off: 404.",
+        "description": "Box-only (Agent Service): mint or rotate the relay client token for one private agent. Only its SHA-256 is stored; the token works only on the relay port (8090).",
         "requestBody": {
           "required": true,
           "content": {
@@ -204,16 +204,13 @@
           },
           "403": {
             "description": "Forwarded, cross-site or relay-network request"
-          },
-          "404": {
-            "description": "private-relay switch off"
           }
         }
       }
     },
     "/api/private-clients/{agent}": {
       "delete": {
-        "description": "Box-only (Agent Service): revoke one private agent's relay token. Idempotent. Off switch: 404.",
+        "description": "Box-only (Agent Service): revoke one private agent's relay token. Idempotent.",
         "parameters": [
           {
             "name": "agent",
@@ -230,9 +227,6 @@
           },
           "400": {
             "description": "Invalid agent id"
-          },
-          "404": {
-            "description": "private-relay switch off"
           }
         }
       }
