@@ -361,5 +361,58 @@ class ChatGPTSignInBecomesAgentModel(Base):
         self.assertNotIn('agentDefault', self.get('/api/operations/' + 'o' * 24)[1])
         self.assertEqual(ModelDashboard.seen, [])
 
+class PrivateFirstDashboard(ModelDashboard):
+    """The main Hermes whose wizard-os plugin says private first is on (wizard-os DECISIONS #115)."""
+    standard = []
+    answer = {'ok': True, 'agent': 'hermes'}
+
+    def do_GET(self):
+        if self.path == '/api/plugins/wizard-os/private-first' and 'session=ok' in (self.headers.get('Cookie') or ''):
+            return self.reply(200, {'schema': 'wizard.private-first/1', 'on': True, 'standard_agent': 'hermes'})
+        return super().do_GET()
+
+    def do_POST(self):
+        if self.path == '/api/plugins/wizard-os/private-first/standard-agent':
+            PrivateFirstDashboard.standard.append(json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)) or b'{}'))
+            return self.reply(200, self.answer)
+        return super().do_POST()
+
+
+class PrivateFirstSignInGoesToTheStandardAgent(ChatGPTSignInBecomesAgentModel):
+    """Private first on: a ChatGPT (or Claude) sign-in asks the Agent Service to switch the standard agent on with
+    the provider. The app sets no model itself, so nothing can reach the private agent. Off (the plugin has no
+    route, or WIZARD_PRIVATE_FIRST=0 here): unchanged, see ChatGPTSignInBecomesAgentModel."""
+
+    def setUp(self):
+        super().setUp()
+        self.dash.RequestHandlerClass = PrivateFirstDashboard
+        PrivateFirstDashboard.standard, PrivateFirstDashboard.answer = [], {'ok': True, 'agent': 'hermes'}
+
+    def test_succeeded_sign_in_sets_codex_when_the_agent_has_no_model(self):
+        code, out = self.get('/api/operations/' + 'o' * 24)
+        self.assertEqual((code, out['agentDefault']), (200, 'standard'))
+        self.assertEqual(PrivateFirstDashboard.standard, [{'provider': 'openai-codex', 'model': 'gpt-6-sol'}])
+        self.assertEqual(ModelDashboard.seen, [])   # no box-wide main model set by the app
+
+    def test_chosen_model_kept_and_running_sign_in_untouched(self):
+        # A chosen model is the Agent Service's to keep; the app still only asks it.
+        ModelDashboard.current = 'claude-subscription-directsdk-experimental'
+        self.assertEqual(self.get('/api/operations/' + 'o' * 24)[1]['agentDefault'], 'standard')
+        ModelDashboard.op_status = 'running'
+        self.assertNotIn('agentDefault', self.get('/api/operations/' + 'o' * 24)[1])
+        self.assertEqual(ModelDashboard.seen, [])
+
+    def test_refused_hand_off_sets_nothing(self):
+        PrivateFirstDashboard.answer = {'ok': False, 'error': 'standard_agent_unavailable'}
+        self.assertEqual(self.get('/api/operations/' + 'o' * 24)[1]['agentDefault'], 'skipped')
+        self.assertEqual(ModelDashboard.seen, [])
+
+    def test_env_zero_turns_it_off_here(self):
+        with patch.dict(os.environ, {'WIZARD_PRIVATE_FIRST': '0'}):
+            self.assertEqual(self.get('/api/operations/' + 'o' * 24)[1]['agentDefault'], 'set')
+        self.assertEqual(PrivateFirstDashboard.standard, [])
+        self.assertEqual(len(ModelDashboard.seen), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

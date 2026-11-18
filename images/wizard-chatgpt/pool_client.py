@@ -133,12 +133,54 @@ def newest_opus(options, hermes_provider=SUBSCRIPTION_PROVIDER):
     return best
 
 
+# Private first (wizard-os DECISIONS #115, spec/AGENTS.md section 10; switch wizard/private-first-setup, off by
+# default). The Agent Service reads the switch (the owner's Look file, or its WIZARD_PRIVATE_FIRST env) and answers on
+# the wizard-os plugin of the main Hermes, the standard agent's dashboard this app already signs in to (contract:
+# images/PRIVATE_FIRST.md). This app never reads the Look file: no answer (an older plugin's 404, unreachable, any
+# other shape) means off, and the sign-in does exactly what it did before. WIZARD_PRIVATE_FIRST=0 in this app's env
+# turns it off here without asking.
+PRIVATE_FIRST_ROUTE = '/api/plugins/wizard-os/private-first'
+PRIVATE_FIRST_SCHEMA = 'wizard.private-first/1'
+
+
+def private_first_on(call):
+    """True only when the Agent Service says private first is on. Never raises."""
+    if os.environ.get('WIZARD_PRIVATE_FIRST', '').strip() == '0':
+        return False
+    try:
+        doc = call(PRIVATE_FIRST_ROUTE)
+    except Exception:
+        return False
+    return isinstance(doc, dict) and doc.get('schema') == PRIVATE_FIRST_SCHEMA and doc.get('on') is True
+
+
+def pick_model(call, hermes_provider):
+    """The model a fresh sign-in suggests: the newest Opus the provider lists, else Hermes' recommended default,
+    else the first model the picker lists for the signed-in provider. '' when none."""
+    # Opus, the strongest model, not Hermes' recommended default (Sonnet): Miguel, 30 Oct 2026, "it looks like
+    # it's on Sonnet which is not our default ... Opus is available".
+    model = newest_opus(call('/api/model/options'), hermes_provider) \
+        or (call('/api/model/recommended-default?provider=' + hermes_provider) or {}).get('model') or ''
+    if not model:
+        # Hermes recommends a model for some providers only (not openai-codex): then the first model its own
+        # model picker lists for the signed-in provider (Hermes' order, best first).
+        options = call('/api/model/options') or {}
+        row = next((p for p in options.get('providers') or [] if isinstance(p, dict)
+                    and p.get('slug') == hermes_provider and p.get('authenticated') is True), {})
+        model = next((m for m in row.get('models') or [] if isinstance(m, str) and m), '')
+    return model
+
+
 def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, timeout=20):
     """Fresh mode: a sign-in on this app (Claude, or ChatGPT) is the agent's only model, but the Hermes Agent app starts with no
     main model, so its first chat failed with "not connected to any AI provider". After a sign-in, make it the
     agent's main model through the dashboard's own POST /api/model/set (the same call the model picker uses) with
     the newest Opus that provider lists (Hermes' recommended default if it lists none), only while the owner has chosen nothing. Never changes a chosen model.
-    Returns 'set', 'kept', or 'skipped'; never raises."""
+    It only ever talks to the main Hermes (the standard agent), never to a private agent.
+    Private first on (see private_first_on): instead of setting the main model itself, it asks the Agent Service to
+    switch the standard agent on and attach this provider there (POST .../private-first/standard-agent); the private
+    agent's model, provider list and apps are never touched.
+    Returns 'set', 'kept', 'standard' (handed to the Agent Service), or 'skipped'; never raises."""
     if alongside(provider):
         return 'skipped'
     prefix = 'WIZARD_' + provider.upper()
@@ -155,19 +197,14 @@ def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, time
             return json.load(response)
     try:
         call('/auth/password-login', {'provider': 'basic', 'username': os.environ.get(prefix + '_HERMES_USER', 'hermes'), 'password': password})
+        if private_first_on(call):
+            # The Agent Service decides whether the suggested model applies (it never changes a chosen one).
+            model = pick_model(call, hermes_provider)
+            done = call(PRIVATE_FIRST_ROUTE + '/standard-agent', {'provider': hermes_provider, 'model': model})
+            return 'standard' if isinstance(done, dict) and done.get('ok') is True else 'skipped'
         if (call('/api/model/info') or {}).get('provider'):
             return 'kept'
-        # Opus, the strongest model, not Hermes' recommended default (Sonnet): Miguel, 30 Oct 2026, "it looks like
-        # it's on Sonnet which is not our default ... Opus is available".
-        model = newest_opus(call('/api/model/options'), hermes_provider) \
-            or (call('/api/model/recommended-default?provider=' + hermes_provider) or {}).get('model') or ''
-        if not model:
-            # Hermes recommends a model for some providers only (not openai-codex): then the first model its own
-            # model picker lists for the signed-in provider (Hermes' order, best first).
-            options = call('/api/model/options') or {}
-            row = next((p for p in options.get('providers') or [] if isinstance(p, dict)
-                        and p.get('slug') == hermes_provider and p.get('authenticated') is True), {})
-            model = next((m for m in row.get('models') or [] if isinstance(m, str) and m), '')
+        model = pick_model(call, hermes_provider)
         if not model:
             return 'skipped'
         # A subscription is flat-rate, so Hermes' per-token price warning does not apply.
