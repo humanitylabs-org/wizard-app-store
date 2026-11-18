@@ -33,7 +33,7 @@ class RelayTests(unittest.TestCase):
 
     def test_relay_always_on_switch_retired(self):
         # wizard-tinfoil#16: private-relay is on for everyone; a saved 'off' no longer matters and is forgotten.
-        self.assertEqual(s.switches_doc()['switches'], [])
+        self.assertNotIn('private-relay', [x['id'] for x in s.switches_doc()['switches']])
         self.assertFalse(hasattr(s, 'relay_on'))
         f = Path(self.temp.name)/'switches.json'
         f.write_text(json.dumps({'private-relay': False, 'other': True}))

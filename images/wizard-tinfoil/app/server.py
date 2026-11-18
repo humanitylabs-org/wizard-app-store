@@ -56,6 +56,10 @@ NOT_CHAT = ('embed', 'tts', 'whisper', 'voxtral', 'doc-upload', 'pii-filter', 'w
 PREFERRED = ('glm-5-3', 'deepseek-v4-1-flash', 'gpt-oss-120b', 'llama3-3-70b')
 KIMI = re.compile(r'^kimi-k(\d+)(?:[.-](\d+))?(-pro)?$')
 REGISTERED = 2
+# Switch fast-private-model (off by default, wizard-tinfoil#23): also register the third ranked model (DeepSeek V4.1
+# Flash today), so the owner can pick a fast private model in the agent's model picker.
+FAST_MODEL_SWITCH = 'fast-private-model'
+def registered_count(): return REGISTERED + 1 if switch_on(FAST_MODEL_SWITCH) else REGISTERED
 MODEL_REFRESH = int(os.environ.get('WIZARD_TINFOIL_MODEL_REFRESH','21600'))  # re-read Tinfoil's catalogue every 6 h
 def chat_models(models): return [m for m in models if not any(x in m for x in NOT_CHAT)]
 def kimi_version(m):
@@ -153,7 +157,7 @@ def hand_to_private_agent(picked):
 def register(models):
     """Add (or refresh) Tinfoil in the agent's model list. Returns 'registered', 'private_agent' (private first on:
     handed to the private agent, nothing added to the main Hermes) or 'unavailable'."""
-    picked = ranked(models)[:REGISTERED]
+    picked = ranked(models)[:registered_count()]
     if not picked: return 'unavailable'
     if private_first_on(): return hand_to_private_agent(picked)
     model = picked[0]
@@ -357,7 +361,7 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     result=worker('verify',body['apiKey'])
                     atomic('connection.json',{'key':body['apiKey'],'authenticated':False,**result})
-                    atomic('connection.json',{**stored(),'agent':register(result['models']),'picked':ranked(result['models'])[:REGISTERED]})
+                    atomic('connection.json',{**stored(),'agent':register(result['models']),'picked':ranked(result['models'])[:registered_count()]})
                 return self.send(200,status())
             if path=='/api/admin-key':
                 if set(body)!={'adminKey'} or not key_ok(body['adminKey']): return self.send(400,{'error':'Enter a valid admin key.'})
@@ -391,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
                     s=stored()
                     if not s: return self.send(409,{'error':'Connect an API key first.'})
                     result=worker('verify',s['key']); atomic('connection.json',{**s,**result})
-                    atomic('connection.json',{**stored(),'agent':register(result['models']),'picked':ranked(result['models'])[:REGISTERED]})
+                    atomic('connection.json',{**stored(),'agent':register(result['models']),'picked':ranked(result['models'])[:registered_count()]})
                 return self.send(200,status())
             if path=='/api/disconnect':
                 if body: raise ValueError()
@@ -435,7 +439,7 @@ def reconcile():
     repeated on every start (idempotent), so turning private first off falls back to the main-agent registration."""
     with LOCK:
         s = stored()
-        want = ranked((s or {}).get('models') or [])[:REGISTERED]
+        want = ranked((s or {}).get('models') or [])[:registered_count()]
         if s and (s.get('agent') != 'registered' or s.get('picked') != want):
             atomic('connection.json',{**s,'agent':register(s.get('models') or []),'picked':want})
 
@@ -475,7 +479,12 @@ import time as _sw_time
 from pathlib import Path as _SwPath
 from urllib.parse import urlsplit as _sw_urlsplit
 
-SWITCHES = []
+SWITCHES = [
+    {'id': 'fast-private-model', 'name': 'Third private model (DeepSeek V4.1 Flash)',
+     'description': "Adds Tinfoil's third private model, DeepSeek V4.1 Flash, to the agent's model picker next to "
+                    'Kimi and GLM 5.3, so you can pick a fast private model.',
+     'default': False, 'issues': ['humanitylabs-org/wizard-tinfoil#23']},
+]
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
 _SW_LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}
@@ -637,6 +646,15 @@ def wizard_switches_install(handler_cls):
 # ---- end wizard.app-switches/1 ---------------------------------------------------------------------------------------
 
 wizard_switches_install(Handler)
+
+
+_sw_set_saved = _sw_set
+def _sw_set(switch_id, on):
+    """Save the switch, then re-register at once when it changes the agent's private choices (fast-private-model),
+    so the model picker updates without waiting for the next start or 6-hour refresh."""
+    doc = _sw_set_saved(switch_id, on)
+    if switch_id == FAST_MODEL_SWITCH: threading.Thread(target=reconcile, daemon=True).start()
+    return doc
 
 
 def forget_retired_switches():
