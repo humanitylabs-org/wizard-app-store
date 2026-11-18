@@ -162,6 +162,7 @@ class Tests(unittest.TestCase):
             calls=[]
             def fake(method,path,body=None):
                 if method=='GET':
+                    if path==s.PRIVATE_FIRST_ROUTE:raise OSError('404: older plugin, private first off')
                     self.assertEqual(path,'/api/model/info')
                     if isinstance(info,Exception):raise info
                     return info
@@ -190,6 +191,55 @@ class Tests(unittest.TestCase):
         self.assertEqual(seen['reasoning_effort'],'high');self.assertEqual(seen['extra_body'],{'thinking':{'type':'enabled'}});self.assertNotIn('thinking',seen)
         seen.clear();p.run('infer',{'key':KEY,'payload':{'model':'deepseek-v4-1-flash','messages':[],'reasoning_effort':'medium'}},Client)
         self.assertNotIn('reasoning_effort',seen)
+
+    def test_10_private_first_connect_goes_to_the_private_agent(self):
+        # wizard-os DECISIONS #115: with private first on (the Agent Service says so on the main Hermes's wizard-os
+        # plugin), Connect hands Tinfoil to the private agent and adds nothing to the main Hermes.
+        calls=[];state={'on':True,'ok':True}
+        def fake(method,path,body=None):
+            if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':state['on']}
+            if method=='GET':return {'provider':'','model':''}
+            calls.append((method,path,body));return {'ok':state['ok'],'agent':'private-1'}
+        with patch.object(s,'worker',return_value={'models':['glm-5-3','kimi-k3','websearch'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
+            code,b=self.call('/api/connect',{'apiKey':KEY});self.assertEqual(code,200)
+            self.assertEqual(json.loads(b)['chatIntegration'],'private_agent')
+        (m,path,body),=calls
+        self.assertEqual((m,path),('POST','/api/plugins/wizard-os/private-first/private-agent'))
+        self.assertEqual(body,{'provider':'tinfoil','model':'kimi-k3','models':['kimi-k3','glm-5-3']})
+        token=json.loads((s.DATA/'gateway-token.json').read_text())['token']
+        self.assertNotIn(KEY,json.dumps(body));self.assertNotIn(token,json.dumps(body))
+        # A refused hand-off registers nothing on the main Hermes; the next start retries.
+        calls.clear();state['ok']=False
+        with patch.object(s,'agent_call',side_effect=fake):s.reconcile()
+        self.assertEqual(s.status()['chatIntegration'],'unavailable')
+        self.assertEqual([c[1] for c in calls],['/api/plugins/wizard-os/private-first/private-agent'])
+        # Switched off later: the old main-agent registration comes back on the next start.
+        calls.clear();state['on']=False
+        with patch.object(s,'agent_call',side_effect=fake):s.reconcile()
+        self.assertEqual(s.status()['chatIntegration'],'registered')
+        self.assertEqual([c[1] for c in calls],['/api/providers/custom-endpoints'])
+        with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
+    def test_10b_private_first_env_zero_never_asks(self):
+        seen=[]
+        def fake(method,path,body=None):
+            seen.append(path)
+            if path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':True}
+            return {}
+        with patch.dict(os.environ,{'WIZARD_PRIVATE_FIRST':'0'}), patch.object(s,'worker',return_value={'models':['kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
+            self.assertEqual(json.loads(self.call('/api/connect',{'apiKey':KEY})[1])['chatIntegration'],'registered')
+        self.assertNotIn(s.PRIVATE_FIRST_ROUTE,seen)
+        with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
+    def test_10c_unknown_answer_means_off(self):
+        for answer in ({'on':True},{'schema':'wizard.private-first/1','on':'yes'},[]):
+            calls=[]
+            def fake(method,path,body=None):
+                if path==s.PRIVATE_FIRST_ROUTE:return answer
+                if method=='GET':return {}
+                calls.append(path);return {}
+            with patch.object(s,'worker',return_value={'models':['kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
+                self.assertEqual(json.loads(self.call('/api/connect',{'apiKey':KEY})[1])['chatIntegration'],'registered')
+            self.assertEqual(calls,['/api/providers/custom-endpoints'])
+            with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
 
 if __name__=='__main__':unittest.main(verbosity=2)
 

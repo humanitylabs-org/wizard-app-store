@@ -129,10 +129,33 @@ def agent_call(method, path, body=None):
     req = urllib.request.Request(HERMES_URL+path, data=None if body is None else json.dumps(body).encode(), method=method, headers={'Content-Type':'application/json'} if body is not None else {})
     with op.open(req, timeout=40) as r: return json.loads(r.read() or b'{}')
 
+# Private first (wizard-os DECISIONS #115, spec/AGENTS.md section 10; switch wizard/private-first-setup, off by
+# default). The Agent Service reads the switch and answers on the wizard-os plugin of the main Hermes (contract:
+# images/PRIVATE_FIRST.md in wizard-app-store). On, Connect makes Tinfoil the private agent's provider (the Agent
+# Service's first-run private agent, created if missing) instead of a custom provider on the main Hermes; the Service
+# fetches that agent's relay token from /api/private-clients itself, so no key or token travels in this call. No
+# answer (an older plugin's 404, unreachable) means off: the old main-agent registration. WIZARD_PRIVATE_FIRST=0 in
+# this app's env turns it off here without asking.
+PRIVATE_FIRST_ROUTE = '/api/plugins/wizard-os/private-first'
+PRIVATE_FIRST_SCHEMA = 'wizard.private-first/1'
+def private_first_on():
+    if os.environ.get('WIZARD_PRIVATE_FIRST','').strip() == '0': return False
+    try: doc = agent_call('GET', PRIVATE_FIRST_ROUTE)
+    except Exception: return False
+    return isinstance(doc, dict) and doc.get('schema') == PRIVATE_FIRST_SCHEMA and doc.get('on') is True
+def hand_to_private_agent(picked):
+    """'private_agent' when the Agent Service made Tinfoil the private agent's provider, else 'unavailable'
+    (reconcile retries on the next start)."""
+    try: done = agent_call('POST', PRIVATE_FIRST_ROUTE+'/private-agent', {'provider':'tinfoil','model':picked[0],'models':picked})
+    except Exception: return 'unavailable'
+    return 'private_agent' if isinstance(done, dict) and done.get('ok') is True else 'unavailable'
+
 def register(models):
-    """Add (or refresh) Tinfoil in the agent's model list. Returns 'registered' or 'unavailable'."""
+    """Add (or refresh) Tinfoil in the agent's model list. Returns 'registered', 'private_agent' (private first on:
+    handed to the private agent, nothing added to the main Hermes) or 'unavailable'."""
     picked = ranked(models)[:REGISTERED]
     if not picked: return 'unavailable'
+    if private_first_on(): return hand_to_private_agent(picked)
     model = picked[0]
     token = json.loads((DATA/'gateway-token.json').read_text())['token']
     try:
@@ -408,7 +431,8 @@ def initialize():
 
 def reconcile():
     """Register a saved key whose agent registration is missing (older version, agent installed later) or whose
-    private choices changed (a newer Kimi on Tinfoil, a new ranking in this version)."""
+    private choices changed (a newer Kimi on Tinfoil, a new ranking in this version). A 'private_agent' hand-off is
+    repeated on every start (idempotent), so turning private first off falls back to the main-agent registration."""
     with LOCK:
         s = stored()
         want = ranked((s or {}).get('models') or [])[:REGISTERED]
