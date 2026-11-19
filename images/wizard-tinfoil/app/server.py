@@ -190,6 +190,13 @@ def unregister():
     try: agent_call('DELETE', f'/api/providers/custom-endpoints/{ENDPOINT_ID}')
     except Exception: pass
 
+def place(prev, models):
+    """register(), and when a box that was 'registered' on the main Hermes is now handed to the private agent, remove
+    the custom endpoint it added there (wizard-app-store#80): nothing of Tinfoil's stays on the standard agent."""
+    agent = register(models)
+    if prev == 'registered' and agent == 'private_agent': unregister()
+    return agent
+
 
 # Billing (optional second key). The owner pastes a Tinfoil *admin* key on this app's page; it lives only in
 # admin.json (0600) and is used for exactly two read-only calls: usage cost and transaction history. It is never
@@ -359,9 +366,9 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/connect':
                 if set(body)!={'apiKey'} or not key_ok(body['apiKey']): return self.send(400,{'error':'Enter a valid API key (16–512 non-space ASCII characters).'})
                 with LOCK:
-                    result=worker('verify',body['apiKey'])
+                    result=worker('verify',body['apiKey']); prev=(stored() or {}).get('agent')
                     atomic('connection.json',{'key':body['apiKey'],'authenticated':False,**result})
-                    atomic('connection.json',{**stored(),'agent':register(result['models']),'picked':ranked(result['models'])[:registered_count()]})
+                    atomic('connection.json',{**stored(),'agent':place(prev,result['models']),'picked':ranked(result['models'])[:registered_count()]})
                 return self.send(200,status())
             if path=='/api/admin-key':
                 if set(body)!={'adminKey'} or not key_ok(body['adminKey']): return self.send(400,{'error':'Enter a valid admin key.'})
@@ -395,7 +402,7 @@ class Handler(BaseHTTPRequestHandler):
                     s=stored()
                     if not s: return self.send(409,{'error':'Connect an API key first.'})
                     result=worker('verify',s['key']); atomic('connection.json',{**s,**result})
-                    atomic('connection.json',{**stored(),'agent':register(result['models']),'picked':ranked(result['models'])[:registered_count()]})
+                    atomic('connection.json',{**stored(),'agent':place(s.get('agent'),result['models']),'picked':ranked(result['models'])[:registered_count()]})
                 return self.send(200,status())
             if path=='/api/disconnect':
                 if body: raise ValueError()
@@ -436,12 +443,19 @@ def initialize():
 def reconcile():
     """Register a saved key whose agent registration is missing (older version, agent installed later) or whose
     private choices changed (a newer Kimi on Tinfoil, a new ranking in this version). A 'private_agent' hand-off is
-    repeated on every start (idempotent), so turning private first off falls back to the main-agent registration."""
+    repeated on every start (idempotent), so turning private first off falls back to the main-agent registration.
+    A box 'registered' on the main Hermes moves to the private agent once private first answers on (a box connected
+    while private first could not be reached, wizard-app-store#80); a refused hand-off keeps it 'registered' and the
+    next start retries."""
     with LOCK:
         s = stored()
-        want = ranked((s or {}).get('models') or [])[:registered_count()]
-        if s and (s.get('agent') != 'registered' or s.get('picked') != want):
-            atomic('connection.json',{**s,'agent':register(s.get('models') or []),'picked':want})
+        if not s: return
+        prev = s.get('agent'); want = ranked(s.get('models') or [])[:registered_count()]
+        if prev != 'registered' or s.get('picked') != want:
+            atomic('connection.json',{**s,'agent':place(prev,s.get('models') or []),'picked':want})
+        elif private_first_on() and want:
+            if hand_to_private_agent(want) == 'private_agent':
+                unregister(); atomic('connection.json',{**s,'agent':'private_agent','picked':want})
 
 def refresh_models():
     """Every MODEL_REFRESH seconds re-read Tinfoil's verified model list, so a new model (Kimi K3.1) becomes the
