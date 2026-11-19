@@ -247,28 +247,46 @@ class Tests(unittest.TestCase):
         with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
     def test_10d_registered_box_moves_to_the_private_agent(self):
         # wizard-app-store#80: connected while private first could not be reached (wizard-agent-service#575), the box
-        # stayed 'registered' on the main Hermes. Once private first answers on, the next start hands it over and
-        # removes Tinfoil's custom endpoint from the standard agent; a refused hand-off keeps it registered.
-        calls=[];state={'on':False,'ok':True}
+        # stayed 'registered' on the main Hermes. Once private first answers on, the next start hands it over; a
+        # refused hand-off keeps it registered. The main-agent endpoint is removed only when the Service says the
+        # private agent is now the box's default (state private_agent == the agent handed to).
+        calls=[];state={'on':False,'ok':True,'default':None}
         def fake(method,path,body=None):
-            if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':state['on']}
+            if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':state['on'],'private_agent':state['default']}
             if method=='GET':return {'provider':'x','model':'y'}
-            calls.append((method,path));return {'ok':state['ok']}
+            calls.append((method,path));return {'ok':state['ok'],'agent':'private-1'}
         with patch.object(s,'worker',return_value={'models':['glm-5-3','kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
             self.assertEqual(json.loads(self.call('/api/connect',{'apiKey':KEY})[1])['chatIntegration'],'registered')
             calls.clear();s.reconcile();self.assertEqual(calls,[])  # private first still off: nothing changes
             state.update(on=True,ok=False);s.reconcile()
             self.assertEqual(calls,[('POST',s.PRIVATE_FIRST_ROUTE+'/private-agent')])
             self.assertEqual(s.status()['chatIntegration'],'registered')
-            calls.clear();state['ok']=True;s.reconcile()
+            calls.clear();state.update(ok=True,default='private-1');s.reconcile()  # the Service made it the box's default
             self.assertEqual(calls,[('POST',s.PRIVATE_FIRST_ROUTE+'/private-agent'),('DELETE','/api/providers/custom-endpoints/'+s.ENDPOINT_ID)])
             self.assertEqual(s.status()['chatIntegration'],'private_agent')
-            # Reconnecting a registered box with private first on also leaves nothing on the standard agent.
-            state['on']=False;s.reconcile();self.assertEqual(s.status()['chatIntegration'],'registered')
-            calls.clear();state['on']=True
-            self.assertEqual(json.loads(self.call('/api/connect',{'apiKey':KEY})[1])['chatIntegration'],'private_agent')
-            self.assertEqual(calls,[('POST',s.PRIVATE_FIRST_ROUTE+'/private-agent'),('DELETE','/api/providers/custom-endpoints/'+s.ENDPOINT_ID)])
         with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
+
+    def test_10e_registered_box_keeps_main_endpoint_when_main_stays_default(self):
+        # wizard-app-store#80 review: on a box registered before wizard-agent-service#576 the main Hermes already has
+        # Tinfoil's model, so the Service adds a plain private agent and keeps the main Hermes as the default
+        # (state private_agent null). Tinfoil must keep its main-agent endpoint there, or the main agent has no model.
+        for default in (None,'other-private'):
+            calls=[];state={'on':False}
+            def fake(method,path,body=None):
+                if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':state['on'],'private_agent':default}
+                if method=='GET':return {'provider':'custom:wizard-tinfoil','model':'kimi-k3'}
+                calls.append((method,path));return {'ok':True,'agent':'private-1'}
+            with patch.object(s,'worker',return_value={'models':['glm-5-3','kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
+                self.assertEqual(json.loads(self.call('/api/connect',{'apiKey':KEY})[1])['chatIntegration'],'registered')
+                calls.clear();state['on']=True;s.reconcile()
+                self.assertEqual(calls,[('POST',s.PRIVATE_FIRST_ROUTE+'/private-agent')])
+                self.assertEqual(s.status()['chatIntegration'],'private_agent')
+                # Reconnecting a registered box (picked models change path) keeps the main endpoint too.
+                state['on']=False;s.reconcile();self.assertEqual(s.status()['chatIntegration'],'registered')
+                calls.clear();state['on']=True
+                self.assertEqual(json.loads(self.call('/api/connect',{'apiKey':KEY})[1])['chatIntegration'],'private_agent')
+                self.assertNotIn(('DELETE','/api/providers/custom-endpoints/'+s.ENDPOINT_ID),calls)
+            with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
     def test_10b_private_first_env_zero_never_asks(self):
         seen=[]
         def fake(method,path,body=None):

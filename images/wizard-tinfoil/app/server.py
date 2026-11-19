@@ -150,9 +150,23 @@ def private_first_on():
 def hand_to_private_agent(picked):
     """'private_agent' when the Agent Service made Tinfoil the private agent's provider, else 'unavailable'
     (reconcile retries on the next start)."""
+    HANDED['agent'] = None
     try: done = agent_call('POST', PRIVATE_FIRST_ROUTE+'/private-agent', {'provider':'tinfoil','model':picked[0],'models':picked})
     except Exception: return 'unavailable'
-    return 'private_agent' if isinstance(done, dict) and done.get('ok') is True else 'unavailable'
+    if not (isinstance(done, dict) and done.get('ok') is True): return 'unavailable'
+    HANDED['agent'] = done.get('agent') if isinstance(done.get('agent'), str) and done.get('agent') else None
+    return 'private_agent'
+HANDED = {'agent': None}  # the private agent id of the last successful hand-off
+def private_agent_is_box_default():
+    """True only when the Agent Service set the private agent up as the box's default (a fresh box): its state names
+    the agent Tinfoil was just handed to as `private_agent`. On a box that already had a main model (one 'registered'
+    before wizard-agent-service#576), the Service adds a plain private agent and the main Hermes stays the default;
+    there Tinfoil's main-agent endpoint is that agent's model and must stay (wizard-app-store#80 review)."""
+    agent = HANDED.get('agent')
+    if not agent: return False
+    try: doc = agent_call('GET', PRIVATE_FIRST_ROUTE)
+    except Exception: return False
+    return isinstance(doc, dict) and doc.get('schema') == PRIVATE_FIRST_SCHEMA and doc.get('private_agent') == agent
 
 def register(models):
     """Add (or refresh) Tinfoil in the agent's model list. Returns 'registered', 'private_agent' (private first on:
@@ -191,10 +205,11 @@ def unregister():
     except Exception: pass
 
 def place(prev, models):
-    """register(), and when a box that was 'registered' on the main Hermes is now handed to the private agent, remove
-    the custom endpoint it added there (wizard-app-store#80): nothing of Tinfoil's stays on the standard agent."""
+    """register(), and when a box that was 'registered' on the main Hermes is now handed to the private agent that the
+    Service made the box's default, remove the custom endpoint it added there (wizard-app-store#80): nothing of
+    Tinfoil's stays on the standard agent. Otherwise the main Hermes is still the default and keeps its model."""
     agent = register(models)
-    if prev == 'registered' and agent == 'private_agent': unregister()
+    if prev == 'registered' and agent == 'private_agent' and private_agent_is_box_default(): unregister()
     return agent
 
 
@@ -446,7 +461,8 @@ def reconcile():
     repeated on every start (idempotent), so turning private first off falls back to the main-agent registration.
     A box 'registered' on the main Hermes moves to the private agent once private first answers on (a box connected
     while private first could not be reached, wizard-app-store#80); a refused hand-off keeps it 'registered' and the
-    next start retries."""
+    next start retries. Its main-agent endpoint is removed only when the Service says the private agent is now the
+    box's default (private_agent_is_box_default)."""
     with LOCK:
         s = stored()
         if not s: return
@@ -455,7 +471,8 @@ def reconcile():
             atomic('connection.json',{**s,'agent':place(prev,s.get('models') or []),'picked':want})
         elif private_first_on() and want:
             if hand_to_private_agent(want) == 'private_agent':
-                unregister(); atomic('connection.json',{**s,'agent':'private_agent','picked':want})
+                if private_agent_is_box_default(): unregister()
+                atomic('connection.json',{**s,'agent':'private_agent','picked':want})
 
 def refresh_models():
     """Every MODEL_REFRESH seconds re-read Tinfoil's verified model list, so a new model (Kimi K3.1) becomes the
