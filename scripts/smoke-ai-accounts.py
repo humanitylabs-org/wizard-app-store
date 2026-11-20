@@ -153,6 +153,16 @@ grep -c "Traceback" /tmp/out.txt || true
     report["hermes_provider"] = {"claude": out[0], **info, "logged_out_request": "plugin 'no usable login' message, no traceback"}
 
 
+# Two of the pinned plugin's tests probe Hermes core internals rather than the plugin, and core v0.23 moved
+# them: a user-installed plugin now loads from a staged copy under runtime/provider-plugins (this image
+# bundles the plugin instead, checked by hermes_provider above), and ContextCompressor's private
+# _truncate_tool_call_args_at helper is gone. Every other plugin test still runs against this core.
+CORE_INTERNAL_TESTS = (
+    "tests/test_directsdk_discovery.py::test_installed_plugin_registers_and_constructs_client_without_native_process",
+    "tests/test_directsdk_replay.py::test_host_history_edits_replay_canonical_visible_blocks",
+)
+
+
 def plugin_tests(tmp: Path):
     text = (ROOT / "images/hermes-agent/fetch-directsdk-plugin.py").read_text()
     commit = text.split('COMMIT = "', 1)[1].split('"', 1)[0]
@@ -160,9 +170,14 @@ def plugin_tests(tmp: Path):
     url = f"https://codeload.github.com/NousResearch/hermes-plugin-claude-subscription-directsdk/tar.gz/{commit}"
     tgz.write_bytes(urllib.request.urlopen(url, timeout=120).read())
     os.chmod(tmp, 0o755)
+    # Hermes v0.23+ ships no uv or pip to the runtime user (its venv is sealed): put pytest in a throwaway
+    # folder with a scratch venv of the image's own Python, then run the tests on the sealed Hermes venv.
     script = ("set -e; mkdir -p /tmp/p /tmp/home && tar xzf /w/plugin.tgz -C /tmp/p --strip-components=1 && cd /tmp/p && "
-              "HOME=/tmp/home UV_CACHE_DIR=/tmp/uv HERMES_AGENT_REPO=/opt/hermes uv run -q --no-project "
-              "--python /opt/hermes/.venv/bin/python --with pytest==8.4.2 python -m pytest -q -p no:cacheprovider 2>&1 | tail -1")
+              "export HOME=/tmp/home && /usr/local/bin/python3 -m venv /tmp/pipvenv && "
+              "/tmp/pipvenv/bin/python -m pip install -q --disable-pip-version-check --target /tmp/pt pytest==8.4.2 && "
+              "PYTHONPATH=/tmp/pt HERMES_AGENT_REPO=/opt/hermes "
+              "/opt/hermes/.venv/bin/python -m pytest -q -p no:cacheprovider "
+              + " ".join(f"--deselect {t}" for t in CORE_INTERNAL_TESTS) + " 2>&1 | tail -1")
     out = run("docker", "run", "--rm", "--user", "1000:1000", "-v", f"{tmp}:/w:ro", "--entrypoint", "sh", HERMES, "-c",
               script, timeout=600)
     assert " passed" in out and "failed" not in out and "error" not in out, out

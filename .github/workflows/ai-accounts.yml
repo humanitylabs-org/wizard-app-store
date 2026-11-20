@@ -55,12 +55,14 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard2
+          tags: ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard1
       - name: Published images pass the same checks
         run: |
           docker pull ghcr.io/humanitylabs-org/wizard-ai-accounts:0.2.0
           SKIP_BUILD=1 AI_ACCOUNTS_IMAGE=ghcr.io/humanitylabs-org/wizard-ai-accounts:0.2.0 sh images/wizard-ai-accounts/test-container.sh
-          docker pull ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard2
-          docker run --rm --entrypoint sh ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard2 -c \
+          docker pull ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard1
+          docker run --rm --entrypoint sh ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard1 -c \
             'claude --version | grep -q "^2.1.296 " && test -f /opt/hermes/plugins/model-providers/claude-subscription-directsdk-experimental/plugin.yaml'
+          docker run --rm --user 1000:1000 --entrypoint sh ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard1 -c \
+            'test -r /opt/hermes/install-stamp.json && hermes --version | grep -q "v0.23.3"'
 # Publishes only after store, container, provider, shared-volume and data-parity checks pass.
