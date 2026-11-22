@@ -191,7 +191,11 @@ def retry_handoff_later(agent):
         return
     if HANDOFF_RETRY_S <= 0 or RETRY['left'] <= 0 or (RETRY['timer'] and RETRY['timer'].is_alive()): return
     RETRY['left'] -= 1
-    RETRY['timer'] = threading.Timer(HANDOFF_RETRY_S, reconcile); RETRY['timer'].daemon = True; RETRY['timer'].start()
+    RETRY['timer'] = threading.Timer(HANDOFF_RETRY_S, retry_handoff_now); RETRY['timer'].daemon = True; RETRY['timer'].start()
+def retry_handoff_now():
+    """The timer's run: it still reads alive while it runs, so let go of it first, then this try may schedule the next."""
+    RETRY['timer'] = None
+    reconcile()
 def private_agent_is_box_default():
     """True only when the Agent Service set the private agent up as the box's default (a fresh box): its state names
     the agent Tinfoil was just handed to as `private_agent`. On a box that already had a main model (one 'registered'

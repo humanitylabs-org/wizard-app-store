@@ -260,16 +260,22 @@ class Tests(unittest.TestCase):
         class T:
             def __init__(self,delay,fn):self.delay,self.fn=delay,fn;self.daemon=False
             def start(self):timers.append(self)
-            def is_alive(self):return False
+            def is_alive(self):return True   # a pending timer, and also the timer while its own run goes on
         s.RETRY['left']=s.HANDOFF_RETRIES;s.RETRY['timer']=None
         with patch.object(s,'worker',return_value={'models':['kimi-k3','glm-5-3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake), patch.object(s.threading,'Timer',T):
             code,b=self.call('/api/connect',{'apiKey':KEY});self.assertEqual(code,200)
             self.assertEqual(json.loads(b)['chatIntegration'],'unavailable')
             self.assertEqual(waits,[s.HANDOFF_WAIT]);self.assertGreater(s.HANDOFF_WAIT,240)
             self.assertEqual(len(timers),1);self.assertEqual(timers[0].delay,s.HANDOFF_RETRY_S)
-            state['slow']=False;timers[0].fn()
+            s.reconcile();self.assertEqual(len(timers),1)   # a start while a retry is pending adds no second timer
+            # A retry that times out again schedules the next one, from inside its own timer run, up to HANDOFF_RETRIES.
+            for n in range(2,s.HANDOFF_RETRIES+1):
+                timers[-1].fn();self.assertEqual(len(timers),n)
+            timers[-1].fn();self.assertEqual(len(timers),s.HANDOFF_RETRIES)   # no sixth
+            self.assertEqual(s.RETRY['left'],0)
+            state['slow']=False;timers[-1].fn()
             self.assertEqual(s.status()['chatIntegration'],'private_agent')
-            self.assertEqual(len(timers),1)   # a hand-off that worked schedules nothing more
+            self.assertEqual(len(timers),s.HANDOFF_RETRIES)   # a hand-off that worked schedules nothing more
             self.assertEqual(s.RETRY['left'],s.HANDOFF_RETRIES)
             # A refusal (not a timeout) is not retried on a timer: the next start retries as before.
             s.HANDED['agent']=None
