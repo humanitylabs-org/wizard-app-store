@@ -124,14 +124,14 @@ def private_token_ok(token):
     digest = hashlib.sha256(token.encode()).hexdigest()
     return any(hmac.compare_digest(digest, saved) for saved in private_clients().values())
 
-def agent_call(method, path, body=None):
+def agent_call(method, path, body=None, timeout=40):
     """One signed-in call to the agent's dashboard. Errors never carry credentials."""
     if not HERMES_PASSWORD: raise RuntimeError('agent dashboard login missing')
     jar = http.cookiejar.CookieJar(); op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     login = urllib.request.Request(HERMES_URL+'/auth/password-login', data=json.dumps({'provider':'basic','username':HERMES_USER,'password':HERMES_PASSWORD}).encode(), method='POST', headers={'Content-Type':'application/json'})
     with op.open(login, timeout=20) as r: r.read()
     req = urllib.request.Request(HERMES_URL+path, data=None if body is None else json.dumps(body).encode(), method=method, headers={'Content-Type':'application/json'} if body is not None else {})
-    with op.open(req, timeout=40) as r: return json.loads(r.read() or b'{}')
+    with op.open(req, timeout=timeout) as r: return json.loads(r.read() or b'{}')
 
 # Private first (wizard-os DECISIONS #115, spec/AGENTS.md section 10; switch wizard/private-first-setup, off by
 # default). The Agent Service reads the switch and answers on the wizard-os plugin of the main Hermes (contract:
@@ -168,7 +168,7 @@ def hand_to_private_agent(picked):
     (reconcile retries on the next start)."""
     HANDED['agent'] = None; AGENT_ERROR.update(step=None, code=None)
     if PROGRESS['step']: PROGRESS['step'] = 'private_agent'
-    try: done = agent_call('POST', PRIVATE_FIRST_ROUTE+'/private-agent', {'provider':'tinfoil','model':picked[0],'models':picked})
+    try: done = agent_call('POST', PRIVATE_FIRST_ROUTE+'/private-agent', {'provider':'tinfoil','model':picked[0],'models':picked}, timeout=HANDOFF_WAIT)
     except Exception as e: return agent_failed('private_agent', refusal_code(e))
     if not (isinstance(done, dict) and done.get('ok') is True):
         err = done.get('error') if isinstance(done, dict) else None
@@ -176,6 +176,22 @@ def hand_to_private_agent(picked):
     HANDED['agent'] = done.get('agent') if isinstance(done.get('agent'), str) and done.get('agent') else None
     return 'private_agent'
 HANDED = {'agent': None}  # the private agent id of the last successful hand-off
+# A fresh box's first hand-off builds the private agent (image pull, Runtipi install, restart): it can take minutes
+# (wizard-agent-service#582), longer than any plain dashboard call. Wait a little past the wizard-os plugin's own 240 s
+# wait for the Service; when even that runs out (a slow first pull) the agent still finishes, so try again a few times
+# instead of waiting for the next start.
+HANDOFF_WAIT = 260
+HANDOFF_RETRY_S = int(os.environ.get('WIZARD_TINFOIL_HANDOFF_RETRY','120'))
+HANDOFF_RETRIES = 5
+RETRY = {'left': HANDOFF_RETRIES, 'timer': None}
+def retry_handoff_later(agent):
+    """After a hand-off that timed out or could not reach the agent, run reconcile again in a while (a few times)."""
+    if agent != 'unavailable' or AGENT_ERROR.get('step') != 'private_agent' or AGENT_ERROR.get('code') != 'unreachable':
+        if agent == 'private_agent': RETRY['left'] = HANDOFF_RETRIES
+        return
+    if HANDOFF_RETRY_S <= 0 or RETRY['left'] <= 0 or (RETRY['timer'] and RETRY['timer'].is_alive()): return
+    RETRY['left'] -= 1
+    RETRY['timer'] = threading.Timer(HANDOFF_RETRY_S, reconcile); RETRY['timer'].daemon = True; RETRY['timer'].start()
 def private_agent_is_box_default():
     """True only when the Agent Service set the private agent up as the box's default (a fresh box): its state names
     the agent Tinfoil was just handed to as `private_agent`. On a box that already had a main model (one 'registered'
@@ -227,6 +243,7 @@ def unregister():
 def placed(prev, models):
     """place() as the fields saved in connection.json: the agent result and, when it failed, why."""
     agent = place(prev, models)
+    retry_handoff_later(agent)
     return {'agent':agent, 'agentError':dict(AGENT_ERROR) if agent == 'unavailable' and AGENT_ERROR['code'] else None}
 
 def place(prev, models):
