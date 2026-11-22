@@ -137,7 +137,7 @@ class Tests(unittest.TestCase):
 
     def test_07_connect_registers_agent_model_without_upstream_key(self):
         calls=[]
-        def fake(method,path,body=None):
+        def fake(method,path,body=None,timeout=40):
             if method=='GET':return {'provider':'claude-subscription-directsdk-experimental','model':'claude-opus-5-5'}
             calls.append((method,path,body));return {}
         models=['deepseek-v4-1-flash','glm-5-3','kimi-k3','nomic-embed-text','whisper-large-v3-turbo','websearch']
@@ -164,7 +164,7 @@ class Tests(unittest.TestCase):
             self.assertEqual(doc[0]['issues'],['humanitylabs-org/wizard-tinfoil#23'])
             self.assertEqual(s.registered_count(),2)
             calls=[]
-            def fake(method,path,body=None):
+            def fake(method,path,body=None,timeout=40):
                 if method=='GET':return {'provider':'x','model':'y'}
                 calls.append(body);return {}
             with patch.object(s,'worker',return_value={'models':models,'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
@@ -186,7 +186,7 @@ class Tests(unittest.TestCase):
         # ("no model configured") although Tinfoil was listed as connected. Unreadable agent model: never default.
         for info,want in (({'provider':'','model':''},True),(OSError('down'),False)):
             calls=[]
-            def fake(method,path,body=None):
+            def fake(method,path,body=None,timeout=40):
                 if method=='GET':
                     if path==s.PRIVATE_FIRST_ROUTE:raise OSError('404: older plugin, private first off')
                     self.assertEqual(path,'/api/model/info')
@@ -222,7 +222,7 @@ class Tests(unittest.TestCase):
         # wizard-os DECISIONS #115: with private first on (the Agent Service says so on the main Hermes's wizard-os
         # plugin), Connect hands Tinfoil to the private agent and adds nothing to the main Hermes.
         calls=[];state={'on':True,'ok':True}
-        def fake(method,path,body=None):
+        def fake(method,path,body=None,timeout=40):
             if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':state['on']}
             if method=='GET':return {'provider':'','model':''}
             calls.append((method,path,body));return {'ok':state['ok'],'agent':'private-1'}
@@ -245,13 +245,48 @@ class Tests(unittest.TestCase):
         self.assertEqual(s.status()['chatIntegration'],'registered')
         self.assertEqual([c[1] for c in calls],['/api/providers/custom-endpoints'])
         with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
+    def test_10c2_a_slow_first_hand_off_waits_long_and_is_retried(self):
+        # wizard-agent-service#582: a fresh box's first hand-off builds the private agent and took ~50 s, past the old
+        # 40 s wait, so Tinfoil saved 'unavailable' until the next start. It now waits HANDOFF_WAIT, and a hand-off
+        # that still times out is retried by itself.
+        state={'slow':True};waits=[];calls=[]
+        def fake(method,path,body=None,timeout=40):
+            if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':True}
+            if method=='GET':return {'provider':'','model':''}
+            calls.append(path);waits.append(timeout)
+            if state['slow']:raise TimeoutError('timed out')
+            return {'ok':True,'agent':'private'}
+        timers=[]
+        class T:
+            def __init__(self,delay,fn):self.delay,self.fn=delay,fn;self.daemon=False
+            def start(self):timers.append(self)
+            def is_alive(self):return True   # a pending timer, and also the timer while its own run goes on
+        s.RETRY['left']=s.HANDOFF_RETRIES;s.RETRY['timer']=None
+        with patch.object(s,'worker',return_value={'models':['kimi-k3','glm-5-3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake), patch.object(s.threading,'Timer',T):
+            code,b=self.call('/api/connect',{'apiKey':KEY});self.assertEqual(code,200)
+            self.assertEqual(json.loads(b)['chatIntegration'],'unavailable')
+            self.assertEqual(waits,[s.HANDOFF_WAIT]);self.assertGreater(s.HANDOFF_WAIT,240)
+            self.assertEqual(len(timers),1);self.assertEqual(timers[0].delay,s.HANDOFF_RETRY_S)
+            s.reconcile();self.assertEqual(len(timers),1)   # a start while a retry is pending adds no second timer
+            # A retry that times out again schedules the next one, from inside its own timer run, up to HANDOFF_RETRIES.
+            for n in range(2,s.HANDOFF_RETRIES+1):
+                timers[-1].fn();self.assertEqual(len(timers),n)
+            timers[-1].fn();self.assertEqual(len(timers),s.HANDOFF_RETRIES)   # no sixth
+            self.assertEqual(s.RETRY['left'],0)
+            state['slow']=False;timers[-1].fn()
+            self.assertEqual(s.status()['chatIntegration'],'private_agent')
+            self.assertEqual(len(timers),s.HANDOFF_RETRIES)   # a hand-off that worked schedules nothing more
+            self.assertEqual(s.RETRY['left'],s.HANDOFF_RETRIES)
+            # A refusal (not a timeout) is not retried on a timer: the next start retries as before.
+            s.HANDED['agent']=None
+        with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
     def test_10d_registered_box_moves_to_the_private_agent(self):
         # wizard-app-store#80: connected while private first could not be reached (wizard-agent-service#575), the box
         # stayed 'registered' on the main Hermes. Once private first answers on, the next start hands it over; a
         # refused hand-off keeps it registered. The main-agent endpoint is removed only when the Service says the
         # private agent is now the box's default (state private_agent == the agent handed to).
         calls=[];state={'on':False,'ok':True,'default':None}
-        def fake(method,path,body=None):
+        def fake(method,path,body=None,timeout=40):
             if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':state['on'],'private_agent':state['default']}
             if method=='GET':return {'provider':'x','model':'y'}
             calls.append((method,path));return {'ok':state['ok'],'agent':'private-1'}
@@ -272,7 +307,7 @@ class Tests(unittest.TestCase):
         # (state private_agent null). Tinfoil must keep its main-agent endpoint there, or the main agent has no model.
         for default in (None,'other-private'):
             calls=[];state={'on':False}
-            def fake(method,path,body=None):
+            def fake(method,path,body=None,timeout=40):
                 if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':state['on'],'private_agent':default}
                 if method=='GET':return {'provider':'custom:wizard-tinfoil','model':'kimi-k3'}
                 calls.append((method,path));return {'ok':True,'agent':'private-1'}
@@ -289,7 +324,7 @@ class Tests(unittest.TestCase):
             with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
     def test_10b_private_first_env_zero_never_asks(self):
         seen=[]
-        def fake(method,path,body=None):
+        def fake(method,path,body=None,timeout=40):
             seen.append(path)
             if path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':True}
             return {}
@@ -300,7 +335,7 @@ class Tests(unittest.TestCase):
     def test_10c_unknown_answer_means_off(self):
         for answer in ({'on':True},{'schema':'wizard.private-first/1','on':'yes'},[]):
             calls=[]
-            def fake(method,path,body=None):
+            def fake(method,path,body=None,timeout=40):
                 if path==s.PRIVATE_FIRST_ROUTE:return answer
                 if method=='GET':return {}
                 calls.append(path);return {}
@@ -337,7 +372,7 @@ class Billing(unittest.TestCase):
         self.assertEqual(s.ranked(['nomic-embed-text']),[])
     def test_11_new_model_on_tinfoil_reregisters_without_reconnect(self):
         calls=[]
-        def fake(method,path,body=None):
+        def fake(method,path,body=None,timeout=40):
             if method!='GET':calls.append(body)
             return {}
         with patch.object(s,'worker',return_value={'models':['glm-5-3','kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
@@ -427,7 +462,7 @@ class HandOffErrorIsReported(unittest.TestCase):
         s.DATA=self.old;self.temp.cleanup()
     def test_runtime_unavailable_is_shown_then_cleared(self):
         import io
-        def refuse(method,path,body=None):
+        def refuse(method,path,body=None,timeout=40):
             if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':True}
             if method=='GET':return {}
             raise urllib.error.HTTPError(s.HERMES_URL+path,503,'x',{},io.BytesIO(b'{"ok":false,"error":"runtime_unavailable"}'))
@@ -437,7 +472,7 @@ class HandOffErrorIsReported(unittest.TestCase):
         self.assertEqual(st['chatIntegration'],'unavailable');self.assertTrue(st['keyVerified']);self.assertFalse(st['agentReady'])
         self.assertEqual(st['error'],"Tinfoil accepted your key, but your Wizard couldn't create the private agent (runtime unavailable). Try again in a minute or open Troubleshoot.")
         self.assertNotIn(KEY,json.dumps(st))
-        def accept(method,path,body=None):
+        def accept(method,path,body=None,timeout=40):
             if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':True}
             return {'ok':True,'agent':'private-1'}
         with patch.object(s,'agent_call',side_effect=accept):s.reconcile()
@@ -445,7 +480,7 @@ class HandOffErrorIsReported(unittest.TestCase):
     def test_progress_is_visible_while_connect_runs(self):
         seen=[]
         def slow(action,key,payload=None):seen.append(s.status()['progress']);return {'models':['kimi-k3'],'verifiedAt':'t'}
-        def agent(method,path,body=None):seen.append(s.status()['progress']);return {}
+        def agent(method,path,body=None,timeout=40):seen.append(s.status()['progress']);return {}
         with patch.object(s,'worker',side_effect=slow),patch.object(s,'agent_call',side_effect=agent):
             with s.LOCK,s.progress():
                 s.worker('verify',KEY);s.PROGRESS['step']='agent';s.register(['kimi-k3'])
