@@ -147,13 +147,32 @@ def private_first_on():
     try: doc = agent_call('GET', PRIVATE_FIRST_ROUTE)
     except Exception: return False
     return isinstance(doc, dict) and doc.get('schema') == PRIVATE_FIRST_SCHEMA and doc.get('on') is True
+# Why the last hand-off or registration failed, kept so the page can say it (wizard-tinfoil#30): a short code only
+# ('runtime_unavailable', 'unreachable'), never a body, header or credential.
+AGENT_ERROR = {'step': None, 'code': None}
+def agent_failed(step, code='unreachable'):
+    AGENT_ERROR.update(step=step, code=code if isinstance(code, str) and re.fullmatch(r'[a-z0-9_.-]{1,60}', code) else 'refused')
+    return 'unavailable'
+def refusal_code(e):
+    """The plugin's refusal code ({ok:false,error:'runtime_unavailable'}), or 'unreachable'."""
+    if not isinstance(e, urllib.error.HTTPError): return 'unreachable'
+    try: doc = json.loads(e.read(4096) or b'{}')
+    except Exception: return 'refused'
+    err = doc.get('error') if isinstance(doc, dict) else None
+    if isinstance(err, dict): err = err.get('code')
+    return err if isinstance(err, str) else 'refused'
+# What Connect or Test is doing right now, for the page's progress line: 'verifying', 'agent' or 'private_agent'.
+PROGRESS = {'step': None}
 def hand_to_private_agent(picked):
     """'private_agent' when the Agent Service made Tinfoil the private agent's provider, else 'unavailable'
     (reconcile retries on the next start)."""
-    HANDED['agent'] = None
+    HANDED['agent'] = None; AGENT_ERROR.update(step=None, code=None)
+    if PROGRESS['step']: PROGRESS['step'] = 'private_agent'
     try: done = agent_call('POST', PRIVATE_FIRST_ROUTE+'/private-agent', {'provider':'tinfoil','model':picked[0],'models':picked})
-    except Exception: return 'unavailable'
-    if not (isinstance(done, dict) and done.get('ok') is True): return 'unavailable'
+    except Exception as e: return agent_failed('private_agent', refusal_code(e))
+    if not (isinstance(done, dict) and done.get('ok') is True):
+        err = done.get('error') if isinstance(done, dict) else None
+        return agent_failed('private_agent', err.get('code') if isinstance(err, dict) else err)
     HANDED['agent'] = done.get('agent') if isinstance(done.get('agent'), str) and done.get('agent') else None
     return 'private_agent'
 HANDED = {'agent': None}  # the private agent id of the last successful hand-off
@@ -171,8 +190,9 @@ def private_agent_is_box_default():
 def register(models):
     """Add (or refresh) Tinfoil in the agent's model list. Returns 'registered', 'private_agent' (private first on:
     handed to the private agent, nothing added to the main Hermes) or 'unavailable'."""
+    AGENT_ERROR.update(step=None, code=None)
     picked = ranked(models)[:registered_count()]
-    if not picked: return 'unavailable'
+    if not picked: return agent_failed('agent', 'no_chat_model')
     if private_first_on(): return hand_to_private_agent(picked)
     model = picked[0]
     token = json.loads((DATA/'gateway-token.json').read_text())['token']
@@ -183,8 +203,8 @@ def register(models):
         except Exception: first = False
         agent_call('POST', '/api/providers/custom-endpoints', {'id':ENDPOINT_ID,'name':'Tinfoil','base_url':AGENT_BASE,'model':model,'models':picked,'api_key':token,'api_mode':'chat_completions','discover_models':False,'make_default':first})
         return 'registered'
-    except Exception:
-        return 'unavailable'
+    except Exception as e:
+        return agent_failed('agent', refusal_code(e))
 
 # Apps on this box (e.g. Search's AI overviews) can use the same private gateway when the owner turns that on from
 # the app's own page. Each app gets its own box-only token (app-tokens.json, 0600): the Tinfoil key never leaves
@@ -203,6 +223,11 @@ def bearer_ok(header):
 def unregister():
     try: agent_call('DELETE', f'/api/providers/custom-endpoints/{ENDPOINT_ID}')
     except Exception: pass
+
+def placed(prev, models):
+    """place() as the fields saved in connection.json: the agent result and, when it failed, why."""
+    agent = place(prev, models)
+    return {'agent':agent, 'agentError':dict(AGENT_ERROR) if agent == 'unavailable' and AGENT_ERROR['code'] else None}
 
 def place(prev, models):
     """register(), and when a box that was 'registered' on the main Hermes is now handed to the private agent that the
@@ -285,10 +310,26 @@ def billing_status():
     a = admin_stored()
     return {'adminKeyStored':bool(a),'adminKeyHint':hint((a or {}).get('key')),'billing':'off' if not a else ('rejected' if BILL['error']=='rejected' else 'unavailable' if BILL['error'] and not BILL['data'] else 'ok' if BILL['data'] else 'pending')}
 
+import contextlib
+@contextlib.contextmanager
+def progress():
+    PROGRESS['step'] = 'verifying'
+    try: yield
+    finally: PROGRESS['step'] = None
+
+AGENT_HELP = {'runtime_unavailable': 'runtime unavailable', 'unreachable': 'agent not reachable', 'no_chat_model': 'no chat model on Tinfoil'}
+def connection_error(s):
+    """One plain sentence for a saved key whose agent set-up failed (wizard-tinfoil#30), else None."""
+    if not s or s.get('agent') != 'unavailable': return None
+    e = s.get('agentError') or {}
+    why = AGENT_HELP.get(e.get('code'), str(e.get('code') or 'no answer').replace('_', ' '))
+    what = 'create the private agent' if e.get('step') == 'private_agent' else 'add Tinfoil to your agent'
+    return f"Tinfoil accepted your key, but your Wizard couldn't {what} ({why}). Try again in a minute or open Troubleshoot."
+
 def status():
     # Atomic replace makes this a safe snapshot; never wait behind network verification.
     s = stored()
-    return {'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':usage(),'error':None,**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered'),'apiKeyHint':hint((s or {}).get('key')),'apps':sorted(app_tokens())}
+    return {'keyVerified':bool(s and s.get('verifiedAt')),'agentReady':(s or {}).get('agent') in ('registered','private_agent'),'privateModels':list((s or {}).get('picked') or []),'progress':PROGRESS['step'],'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':usage(),'error':connection_error(s),**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered'),'apiKeyHint':hint((s or {}).get('key')),'apps':sorted(app_tokens())}
 
 def worker(action, key, payload=None):
     # Kill on timeout; no upstream exception/headers/body may reach logs or clients.
@@ -380,10 +421,12 @@ class Handler(BaseHTTPRequestHandler):
                 r=rpc(body); return self.send(202 if r is None else 200,r)
             if path=='/api/connect':
                 if set(body)!={'apiKey'} or not key_ok(body['apiKey']): return self.send(400,{'error':'Enter a valid API key (16–512 non-space ASCII characters).'})
-                with LOCK:
-                    result=worker('verify',body['apiKey']); prev=(stored() or {}).get('agent')
+                with LOCK, progress():
+                    try: result=worker('verify',body['apiKey'])
+                    except ValueError: return self.send(400,{'error':"Tinfoil didn't accept this key, or its enclave check failed. Nothing was saved. Check the key and try again."})
+                    prev=(stored() or {}).get('agent'); PROGRESS['step']='agent'
                     atomic('connection.json',{'key':body['apiKey'],'authenticated':False,**result})
-                    atomic('connection.json',{**stored(),'agent':place(prev,result['models']),'picked':ranked(result['models'])[:registered_count()]})
+                    atomic('connection.json',{**stored(),**placed(prev,result['models']),'picked':ranked(result['models'])[:registered_count()]})
                 return self.send(200,status())
             if path=='/api/admin-key':
                 if set(body)!={'adminKey'} or not key_ok(body['adminKey']): return self.send(400,{'error':'Enter a valid admin key.'})
@@ -413,11 +456,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,status())
             if path=='/api/test':
                 if body: raise ValueError()
-                with LOCK:
+                with LOCK, progress():
                     s=stored()
                     if not s: return self.send(409,{'error':'Connect an API key first.'})
-                    result=worker('verify',s['key']); atomic('connection.json',{**s,**result})
-                    atomic('connection.json',{**stored(),'agent':place(s.get('agent'),result['models']),'picked':ranked(result['models'])[:registered_count()]})
+                    try: result=worker('verify',s['key'])
+                    except ValueError: return self.send(400,{'error':"Tinfoil didn't accept your saved key, or its enclave check failed. Replace the key, or try again in a minute."})
+                    atomic('connection.json',{**s,**result}); PROGRESS['step']='agent'
+                    atomic('connection.json',{**stored(),**placed(s.get('agent'),result['models']),'picked':ranked(result['models'])[:registered_count()]})
                 return self.send(200,status())
             if path=='/api/disconnect':
                 if body: raise ValueError()
@@ -468,11 +513,11 @@ def reconcile():
         if not s: return
         prev = s.get('agent'); want = ranked(s.get('models') or [])[:registered_count()]
         if prev != 'registered' or s.get('picked') != want:
-            atomic('connection.json',{**s,'agent':place(prev,s.get('models') or []),'picked':want})
+            atomic('connection.json',{**s,**placed(prev,s.get('models') or []),'picked':want})
         elif private_first_on() and want:
             if hand_to_private_agent(want) == 'private_agent':
                 if private_agent_is_box_default(): unregister()
-                atomic('connection.json',{**s,'agent':'private_agent','picked':want})
+                atomic('connection.json',{**s,'agent':'private_agent','agentError':None,'picked':want})
 
 def refresh_models():
     """Every MODEL_REFRESH seconds re-read Tinfoil's verified model list, so a new model (Kimi K3.1) becomes the

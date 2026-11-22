@@ -54,3 +54,6 @@ button:disabled { opacity: .5; cursor: default; }
 .app-row .wz-tile { font-weight: 700; color: var(--accent); background: var(--accent-soft); }
 .app-row .wz-main { flex: 1; min-width: 0; }
 .app-row .wz-button { flex: none; width: auto; min-width: 0; min-height: 40px; padding-inline: 16px; }
+/* Connect / Test progress and results (wizard-tinfoil#30): progress in ink, success in the success colour. */
+.wz-status.note, .wz-status.ok { text-align: left; }
+.wz-status.ok { color: var(--wz-success, var(--accent)); }

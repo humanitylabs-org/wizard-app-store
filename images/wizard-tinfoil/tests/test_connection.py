@@ -395,3 +395,58 @@ class WelcomeConnectView(unittest.TestCase):
         self.assertEqual(run('?connect=1',False),{'open':True,'focused':True})
         self.assertEqual(run('?connect=1',True)['open'],False)
         self.assertEqual(run('',False)['open'],False)
+
+
+class WelcomeSignInFeedback(unittest.TestCase):
+    """wizard-tinfoil#30: in the Welcome, Save shows progress, then Connected or a plain error with Retry; the
+    Replace / Remove / Test sheet never stays open, and a failed agent hand-off is never reported as error: null."""
+    APP=ROOT/'web/app.js'
+    @unittest.skipUnless(shutil.which('node'),'node not installed (the image has none; the store bun test runs it)')
+    def test_save_shows_progress_then_connected(self):
+        def run(reply):
+            out=subprocess.run(['node',str(ROOT/'tests/connect_flow_harness.cjs'),str(self.APP),json.dumps(reply)],capture_output=True,text=True,timeout=20,check=True)
+            return json.loads(out.stdout)
+        ok=run({'body':{'status':'not_connected','credentialStored':True,'keyVerified':True,'agentReady':True,'chatIntegration':'private_agent','privateModels':['kimi-k3-1-pro','glm-5-3'],'error':None}})
+        self.assertTrue(ok['openBefore']);self.assertFalse(ok['open'])
+        self.assertEqual(ok['whileSaving'],['Connecting…','Checking your key with Tinfoil…'])
+        self.assertEqual(ok['button'],'Save')
+        self.assertEqual(ok['status'],'Connected: Kimi K3.1 Pro and GLM 5.3 ready for your private agent.')
+        self.assertIn('ok',ok['statusClass']);self.assertEqual(ok['pill'],'Connected');self.assertFalse(ok['retry'])
+        err="Tinfoil accepted your key, but your Wizard couldn't create the private agent (runtime unavailable). Try again in a minute or open Troubleshoot."
+        bad=run({'body':{'status':'not_connected','credentialStored':True,'keyVerified':True,'agentReady':False,'chatIntegration':'unavailable','privateModels':['kimi-k3'],'error':err}})
+        self.assertFalse(bad['open']);self.assertEqual(bad['status'],err)
+        self.assertEqual(bad['pill'],'Key OK');self.assertTrue(bad['retry'])
+        rej=run({'ok':False,'body':{'error':"Tinfoil didn't accept this key, or its enclave check failed. Nothing was saved. Check the key and try again."}})
+        self.assertTrue(rej['open']);self.assertIn("didn't accept this key",rej['status'])
+
+class HandOffErrorIsReported(unittest.TestCase):
+    """wizard-tinfoil#30: the Agent Service's refusal (503 runtime_unavailable) reaches status() as a plain error."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.old=s.DATA;s.DATA=Path(self.temp.name);s.initialize()
+    def tearDown(self):
+        s.DATA=self.old;self.temp.cleanup()
+    def test_runtime_unavailable_is_shown_then_cleared(self):
+        import io
+        def refuse(method,path,body=None):
+            if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':True}
+            if method=='GET':return {}
+            raise urllib.error.HTTPError(s.HERMES_URL+path,503,'x',{},io.BytesIO(b'{"ok":false,"error":"runtime_unavailable"}'))
+        s.atomic('connection.json',{'key':KEY,'authenticated':False,'models':['kimi-k3','glm-5-3'],'verifiedAt':'t'})
+        with patch.object(s,'agent_call',side_effect=refuse):s.reconcile()
+        st=s.status()
+        self.assertEqual(st['chatIntegration'],'unavailable');self.assertTrue(st['keyVerified']);self.assertFalse(st['agentReady'])
+        self.assertEqual(st['error'],"Tinfoil accepted your key, but your Wizard couldn't create the private agent (runtime unavailable). Try again in a minute or open Troubleshoot.")
+        self.assertNotIn(KEY,json.dumps(st))
+        def accept(method,path,body=None):
+            if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':True}
+            return {'ok':True,'agent':'private-1'}
+        with patch.object(s,'agent_call',side_effect=accept):s.reconcile()
+        st=s.status();self.assertTrue(st['agentReady']);self.assertIsNone(st['error']);self.assertEqual(st['privateModels'],['kimi-k3','glm-5-3'])
+    def test_progress_is_visible_while_connect_runs(self):
+        seen=[]
+        def slow(action,key,payload=None):seen.append(s.status()['progress']);return {'models':['kimi-k3'],'verifiedAt':'t'}
+        def agent(method,path,body=None):seen.append(s.status()['progress']);return {}
+        with patch.object(s,'worker',side_effect=slow),patch.object(s,'agent_call',side_effect=agent):
+            with s.LOCK,s.progress():
+                s.worker('verify',KEY);s.PROGRESS['step']='agent';s.register(['kimi-k3'])
+        self.assertEqual(seen[0],'verifying');self.assertIn('agent',seen[1:]);self.assertIsNone(s.status()['progress'])

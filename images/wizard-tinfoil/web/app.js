@@ -7,14 +7,39 @@ const q=(k,sel)=>K[k].box.querySelector(sel);
 const row=(k,sel)=>document.querySelector(`[data-row="${k}"] ${sel}`);
 // Every pop-up is a kit sheet (wizard-sheet.js): ×, Esc, tap outside, Back and swipe down all close it.
 const openSheet=d=>{if(window.WzSheet)WzSheet.open(d);else if(!d.open)d.showModal();};
+// Connected = Tinfoil checked the key (attestation) and the agent has it; a key whose agent set-up failed says so
+// (wizard-tinfoil#30), never "Not connected" next to "Saved".
+const ready=s=>s.status==='connected'||!!s.agentReady;
+const stuck=s=>!!s.credentialStored&&!!s.keyVerified&&!s.agentReady&&s.status!=='connected';
+// Model ids as people say them: kimi-k3-1-pro → Kimi K3.1 Pro, glm-5-3 → GLM 5.3.
+const NAMES={kimi:'Kimi',glm:'GLM',deepseek:'DeepSeek',llama:'Llama',gpt:'GPT',oss:'OSS',pro:'Pro',flash:'Flash'};
+function modelName(id){
+  const out=[];
+  for(const w of String(id).split('-')){
+    let m;
+    if(/^\d+$/.test(w)&&out.length&&/\d$/.test(out[out.length-1]))out[out.length-1]+='.'+w;
+    else if(NAMES[w])out.push(NAMES[w]);
+    else if((m=w.match(/^([a-z]{2,})(\d+)$/))&&NAMES[m[1]])out.push(NAMES[m[1]]+' '+m[2]);
+    else if(/^[a-z]\d+$/.test(w)||/^\d+[a-z]$/.test(w))out.push(w.toUpperCase());
+    else out.push(w.charAt(0).toUpperCase()+w.slice(1));
+  }
+  return out.join(' ');
+}
+const list=a=>a.length<2?a.join(''):a.slice(0,-1).join(', ')+' and '+a[a.length-1];
+function result(s){
+  if(ready(s)){const m=list((s.privateModels||[]).map(modelName));
+    return['ok',`Connected: ${m?m+' ready for your ':'private models ready for your '}${s.chatIntegration==='private_agent'?'private agent':'agent'}.`];}
+  if(s.error)return['',s.error];
+  return['','Your key is saved, but your agent isn\u2019t set up yet. Try again in a minute or open Troubleshoot.'];
+}
 function pill(k,s,stored){
   if(!stored)return['off','Not added'];
-  if(k==='api')return s.status==='connected'?['ok','Active']:['off','Saved'];
+  if(k==='api')return ready(s)?['ok','Active']:stuck(s)?['warn','Key OK']:['off','Saved'];
   return s.billing==='rejected'?['warn','Rejected']:s.billing==='unavailable'?['warn','Unavailable']:['ok','Active'];
 }
 function view(k,s){
   const stored=k==='api'?s.credentialStored:s.adminKeyStored,h=k==='api'?s.apiKeyHint:s.adminKeyHint;let state='Not added',sub=k==='api'?'Needed for private models in chat.':'Optional: shows your Tinfoil credit on Home.';
-  if(stored&&k==='api'){state='Saved '+(h||'');sub=s.status==='connected'?'Connected · private models available':'Saved · connects on first private chat';}
+  if(stored&&k==='api'){state='Saved '+(h||'');sub=ready(s)?'Connected · private models available':stuck(s)?'Key OK · private agent not set up':'Saved · not checked yet';}
   if(stored&&k==='admin'){const p=s.usage&&s.usage.paid;state='Saved '+(h||'');sub=s.billing==='rejected'?'Tinfoil rejected this key. Replace it with an unscoped admin key.':p?(p.balanceMinor!=null?usd(p.balanceMinor)+' credit left · '+usd(p.usedMinor)+' spent this period':usd(p.usedMinor)+' spent this period'):s.billing==='unavailable'?'Billing unavailable right now':'Reading billing…';}
   q(k,'[data-state]').textContent=state;q(k,'[data-sub]').textContent=sub;
   row(k,'[data-state]').textContent=K[k].name+(stored&&h?' '+h:'');
@@ -51,18 +76,34 @@ function apps(s){
 }
 function render(s){
   last=s;apps(s);view('api',s);view('admin',s);credit(s);details(s);
-  const [kind,word]=s.status==='connected'&&s.billing!=='rejected'?['ok','Connected']:s.status==='error'||s.billing==='rejected'||(s.status==='connected'&&s.error)?['warn','Needs attention']:['off','Not connected'];
+  const [kind,word]=stuck(s)?['warn','Key OK']:ready(s)&&!s.error&&s.billing!=='rejected'?['ok','Connected']:s.status==='error'||s.billing==='rejected'||(ready(s)&&s.error)?['warn','Needs attention']:['off','Not connected'];
   el('pill').className='wz-pill '+kind;el('pill').textContent=word;
   el('count').textContent=String((s.credentialStored?1:0)+(s.adminKeyStored?1:0));
-  el('connect').hidden=!!s.credentialStored;
+  el('connect').hidden=!!s.credentialStored;el('retry').hidden=!stuck(s);
   for(const b of document.querySelectorAll('button:not(.wz-sheet-x):not([data-open])'))b.disabled=busy;
 }
-function say(text){el('status').textContent=text;for(const k of ['api','admin'])q(k,'[data-msg]').textContent=K[k].box.open?text:'';}
+// kind: '' an error (red), 'note' progress, 'ok' a result.
+function say(text,kind=''){const c='wz-status'+(kind?' '+kind:'');el('status').textContent=text;el('status').className=c;
+  for(const k of ['api','admin']){const m=q(k,'[data-msg]');m.textContent=K[k].box.open?text:'';m.className=c;}}
 async function request(path,body){const r=await fetch(path,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json','X-Wizard-Request':'1'},body:JSON.stringify(body)});const s=await r.json();if(!r.ok)throw Error(s.error||'Connection unavailable.');return s;}
-async function action(path,body,after){if(busy)return;busy=true;if(last)render(last);say('');try{await request(path,body);after&&after();}catch(e){say(e.message);}finally{busy=false;request('api/status').then(render).catch(()=>{say('Status unavailable.');});}}
+// Connect and Test take up to a minute (enclave check, then the agent hand-off): the page says which step is running.
+const STEPS={verifying:'Checking your key with Tinfoil…',agent:'Adding Tinfoil to your agent…',private_agent:'Setting up your private agent…'};
+async function action(path,body,after,opts={}){
+  if(busy)return;busy=true;const btn=opts.button,label=btn&&btn.textContent;if(last)render(last);
+  if(btn)btn.textContent=opts.busyLabel||label;say(opts.first||'',opts.first?'note':'');
+  let tick=0;if(opts.first)tick=setInterval(()=>{request('api/status').then(s=>{if(busy&&STEPS[s.progress])say(STEPS[s.progress],'note');}).catch(()=>{});},1000);
+  let done=null;
+  try{const s=await request(path,body);after&&after(s);if(opts.result)done=result(s);}catch(e){say(e.message);}
+  finally{clearInterval(tick);busy=false;if(btn)btn.textContent=label;
+    request('api/status').then(s=>{render(s);if(done){const [kind,text]=result(s);say(text,kind);}}).catch(()=>{say('Status unavailable.');});}
+}
 function openKey(k){say('');openSheet(K[k].box);const i=q(k,'input');if(!q(k,'[data-form]').hidden)i.focus();}
 for(const k of ['api','admin']){
-  q(k,'[data-form]').onsubmit=e=>{e.preventDefault();const i=q(k,'input'),v=i.value;i.value='';action(K[k].save,{[K[k].field]:v},()=>{editing[k]=false;});};
+  q(k,'[data-form]').onsubmit=e=>{e.preventDefault();const i=q(k,'input'),v=i.value;i.value='';
+    // In the Welcome (?connect=1) saving the key is the whole step: the sheet closes and the page shows Connected or
+    // what went wrong, never the Replace / Remove / Test sheet (wizard-tinfoil#30).
+    action(K[k].save,{[K[k].field]:v},()=>{editing[k]=false;if(CONNECT&&k==='api'&&window.WzSheet)WzSheet.close(K[k].box);else if(CONNECT&&k==='api'&&K[k].box.open)K[k].box.close();},
+      k==='api'?{button:q(k,'button[type=submit]'),busyLabel:'Connecting…',first:STEPS.verifying,result:true}:{button:q(k,'button[type=submit]'),busyLabel:'Saving…'});};
   q(k,'[data-replace]').onclick=()=>{editing[k]=true;render(last);q(k,'input').focus();};
   q(k,'[data-cancel]').onclick=()=>{editing[k]=false;q(k,'input').value='';render(last);};
   q(k,'[data-remove]').onclick=e=>{const b=e.currentTarget;if(b.dataset.armed!=='1'){b.dataset.armed='1';b.textContent='Tap again to remove';setTimeout(()=>{b.dataset.armed='';if(last)render(last);},4000);return;}b.dataset.armed='';action(K[k].remove,{});};
@@ -71,7 +112,9 @@ for(const k of ['api','admin']){
   row(k,'[data-open]').onclick=()=>openKey(k);
 }
 el('connect').onclick=()=>openKey('api');
-el('test').onclick=()=>action('api/test',{});
+const test=b=>action('api/test',{},null,{button:b,busyLabel:'Testing…',first:STEPS.verifying,result:true});
+el('test').onclick=e=>test(e.currentTarget);
+el('retry').onclick=e=>test(e.currentTarget);
 // ?connect=1 (the Wizard Welcome, same as the Claude/ChatGPT apps): with no key saved yet, open straight to the
 // API key paste box (Miguel: keep onboarding to a minimum). A saved key just shows the page.
 const CONNECT=new URLSearchParams(location.search).get('connect')==='1';
