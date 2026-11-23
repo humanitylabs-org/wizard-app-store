@@ -175,8 +175,9 @@ def model_works(call):
     """True when the agent's current main model can answer: Hermes' model picker (GET /api/model/options) lists its
     provider as signed in and not virtual. A provider name alone is not enough (wizard-ux#1749): a box whose model
     still points at a provider that was never signed in (an earlier ChatGPT default) kept it, so the sign-in the
-    owner just made never became the agent's model and Welcome waited forever. No model at all: False. Anything
-    that can't be read or isn't listed: True, so a model is never replaced on a guess."""
+    owner just made never became the agent's model and Welcome waited forever. Its row is the one Hermes marks
+    `is_current` (else the one with its slug). Not listed at all: False (Hermes leaves out providers that are not
+    signed in). No model at all: False. Anything that can't be read: True, so a model is never replaced on a guess."""
     try:
         provider = str((call('/api/model/info') or {}).get('provider') or '').strip()
     except Exception:
@@ -187,9 +188,12 @@ def model_works(call):
         rows = (call('/api/model/options') or {}).get('providers')
     except Exception:
         return True
-    row = next((p for p in rows if isinstance(p, dict) and p.get('slug') == provider), None) if isinstance(rows, list) else None
-    if row is None:
+    if not isinstance(rows, list):
         return True
+    rows = [p for p in rows if isinstance(p, dict)]
+    row = next((p for p in rows if p.get('is_current') is True), None) or next((p for p in rows if p.get('slug') == provider), None)
+    if row is None:
+        return False
     if row.get('auth_type') == 'virtual' or row.get('source') == 'virtual':
         return False
     return row.get('authenticated') is not False

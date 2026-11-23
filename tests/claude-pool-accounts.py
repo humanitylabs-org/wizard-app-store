@@ -269,11 +269,18 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
         self.assertEqual(posts[0][2]['model'], 'claude-sonnet-5[1m]')
 
     def test_a_chosen_model_is_never_changed(self):
-        self.assertEqual(self.adopt(self.serve('openai-codex')), 'kept')
-        self.assertFalse([c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set'])
-        # Signed in and real: kept as well.
+        # Signed in and real (listed by its slug, or marked is_current under another one): kept.
         self.assertEqual(self.adopt(self.serve('openai-codex', extra=[{'slug': 'openai-codex', 'authenticated': True, 'models': ['gpt-6.1-sol']}])), 'kept')
         self.assertFalse([c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set'])
+        self.assertEqual(self.adopt(self.serve('custom', extra=[{'slug': 'custom:my-endpoint', 'is_current': True, 'models': ['m']}])), 'kept')
+        self.assertFalse([c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set'])
+
+    def test_a_model_hermes_leaves_out_is_replaced(self):
+        # The real Hermes leaves a provider that is not signed in out of model/options altogether (the tester's
+        # Stable box): the current ChatGPT is not listed, so it can't answer, and the Claude sign-in becomes the model.
+        self.assertEqual(self.adopt(self.serve('openai-codex')), 'set')
+        posts = [c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set']
+        self.assertEqual(posts[0][2]['provider'], 'claude-subscription-directsdk-experimental')
 
     def test_a_model_whose_provider_is_not_signed_in_is_replaced(self):
         # wizard-ux#1749: the agent still pointed at ChatGPT (an earlier default), never signed in; the Claude sign-in
@@ -297,7 +304,9 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
         self.assertFalse(pool_client.model_works(call_with({'provider': ''}, {})))
         self.assertTrue(pool_client.model_works(call_with(OSError('down'), {})))
         self.assertTrue(pool_client.model_works(call_with({'provider': 'x'}, OSError('down'))))
-        self.assertTrue(pool_client.model_works(call_with({'provider': 'x'}, {'providers': []})))  # not listed: keep
+        self.assertFalse(pool_client.model_works(call_with({'provider': 'x'}, {'providers': []})))  # not listed: not signed in
+        self.assertTrue(pool_client.model_works(call_with({'provider': 'x'}, {'providers': [{'slug': 'y', 'is_current': True, 'authenticated': True}]})))
+        self.assertFalse(pool_client.model_works(call_with({'provider': 'x'}, {'providers': [{'slug': 'y', 'is_current': True, 'authenticated': False}, {'slug': 'x', 'authenticated': True}]})))
         self.assertTrue(pool_client.model_works(call_with({'provider': 'x'}, {'providers': [{'slug': 'x'}]})))  # no answer: keep
         self.assertFalse(pool_client.model_works(call_with({'provider': 'x'}, {'providers': [{'slug': 'x', 'authenticated': False}]})))
         self.assertFalse(pool_client.model_works(call_with({'provider': 'x'}, {'providers': [{'slug': 'x', 'authenticated': True, 'source': 'virtual'}]})))

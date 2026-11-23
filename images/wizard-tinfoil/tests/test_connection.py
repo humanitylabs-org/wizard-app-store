@@ -183,10 +183,11 @@ class Tests(unittest.TestCase):
             self.call('/api/disconnect',{})
     def test_07c_a_model_that_cannot_answer_gets_tinfoil(self):
         # wizard-ux#1749: the agent still pointed at a ChatGPT that was never signed in (or a virtual model): Connect
-        # makes Tinfoil its model. Signed in and real, or not listed: kept.
+        # makes Tinfoil its model; so does one Hermes leaves out of its picker (not signed in). Signed in and real: kept.
         def row(**k): return {'slug':'openai-codex','models':['gpt-6.1-sol'],**k}
         for listed,want in (([row(authenticated=False)],True),([row(authenticated=True,source='virtual')],True),
-                            ([row(authenticated=True)],False),([],False)):
+                            ([row(authenticated=True)],False),([],True),
+                            ([{'slug':'custom:x','is_current':True,'authenticated':True}],False)):
             calls=[]
             def fake(method,path,body=None,timeout=40):
                 if method=='GET':
