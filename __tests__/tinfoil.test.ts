@@ -17,7 +17,7 @@ test("the Tinfoil key only ever goes to the official attestation-verifying SDK",
   // (Tinfoil becomes the default only for an agent with no model yet: a fresh Wizard's Welcome).
   expect(server).toContain("'api_key':token");
   expect(server).toContain("'make_default':first");
-  expect(server).toContain("first = not (agent_call('GET', '/api/model/info') or {}).get('provider')");
+  expect(server).toContain("first = not model_works()");
   expect(readFileSync(`${dir}/requirements.lock`, "utf8")).toMatch(/^tinfoil==0\.14\.0 /m);
 });
 
