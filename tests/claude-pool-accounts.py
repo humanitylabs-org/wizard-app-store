@@ -206,7 +206,7 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
     LIVE = ['claude-sonnet-5[1m]', 'claude-haiku-4-5-20251001', 'claude-opus-5-5[1m]', 'claude-opus-5[1m]',
             'claude-opus-4-8[1m]', 'claude-fable-5-1[1m]']  # the demo's list, 30 Oct 2026
 
-    def serve(self, current, models=LIVE):
+    def serve(self, current, models=LIVE, extra=()):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         seen = self.seen = []
 
@@ -229,7 +229,7 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
                 if self.path == '/api/model/options':
                     return self.reply({'provider': '', 'model': '', 'providers': [
                         {'slug': 'anthropic', 'models': ['claude-opus-9']},
-                        {'slug': 'claude-subscription-directsdk-experimental', 'models': models}]})
+                        {'slug': 'claude-subscription-directsdk-experimental', 'models': models}, *extra]})
                 return self.reply({'provider': 'claude-subscription-directsdk-experimental', 'model': 'claude-sonnet-5[1m]'})
 
             def do_POST(self):
@@ -271,6 +271,36 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
     def test_a_chosen_model_is_never_changed(self):
         self.assertEqual(self.adopt(self.serve('openai-codex')), 'kept')
         self.assertFalse([c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set'])
+        # Signed in and real: kept as well.
+        self.assertEqual(self.adopt(self.serve('openai-codex', extra=[{'slug': 'openai-codex', 'authenticated': True, 'models': ['gpt-6.1-sol']}])), 'kept')
+        self.assertFalse([c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set'])
+
+    def test_a_model_whose_provider_is_not_signed_in_is_replaced(self):
+        # wizard-ux#1749: the agent still pointed at ChatGPT (an earlier default), never signed in; the Claude sign-in
+        # was 'kept' out and Welcome waited forever. Now the sign-in becomes the agent's model.
+        self.assertEqual(self.adopt(self.serve('openai-codex', extra=[{'slug': 'openai-codex', 'authenticated': False, 'models': ['gpt-6.1-sol']}])), 'set')
+        posts = [c for c in self.seen if c[0] == 'POST' and c[1] == '/api/model/set']
+        self.assertEqual((posts[0][2]['provider'], posts[0][2]['model']), ('claude-subscription-directsdk-experimental', 'claude-opus-5-5[1m]'))
+
+    def test_a_virtual_model_is_replaced(self):
+        self.assertEqual(self.adopt(self.serve('moa', extra=[{'slug': 'moa', 'authenticated': True, 'auth_type': 'virtual', 'models': ['moa']}])), 'set')
+
+    def test_model_works_never_guesses(self):
+        import pool_client
+        def call_with(info, options):
+            def call(path, body=None):
+                value = info if path == '/api/model/info' else options
+                if isinstance(value, Exception):
+                    raise value
+                return value
+            return call
+        self.assertFalse(pool_client.model_works(call_with({'provider': ''}, {})))
+        self.assertTrue(pool_client.model_works(call_with(OSError('down'), {})))
+        self.assertTrue(pool_client.model_works(call_with({'provider': 'x'}, OSError('down'))))
+        self.assertTrue(pool_client.model_works(call_with({'provider': 'x'}, {'providers': []})))  # not listed: keep
+        self.assertTrue(pool_client.model_works(call_with({'provider': 'x'}, {'providers': [{'slug': 'x'}]})))  # no answer: keep
+        self.assertFalse(pool_client.model_works(call_with({'provider': 'x'}, {'providers': [{'slug': 'x', 'authenticated': False}]})))
+        self.assertFalse(pool_client.model_works(call_with({'provider': 'x'}, {'providers': [{'slug': 'x', 'authenticated': True, 'source': 'virtual'}]})))
 
     def test_alongside_or_no_agent_password_does_nothing(self):
         import pool_client
@@ -296,6 +326,16 @@ class AgentDefaultAfterSignIn(unittest.TestCase):
                 status, body = owner.submit_code('id', code)
         self.assertEqual(calls, [1])
         self.assertEqual(body.get('agent_default'), 'set')
+
+    def test_a_passing_test_adopts_too(self):
+        # wizard-ux#1749: already signed in, the agent's model elsewhere and broken: the page's Test proves the sign-in
+        # works, so it gets the same chance as a new sign-in; a failing Test changes nothing.
+        calls = []
+        for answer in ((502, {'ok': False}), (200, {'ok': True, 'message': 'OK: Claude answered.'})):
+            with patch.object(owner.State, 'after_sign_in', lambda: calls.append(1) or 'set'), patch.object(owner, 'run_test', lambda a=answer: a):
+                status, body = owner.test_and_adopt()
+        self.assertEqual(calls, [1])
+        self.assertEqual((status, body.get('agent_default')), (200, 'set'))
 
 
 class SignInCodeIsMasked(unittest.TestCase):

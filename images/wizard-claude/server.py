@@ -34,7 +34,7 @@ import inference
 
 import usage
 
-VERSION = "0.2.26"
+VERSION = "0.2.27"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
@@ -338,6 +338,19 @@ def run_test() -> tuple[int, dict]:
         State.busy.release()
 
 
+def test_and_adopt() -> tuple[int, dict]:
+    """The page's Test. A passing Test proves this sign-in answers, so (like a new sign-in) it becomes the agent's
+    model when the agent has none that works (wizard-ux#1749: a box signed in before its model pointed anywhere
+    useful stayed on 'Sign in to Claude'). A working model is never changed (pool_client.model_works)."""
+    code, body = run_test()
+    if code == 200 and State.after_sign_in is not None:
+        try:
+            body = {**body, "agent_default": State.after_sign_in()}
+        except Exception:
+            pass
+    return code, body
+
+
 def card(host: str) -> dict:
     base = f"http://{host}" if host else f"http://wizard-claude:{PORT}"
     return {
@@ -481,7 +494,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/claude/logout":
             return self.json(*logout())
         if path == "/api/claude/test":
-            return self.json(*run_test())
+            return self.json(*test_and_adopt())
         self.json(404, {"ok": False, "message": "not found"})
 
 
