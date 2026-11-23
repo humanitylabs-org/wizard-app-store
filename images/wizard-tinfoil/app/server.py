@@ -178,20 +178,28 @@ def hand_to_private_agent(picked):
 HANDED = {'agent': None}  # the private agent id of the last successful hand-off
 # A fresh box's first hand-off builds the private agent (image pull, Runtipi install, restart): it can take minutes
 # (wizard-agent-service#582), longer than any plain dashboard call. Wait a little past the wizard-os plugin's own 240 s
-# wait for the Service; when even that runs out (a slow first pull) the agent still finishes, so try again a few times
-# instead of waiting for the next start.
+# wait for the Service; when even that runs out (a slow first pull) the agent still finishes, so try again by itself
+# instead of waiting for the next start. A box whose agent runtime is not there yet ('runtime_unavailable') gets it
+# later, often through an update (wizard-tinfoil#35): retry that too, with backoff (2, 4, 8, 16 min, then every 30 min)
+# until the hand-off works or the key is removed, so the owner never has to tap Test.
 HANDOFF_WAIT = 260
 HANDOFF_RETRY_S = int(os.environ.get('WIZARD_TINFOIL_HANDOFF_RETRY','120'))
-HANDOFF_RETRIES = 5
-RETRY = {'left': HANDOFF_RETRIES, 'timer': None}
+HANDOFF_RETRY_MAX_S = int(os.environ.get('WIZARD_TINFOIL_HANDOFF_RETRY_MAX','1800'))
+HANDOFF_RETRY_CODES = ('unreachable', 'runtime_unavailable')
+RETRY = {'tries': 0, 'timer': None}
+def retry_delay(tries): return min(HANDOFF_RETRY_S * 2 ** min(tries, 16), max(HANDOFF_RETRY_MAX_S, HANDOFF_RETRY_S))
 def retry_handoff_later(agent):
-    """After a hand-off that timed out or could not reach the agent, run reconcile again in a while (a few times)."""
-    if agent != 'unavailable' or AGENT_ERROR.get('step') != 'private_agent' or AGENT_ERROR.get('code') != 'unreachable':
-        if agent == 'private_agent': RETRY['left'] = HANDOFF_RETRIES
+    """After a hand-off that timed out, could not reach the agent, or found no agent runtime yet, run reconcile again
+    in a while, backing off to every HANDOFF_RETRY_MAX_S."""
+    if agent != 'unavailable' or AGENT_ERROR.get('step') != 'private_agent' or AGENT_ERROR.get('code') not in HANDOFF_RETRY_CODES:
+        if agent == 'private_agent':
+            RETRY['tries'] = 0
+            if RETRY['timer'] and RETRY['timer'] is not threading.current_thread(): RETRY['timer'].cancel()
+            RETRY['timer'] = None
         return
-    if HANDOFF_RETRY_S <= 0 or RETRY['left'] <= 0 or (RETRY['timer'] and RETRY['timer'].is_alive()): return
-    RETRY['left'] -= 1
-    RETRY['timer'] = threading.Timer(HANDOFF_RETRY_S, retry_handoff_now); RETRY['timer'].daemon = True; RETRY['timer'].start()
+    if HANDOFF_RETRY_S <= 0 or (RETRY['timer'] and RETRY['timer'].is_alive()): return
+    delay = retry_delay(RETRY['tries']); RETRY['tries'] += 1
+    RETRY['timer'] = threading.Timer(delay, retry_handoff_now); RETRY['timer'].daemon = True; RETRY['timer'].start()
 def retry_handoff_now():
     """The timer's run: it still reads alive while it runs, so let go of it first, then this try may schedule the next."""
     RETRY['timer'] = None
@@ -347,10 +355,16 @@ def connection_error(s):
     what = 'create the private agent' if e.get('step') == 'private_agent' else 'add Tinfoil to your agent'
     return f"Tinfoil accepted your key, but your Wizard couldn't {what} ({why}). Try again in a minute or open Troubleshoot."
 
+def connected(s):
+    """Connected = a chat already went through this app's gateway, or Tinfoil verified the key (attestation) and the
+    agent has it. A private agent chats over the relay, never /v1, so 'authenticated' alone stayed false next to a
+    working private agent (wizard-tinfoil#35)."""
+    return bool(s and (s.get('authenticated') or (s.get('verifiedAt') and s.get('agent') in ('registered','private_agent'))))
+
 def status():
     # Atomic replace makes this a safe snapshot; never wait behind network verification.
     s = stored()
-    return {'keyVerified':bool(s and s.get('verifiedAt')),'agentReady':(s or {}).get('agent') in ('registered','private_agent'),'privateModels':list((s or {}).get('picked') or []),'progress':PROGRESS['step'],'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if s and s.get('authenticated') else 'not_connected','credentialStored':bool(s),'credentialVerified':bool(s and s.get('authenticated')),'plan':None,'account':None,'usage':usage(),'error':connection_error(s),**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered'),'apiKeyHint':hint((s or {}).get('key')),'apps':sorted(app_tokens())}
+    return {'keyVerified':bool(s and s.get('verifiedAt')),'agentReady':(s or {}).get('agent') in ('registered','private_agent'),'privateModels':list((s or {}).get('picked') or []),'progress':PROGRESS['step'],'contract':'wizard.ai-connection/1','provider':'tinfoil','name':'Tinfoil','status':'connected' if connected(s) else 'not_connected','credentialStored':bool(s),'credentialVerified':connected(s),'plan':None,'account':None,'usage':usage(),'error':connection_error(s),**billing_status(),'models':s['models'] if s else [],'verification':{'mode':'official-sdk-attestation','sdk':'tinfoil==0.14.0','lastVerifiedAt':s['verifiedAt'] if s else None},'chatIntegration':(s or {}).get('agent','not_registered'),'apiKeyHint':hint((s or {}).get('key')),'apps':sorted(app_tokens())}
 
 def worker(action, key, payload=None):
     # Kill on timeout; no upstream exception/headers/body may reach logs or clients.

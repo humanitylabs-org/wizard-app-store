@@ -1,8 +1,11 @@
 // Drives web/app.js's Welcome sign-in (?connect=1): paste a key, Save, and reports what the page shows after.
-// Usage: node connect_flow_harness.cjs <app.js> <reply JSON for POST api/connect>   (wizard-tinfoil#30)
+// Usage: node connect_flow_harness.cjs <app.js> <reply JSON for POST api/connect> [later status body]   (wizard-tinfoil#30)
+// With a later body, api/status answers it once the page has shown the first reply: the app's own background retry
+// set the private agent up (wizard-tinfoil#35), and the report says what the page shows then.
 "use strict";
 const fs=require('fs'),vm=require('vm');
-const [file,replyJson]=process.argv.slice(2);
+const [file,replyJson,laterJson]=process.argv.slice(2);
+const later=laterJson?JSON.parse(laterJson):null;let shown=false;
 const reply=JSON.parse(replyJson);
 function E(name){
   const kids={};
@@ -16,13 +19,13 @@ const document={getElementById:id=>byId[id]||(byId[id]=E('#'+id)),querySelector:
   querySelectorAll:()=>[],createElement:t=>E(t)};
 let saved=false;const seen=[];
 const empty={status:'not_connected',credentialStored:false};
-const ctx={document,window:{},location:{search:'?connect=1'},URLSearchParams,setTimeout,setInterval,clearInterval,console,Error,JSON,Math,String,Date,
+const ctx={document,window:{WZ_STATUS_WATCH_MS:40},location:{search:'?connect=1'},URLSearchParams,setTimeout,setInterval,clearInterval,console,Error,JSON,Math,String,Date,
   fetch:async(path,opts)=>{
     if(path==='api/connect'){const btn=document.getElementById('k-api').querySelector('button[type=submit]');
       seen.push(btn.textContent,document.getElementById('status').textContent);
       await new Promise(r=>setTimeout(r,20));saved=true;
       return {ok:reply.ok!==false,json:async()=>reply.body};}
-    return {ok:true,json:async()=>saved&&reply.ok!==false?reply.body:empty};}};
+    return {ok:true,json:async()=>saved&&reply.ok!==false?(shown&&later?later:reply.body):empty};}};
 document.getElementById('k-api').querySelector('button[type=submit]').textContent='Save';
 vm.runInNewContext(fs.readFileSync(file,'utf8'),ctx);
 setTimeout(()=>{
@@ -33,5 +36,12 @@ setTimeout(()=>{
     process.stdout.write(JSON.stringify({openBefore,open:box.open,whileSaving:seen,button:box.querySelector('button[type=submit]').textContent,
       status:document.getElementById('status').textContent,statusClass:document.getElementById('status').className,
       pill:document.getElementById('pill').textContent,retry:!document.getElementById('retry').hidden}));
+    if(!later)process.exit(0);
+    shown=true;
+    setTimeout(()=>{
+      process.stdout.write('\n'+JSON.stringify({status:document.getElementById('status').textContent,statusClass:document.getElementById('status').className,
+        pill:document.getElementById('pill').textContent,retry:!document.getElementById('retry').hidden}));
+      process.exit(0);
+    },300);
   },150);
 },50);

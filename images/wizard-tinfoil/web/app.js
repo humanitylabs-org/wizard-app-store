@@ -81,7 +81,17 @@ function render(s){
   el('count').textContent=String((s.credentialStored?1:0)+(s.adminKeyStored?1:0));
   el('connect').hidden=!!s.credentialStored;el('retry').hidden=!stuck(s);
   for(const b of document.querySelectorAll('button:not(.wz-sheet-x):not([data-open])'))b.disabled=busy;
+  watch(s);
 }
+// A saved key whose private agent isn't set up yet is retried by the app on its own (the agent runtime can arrive
+// later, wizard-tinfoil#35): keep reading the status while the page is open, so it turns Connected with no tap.
+let watching=0;
+function watch(s){
+  if(watching||!stuck(s))return;
+  watching=setTimeout(()=>{watching=0;if(busy||document.hidden){if(last)watch(last);return;}
+    request('api/status').then(n=>{render(n);if(ready(n)){const [kind,text]=result(n);say(text,kind);}}).catch(()=>{if(last)watch(last);});},WATCH_MS);
+}
+const WATCH_MS=window.WZ_STATUS_WATCH_MS||10000;
 // kind: '' an error (red), 'note' progress, 'ok' a result.
 function say(text,kind=''){const c='wz-status'+(kind?' '+kind:'');el('status').textContent=text;el('status').className=c;
   for(const k of ['api','admin']){const m=q(k,'[data-msg]');m.textContent=K[k].box.open?text:'';m.className=c;}}

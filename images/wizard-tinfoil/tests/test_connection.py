@@ -261,23 +261,25 @@ class Tests(unittest.TestCase):
             def __init__(self,delay,fn):self.delay,self.fn=delay,fn;self.daemon=False
             def start(self):timers.append(self)
             def is_alive(self):return True   # a pending timer, and also the timer while its own run goes on
-        s.RETRY['left']=s.HANDOFF_RETRIES;s.RETRY['timer']=None
+            def cancel(self):self.cancelled=True
+        s.RETRY['tries']=0;s.RETRY['timer']=None
         with patch.object(s,'worker',return_value={'models':['kimi-k3','glm-5-3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake), patch.object(s.threading,'Timer',T):
             code,b=self.call('/api/connect',{'apiKey':KEY});self.assertEqual(code,200)
-            self.assertEqual(json.loads(b)['chatIntegration'],'unavailable')
+            self.assertEqual(json.loads(b)['chatIntegration'],'unavailable');self.assertEqual(json.loads(b)['status'],'not_connected')
             self.assertEqual(waits,[s.HANDOFF_WAIT]);self.assertGreater(s.HANDOFF_WAIT,240)
             self.assertEqual(len(timers),1);self.assertEqual(timers[0].delay,s.HANDOFF_RETRY_S)
             s.reconcile();self.assertEqual(len(timers),1)   # a start while a retry is pending adds no second timer
-            # A retry that times out again schedules the next one, from inside its own timer run, up to HANDOFF_RETRIES.
-            for n in range(2,s.HANDOFF_RETRIES+1):
-                timers[-1].fn();self.assertEqual(len(timers),n)
-            timers[-1].fn();self.assertEqual(len(timers),s.HANDOFF_RETRIES)   # no sixth
-            self.assertEqual(s.RETRY['left'],0)
+            # A retry that times out again schedules the next one from inside its own timer run, backing off to the cap
+            # and then going on at the cap (wizard-tinfoil#35: never give up while the key is saved).
+            for _ in range(8):timers[-1].fn()
+            delays=[t.delay for t in timers]
+            self.assertEqual(delays,[min(s.HANDOFF_RETRY_S*2**n,s.HANDOFF_RETRY_MAX_S) for n in range(9)])
+            self.assertEqual(max(delays),s.HANDOFF_RETRY_MAX_S);self.assertEqual(delays[-1],s.HANDOFF_RETRY_MAX_S)
+            self.assertEqual(delays,sorted(delays))
             state['slow']=False;timers[-1].fn()
-            self.assertEqual(s.status()['chatIntegration'],'private_agent')
-            self.assertEqual(len(timers),s.HANDOFF_RETRIES)   # a hand-off that worked schedules nothing more
-            self.assertEqual(s.RETRY['left'],s.HANDOFF_RETRIES)
-            # A refusal (not a timeout) is not retried on a timer: the next start retries as before.
+            self.assertEqual(s.status()['chatIntegration'],'private_agent');self.assertEqual(s.status()['status'],'connected')
+            self.assertEqual(len(timers),9)   # a hand-off that worked schedules nothing more
+            self.assertEqual(s.RETRY['tries'],0);self.assertIsNone(s.RETRY['timer'])
             s.HANDED['agent']=None
         with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
     def test_10d_registered_box_moves_to_the_private_agent(self):
@@ -451,6 +453,14 @@ class WelcomeSignInFeedback(unittest.TestCase):
         bad=run({'body':{'status':'not_connected','credentialStored':True,'keyVerified':True,'agentReady':False,'chatIntegration':'unavailable','privateModels':['kimi-k3'],'error':err}})
         self.assertFalse(bad['open']);self.assertEqual(bad['status'],err)
         self.assertEqual(bad['pill'],'Key OK');self.assertTrue(bad['retry'])
+        # wizard-tinfoil#35: the app retries the hand-off itself once the runtime arrives; the open page notices and
+        # turns Connected with no tap.
+        out=subprocess.run(['node',str(ROOT/'tests/connect_flow_harness.cjs'),str(self.APP),json.dumps({'body':{'status':'not_connected','credentialStored':True,'keyVerified':True,'agentReady':False,'chatIntegration':'unavailable','privateModels':['kimi-k3'],'error':err}}),
+            json.dumps({'status':'connected','credentialStored':True,'credentialVerified':True,'keyVerified':True,'agentReady':True,'chatIntegration':'private_agent','privateModels':['kimi-k3'],'error':None})],capture_output=True,text=True,timeout=20,check=True)
+        first,after=[json.loads(x) for x in out.stdout.splitlines()]
+        self.assertEqual(first['pill'],'Key OK')
+        self.assertEqual(after['pill'],'Connected');self.assertFalse(after['retry'])
+        self.assertEqual(after['status'],'Connected: Kimi K3 ready for your private agent.');self.assertIn('ok',after['statusClass'])
         rej=run({'ok':False,'body':{'error':"Tinfoil didn't accept this key, or its enclave check failed. Nothing was saved. Check the key and try again."}})
         self.assertTrue(rej['open']);self.assertIn("didn't accept this key",rej['status'])
 
@@ -477,6 +487,42 @@ class HandOffErrorIsReported(unittest.TestCase):
             return {'ok':True,'agent':'private-1'}
         with patch.object(s,'agent_call',side_effect=accept):s.reconcile()
         st=s.status();self.assertTrue(st['agentReady']);self.assertIsNone(st['error']);self.assertEqual(st['privateModels'],['kimi-k3','glm-5-3'])
+    def test_late_runtime_is_retried_and_then_reads_connected(self):
+        """wizard-tinfoil#35: the runtime arrived (through an update) after the hand-off said runtime_unavailable. Tinfoil
+        retries by itself with backoff, and once the private agent has it, status says connected without a Test tap."""
+        import io
+        runtime={'up':False};timers=[]
+        def agent(method,path,body=None,timeout=40):
+            if method=='GET' and path==s.PRIVATE_FIRST_ROUTE:return {'schema':'wizard.private-first/1','on':True}
+            if method=='GET':return {}
+            if not runtime['up']:raise urllib.error.HTTPError(s.HERMES_URL+path,503,'x',{},io.BytesIO(b'{"ok":false,"error":"runtime_unavailable"}'))
+            return {'ok':True,'agent':'private-1'}
+        class T:
+            def __init__(self,delay,fn):self.delay,self.fn=delay,fn;self.daemon=False
+            def start(self):timers.append(self)
+            def is_alive(self):return True
+            def cancel(self):pass
+        s.RETRY.update(tries=0,timer=None)
+        s.atomic('connection.json',{'key':KEY,'authenticated':False,'models':['kimi-k3','glm-5-3'],'verifiedAt':'t'})
+        with patch.object(s,'agent_call',side_effect=agent),patch.object(s.threading,'Timer',T):
+            s.reconcile()
+            st=s.status();self.assertEqual(st['status'],'not_connected');self.assertFalse(st['credentialVerified'])
+            self.assertEqual(len(timers),1);self.assertEqual(timers[0].delay,s.HANDOFF_RETRY_S)
+            timers[-1].fn();self.assertEqual(len(timers),2);self.assertEqual(timers[1].delay,2*s.HANDOFF_RETRY_S)
+            runtime['up']=True;timers[-1].fn()
+            st=s.status()
+            self.assertEqual((st['status'],st['credentialVerified'],st['agentReady'],st['chatIntegration'],st['error']),('connected',True,True,'private_agent',None))
+            self.assertEqual(len(timers),2);self.assertEqual(s.RETRY['tries'],0)
+        # A refusal that no wait can fix (no chat model) is not retried on a timer.
+        s.RETRY.update(tries=0,timer=None);timers.clear()
+        with patch.object(s,'agent_call',side_effect=agent),patch.object(s.threading,'Timer',T):
+            s.retry_handoff_later(s.agent_failed('private_agent','no_chat_model'))
+        self.assertEqual(timers,[])
+    def test_verified_key_without_an_agent_is_not_connected(self):
+        s.atomic('connection.json',{'key':KEY,'authenticated':False,'models':['kimi-k3'],'verifiedAt':'t','agent':'unavailable'})
+        self.assertEqual(s.status()['status'],'not_connected')
+        s.atomic('connection.json',{'key':KEY,'authenticated':False,'models':['kimi-k3'],'verifiedAt':'t','agent':'registered'})
+        self.assertEqual(s.status()['status'],'connected')
     def test_progress_is_visible_while_connect_runs(self):
         seen=[]
         def slow(action,key,payload=None):seen.append(s.status()['progress']);return {'models':['kimi-k3'],'verifiedAt':'t'}
