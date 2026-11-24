@@ -215,6 +215,24 @@ def private_agent_is_box_default():
     except Exception: return False
     return isinstance(doc, dict) and doc.get('schema') == PRIVATE_FIRST_SCHEMA and doc.get('private_agent') == agent
 
+def model_works():
+    """True when the agent's current main model can answer: Hermes' model picker (GET /api/model/options) lists its
+    provider as signed in and not virtual. A provider name alone is not enough (wizard-ux#1749: a model still pointing
+    at a never signed-in ChatGPT was kept, and the agent could not chat). Its row is the one Hermes marks is_current
+    (else the one with its slug); not listed at all: False (Hermes leaves out providers that are not signed in). No
+    model: False. Anything that can't be read: True, so a model is never replaced on a guess."""
+    try: provider = str((agent_call('GET', '/api/model/info') or {}).get('provider') or '').strip()
+    except Exception: return True
+    if not provider: return False
+    try: rows = (agent_call('GET', '/api/model/options') or {}).get('providers')
+    except Exception: return True
+    if not isinstance(rows, list): return True
+    rows = [p for p in rows if isinstance(p, dict)]
+    row = next((p for p in rows if p.get('is_current') is True), None) or next((p for p in rows if p.get('slug') == provider), None)
+    if row is None: return False
+    if row.get('auth_type') == 'virtual' or row.get('source') == 'virtual': return False
+    return row.get('authenticated') is not False
+
 def register(models):
     """Add (or refresh) Tinfoil in the agent's model list. Returns 'registered', 'private_agent' (private first on:
     handed to the private agent, nothing added to the main Hermes) or 'unavailable'."""
@@ -226,9 +244,9 @@ def register(models):
     token = json.loads((DATA/'gateway-token.json').read_text())['token']
     try:
         # A fresh Wizard's agent starts with no model: Tinfoil chosen in the Welcome must be the model it chats with,
-        # or its first message fails ("no model configured"). A model the owner (or another app) chose is never changed.
-        try: first = not (agent_call('GET', '/api/model/info') or {}).get('provider')
-        except Exception: first = False
+        # or its first message fails ("no model configured"). The same when its model can't answer (its provider was
+        # never signed in, or is virtual; wizard-ux#1749). A working model the owner (or another app) chose is never changed.
+        first = not model_works()
         agent_call('POST', '/api/providers/custom-endpoints', {'id':ENDPOINT_ID,'name':'Tinfoil','base_url':AGENT_BASE,'model':model,'models':picked,'api_key':token,'api_mode':'chat_completions','discover_models':False,'make_default':first})
         return 'registered'
     except Exception as e:

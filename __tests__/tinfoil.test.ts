@@ -17,7 +17,7 @@ test("the Tinfoil key only ever goes to the official attestation-verifying SDK",
   // (Tinfoil becomes the default only for an agent with no model yet: a fresh Wizard's Welcome).
   expect(server).toContain("'api_key':token");
   expect(server).toContain("'make_default':first");
-  expect(server).toContain("first = not (agent_call('GET', '/api/model/info') or {}).get('provider')");
+  expect(server).toContain("first = not model_works()");
   expect(readFileSync(`${dir}/requirements.lock`, "utf8")).toMatch(/^tinfoil==0\.14\.0 /m);
 });
 
@@ -37,7 +37,7 @@ test("workflow tests before it publishes, then checks the published image", () =
   expect(publish).toBeGreaterThan(steps.findIndex((s: string) => s.startsWith("Read-only")));
   const text = readFileSync(".github/workflows/tinfoil.yml", "utf8");
   expect(text).toContain("linux/amd64,linux/arm64");
-  expect(text).toContain("wizard-tinfoil:0.3.19");
+  expect(text).toContain("wizard-tinfoil:0.3.20");
 });
 
 test("?connect=1 (Wizard Welcome) opens straight to the API key paste box, only when no key is saved", () => {

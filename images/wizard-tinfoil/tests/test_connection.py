@@ -181,6 +181,25 @@ class Tests(unittest.TestCase):
                 with patch.object(s.threading,'Thread'):s._sw_set('fast-private-model',False)
                 s.reconcile();self.assertEqual(calls[-1]['models'],['kimi-k3','glm-5-3'])
             self.call('/api/disconnect',{})
+    def test_07c_a_model_that_cannot_answer_gets_tinfoil(self):
+        # wizard-ux#1749: the agent still pointed at a ChatGPT that was never signed in (or a virtual model): Connect
+        # makes Tinfoil its model; so does one Hermes leaves out of its picker (not signed in). Signed in and real: kept.
+        def row(**k): return {'slug':'openai-codex','models':['gpt-6.1-sol'],**k}
+        for listed,want in (([row(authenticated=False)],True),([row(authenticated=True,source='virtual')],True),
+                            ([row(authenticated=True)],False),([],True),
+                            ([{'slug':'custom:x','is_current':True,'authenticated':True}],False)):
+            calls=[]
+            def fake(method,path,body=None,timeout=40):
+                if method=='GET':
+                    if path==s.PRIVATE_FIRST_ROUTE:raise OSError('404: older plugin, private first off')
+                    if path=='/api/model/info':return {'provider':'openai-codex','model':'gpt-6.1-sol'}
+                    self.assertEqual(path,'/api/model/options');return {'providers':listed}
+                calls.append((method,path,body));return {}
+            with patch.object(s,'worker',return_value={'models':['glm-5-3','kimi-k3'],'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
+                self.assertEqual(self.call('/api/connect',{'apiKey':KEY})[0],200)
+            (m,path,body),=calls
+            self.assertEqual((path,body['make_default']),('/api/providers/custom-endpoints',want),listed)
+            with patch.object(s,'agent_call',return_value={}):self.call('/api/disconnect',{})
     def test_07b_fresh_agent_without_a_model_gets_tinfoil_as_its_model(self):
         # Fresh Wizard, Tinfoil chosen in the Welcome: the Hermes Agent app has no model, so its first chat failed
         # ("no model configured") although Tinfoil was listed as connected. Unreadable agent model: never default.
@@ -189,7 +208,8 @@ class Tests(unittest.TestCase):
             def fake(method,path,body=None,timeout=40):
                 if method=='GET':
                     if path==s.PRIVATE_FIRST_ROUTE:raise OSError('404: older plugin, private first off')
-                    self.assertEqual(path,'/api/model/info')
+                    self.assertIn(path,('/api/model/info','/api/model/options'))
+                    if path=='/api/model/options':return {'providers':[]}
                     if isinstance(info,Exception):raise info
                     return info
                 calls.append((method,path,body));return {}

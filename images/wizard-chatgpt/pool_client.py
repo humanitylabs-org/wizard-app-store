@@ -171,11 +171,41 @@ def pick_model(call, hermes_provider):
     return model
 
 
+def model_works(call):
+    """True when the agent's current main model can answer: Hermes' model picker (GET /api/model/options) lists its
+    provider as signed in and not virtual. A provider name alone is not enough (wizard-ux#1749): a box whose model
+    still points at a provider that was never signed in (an earlier ChatGPT default) kept it, so the sign-in the
+    owner just made never became the agent's model and Welcome waited forever. Its row is the one Hermes marks
+    `is_current` (else the one with its slug). Not listed at all: False (Hermes leaves out providers that are not
+    signed in). No model at all: False. Anything that can't be read: True, so a model is never replaced on a guess."""
+    try:
+        provider = str((call('/api/model/info') or {}).get('provider') or '').strip()
+    except Exception:
+        return True
+    if not provider:
+        return False
+    try:
+        rows = (call('/api/model/options') or {}).get('providers')
+    except Exception:
+        return True
+    if not isinstance(rows, list):
+        return True
+    rows = [p for p in rows if isinstance(p, dict)]
+    row = next((p for p in rows if p.get('is_current') is True), None) or next((p for p in rows if p.get('slug') == provider), None)
+    if row is None:
+        return False
+    if row.get('auth_type') == 'virtual' or row.get('source') == 'virtual':
+        return False
+    return row.get('authenticated') is not False
+
+
 def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, timeout=20):
     """Fresh mode: a sign-in on this app (Claude, or ChatGPT) is the agent's only model, but the Hermes Agent app starts with no
     main model, so its first chat failed with "not connected to any AI provider". After a sign-in, make it the
     agent's main model through the dashboard's own POST /api/model/set (the same call the model picker uses) with
-    the newest Opus that provider lists (Hermes' recommended default if it lists none), only while the owner has chosen nothing. Never changes a chosen model.
+    the newest Opus that provider lists (Hermes' recommended default if it lists none), only while the agent has no
+    model that works (none set, or one whose provider is not signed in or is virtual: model_works). Never changes a
+    working model.
     It only ever talks to the main Hermes (the standard agent), never to a private agent.
     Private first on (see private_first_on): instead of setting the main model itself, it asks the Agent Service to
     switch the standard agent on and attach this provider there (POST .../private-first/standard-agent); the private
@@ -202,7 +232,7 @@ def adopt_as_agent_default(provider, hermes_provider=SUBSCRIPTION_PROVIDER, time
             model = pick_model(call, hermes_provider)
             done = call(PRIVATE_FIRST_ROUTE + '/standard-agent', {'provider': hermes_provider, 'model': model})
             return 'standard' if isinstance(done, dict) and done.get('ok') is True else 'skipped'
-        if (call('/api/model/info') or {}).get('provider'):
+        if model_works(call):
             return 'kept'
         model = pick_model(call, hermes_provider)
         if not model:

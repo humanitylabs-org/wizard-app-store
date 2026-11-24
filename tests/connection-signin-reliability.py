@@ -324,7 +324,9 @@ class ModelDashboard(Dashboard):
         if self.path == '/api/model/options':
             return self.reply(200, {'providers': [
                 {'slug': 'moa', 'authenticated': True, 'auth_type': 'virtual', 'models': ['default']},
-                {'slug': 'openai-codex', 'authenticated': True, 'models': ['gpt-6-sol', 'gpt-5.5']}]})
+                {'slug': 'openai-codex', 'authenticated': True, 'models': ['gpt-6-sol', 'gpt-5.5']},
+                # A signed-in provider the agent uses is listed (Hermes leaves out only providers not signed in).
+                {'slug': 'claude-subscription-directsdk-experimental', 'authenticated': True, 'models': ['claude-opus-5-5']}]})
         return super().do_GET()
 
     def do_POST(self):
