@@ -145,6 +145,12 @@ class SigninExpiry(unittest.TestCase):
         self.assertEqual(page['status'], 'expired')
         self.assertIn('Reconnect', page['detail'])
 
+    def test_past_the_date_expired_even_when_the_agent_is_unreachable(self):
+        self.sign_in(-60)
+        with patch.object(pool, 'Hermes', type('Down', (), {'accounts': staticmethod(lambda p: (_ for _ in ()).throw(pool.BridgeError()))})):
+            conn = self.get('/api/connection')
+        self.assertEqual((conn['status'], conn['error']['code']), ('expired', 'signin_ended'))
+
     def test_no_date_in_file_behaves_as_before(self):
         self.sign_in(0, refresh_date=False)
         conn = self.get('/api/connection')

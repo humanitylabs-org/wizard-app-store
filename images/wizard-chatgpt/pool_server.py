@@ -236,9 +236,11 @@ def connection(result):
         # The original Claude Code sign-in's own end date, for Resources and other apps.
         answer['signin_expires_at'] = result['signin'].get('expiresAt')
         answer['signin_days_left'] = result['signin'].get('daysLeft')
-    if result.get('inventoryStatus') == 'unavailable' and not (rows and selected.get('status') in ('connected', 'ready') and not result.get('alongside')):
+    ended = selected.get('source') == 'legacy-claude-code' and (selected.get('error') or {}).get('code') == 'signin_ended'
+    if result.get('inventoryStatus') == 'unavailable' and not ended and not (rows and selected.get('status') in ('connected', 'ready') and not result.get('alongside')):
         # The agent could not be asked. An empty list here would read as "signed out" on Home; say the agent is
-        # unreachable instead, so Home keeps its last reading and shows why.
+        # unreachable instead, so Home keeps its last reading and shows why. An original sign-in past its end date is
+        # known to be ended whatever the agent says, so it stays `expired`.
         answer.pop('accounts', None)
         answer['accountCount'] = None
         answer.update(status='error', plan=None, usage=None, account=None,
