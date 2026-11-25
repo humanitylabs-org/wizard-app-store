@@ -146,7 +146,7 @@ class Tests(unittest.TestCase):
             self.assertEqual(json.loads(b)['chatIntegration'],'registered')
         (m,path,body),=calls
         self.assertEqual((m,path),('POST','/api/providers/custom-endpoints'))
-        self.assertEqual(body['model'],'kimi-k3');self.assertEqual(body['models'],['kimi-k3','glm-5-3'])
+        self.assertEqual(body['model'],'kimi-k3');self.assertEqual(body['models'],['kimi-k3','glm-5-3','deepseek-v4-1-flash'])
         self.assertFalse(body['make_default']);self.assertFalse(body['discover_models'])
         token=json.loads((s.DATA/'gateway-token.json').read_text())['token']
         self.assertEqual(body['api_key'],token);self.assertNotIn(KEY,json.dumps(body))
@@ -155,31 +155,26 @@ class Tests(unittest.TestCase):
         calls.clear()
         with patch.object(s,'agent_call',side_effect=fake):self.assertEqual(self.call('/api/disconnect',{})[0],200)
         self.assertEqual(calls[0][:2],('DELETE','/api/providers/custom-endpoints/wizard-tinfoil'))
-    def test_07a_fast_private_model_switch_registers_third_model(self):
-        # wizard-tinfoil#23: off by default two models; switch fast-private-model on adds DeepSeek V4.1 Flash.
+    def test_07a_three_private_models_for_everyone(self):
+        # wizard-tinfoil#23: approved, on for everyone: Connect registers Kimi, GLM 5.3 and DeepSeek V4.1 Flash; the
+        # fast-private-model switch is gone and a saved value for it is forgotten.
         models=['deepseek-v4-1-flash','glm-5-3','kimi-k3','nomic-embed-text']
         with tempfile.TemporaryDirectory() as d, patch.dict(os.environ,{'WIZARD_SWITCHES_DIR':d}):
-            doc=s.switches_doc()['switches']
-            self.assertEqual([(x['id'],x['on']) for x in doc],[('fast-private-model',False)])
-            self.assertEqual(doc[0]['issues'],['humanitylabs-org/wizard-tinfoil#23'])
-            self.assertEqual(s.registered_count(),2)
+            self.assertEqual(s.switches_doc()['switches'],[])
+            f=Path(d)/'switches.json';f.write_text(json.dumps({'fast-private-model':False}))
+            s.forget_retired_switches();self.assertEqual(json.loads(f.read_text()),{})
             calls=[]
             def fake(method,path,body=None,timeout=40):
                 if method=='GET':return {'provider':'x','model':'y'}
                 calls.append(body);return {}
             with patch.object(s,'worker',return_value={'models':models,'verifiedAt':'t'}), patch.object(s,'agent_call',side_effect=fake):
                 code,_=self.call('/api/connect',{'apiKey':KEY});self.assertEqual(code,200)
-                self.assertEqual(calls[-1]['models'],['kimi-k3','glm-5-3'])
-                with patch.object(s.threading,'Thread') as th:
-                    s._sw_set('fast-private-model',True)
-                    th.assert_called_once();self.assertIs(th.call_args.kwargs['target'],s.reconcile)
-                self.assertEqual(s.registered_count(),3)
-                s.reconcile()
                 self.assertEqual(calls[-1]['models'],['kimi-k3','glm-5-3','deepseek-v4-1-flash'])
                 self.assertEqual(s.stored()['picked'],['kimi-k3','glm-5-3','deepseek-v4-1-flash'])
                 n=len(calls);s.reconcile();self.assertEqual(len(calls),n)  # settled: no repeat registration
-                with patch.object(s.threading,'Thread'):s._sw_set('fast-private-model',False)
-                s.reconcile();self.assertEqual(calls[-1]['models'],['kimi-k3','glm-5-3'])
+                # an older box that saved two picks gets the third on its next start
+                atomic_prev={**s.stored(),'picked':['kimi-k3','glm-5-3']};s.atomic('connection.json',atomic_prev)
+                s.reconcile();self.assertEqual(calls[-1]['models'],['kimi-k3','glm-5-3','deepseek-v4-1-flash'])
             self.call('/api/disconnect',{})
     def test_07c_a_model_that_cannot_answer_gets_tinfoil(self):
         # wizard-ux#1749: the agent still pointed at a ChatGPT that was never signed in (or a virtual model): Connect
