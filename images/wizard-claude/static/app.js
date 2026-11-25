@@ -48,8 +48,17 @@ function render(accounts) {
       const who = a.account ? ` (${a.account})` : "";
       li.append(el("p", "state ok", `Connected as ${a.plan}${who}`));
       if (a.detail && a.plan === "Not a Claude subscription") li.append(el("p", "state bad", a.detail));
+      // The sign-in ends on a fixed date (about four weeks after Connect); warn 5 days ahead with Reconnect.
+      const soon = a.signin_expires_at && a.signin_days_left <= 5;
+      if (a.signin_expires_at) li.append(el("p", soon ? "state bad signin" : "state signin", signinText(a.signin_expires_at) + (soon ? ": reconnect before then or your agent stops answering with it." : "")));
       const row = el("div", "buttons");
-      row.append(button("Test", test, true), button("Disconnect", disconnect));
+      if (soon) row.append(button("Reconnect", connect, true));
+      row.append(button("Test", test, !soon), button("Disconnect", disconnect));
+      li.append(row);
+    } else if (a.status === "expired") {
+      li.append(el("p", "state bad", a.detail || "The Claude sign-in has ended. Press Reconnect to sign in again."));
+      const row = el("div", "buttons");
+      row.append(button("Reconnect", connect, true), button("Disconnect", disconnect));
       li.append(row);
     } else if (a.status === "not_connected") {
       li.append(el("p", "state off", "Not connected"));
@@ -63,6 +72,13 @@ function render(accounts) {
   }
 }
 
+function signinText(at) {
+  const left = Date.parse(at) - Date.now(), day = 864e5;
+  if (!(left > 0)) return "Sign-in has ended";
+  const when = left >= 2 * day ? `in ${Math.floor(left / day)} days` : left >= day ? "in 1 day" : left < 1.5 * 36e5 ? "in 1 hour" : `in ${Math.round(left / 36e5)} hours`;
+  return `Sign-in renews ${when}`;
+}
+
 // ?connect=1 (the Wizard Welcome, or Connect on a fresh Wizard): just the sign-in link and the code box (Miguel, 30 Oct
 // 2026: "a link and a place to paste the code; all the steps in between are unnecessary"). It starts by itself.
 const FOCUS = new URLSearchParams(location.search).get("connect") === "1";
@@ -72,7 +88,7 @@ let started = false;
 async function refresh() {
   const data = await call("api/accounts");
   if (data.accounts) render(data.accounts);
-  if (FOCUS && !started && !busy && (data.accounts || []).some((a) => a.status === "not_connected")) {
+  if (FOCUS && !started && !busy && (data.accounts || []).some((a) => a.status === "not_connected" || a.status === "expired" || (a.status === "connected" && a.signin_expires_at && a.signin_days_left <= 5))) {
     started = true;
     connect();
   }

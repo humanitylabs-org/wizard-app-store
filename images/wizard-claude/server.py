@@ -34,7 +34,7 @@ import inference
 
 import usage
 
-VERSION = "0.2.27"
+VERSION = "0.2.28"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
@@ -73,6 +73,8 @@ RENEW_GAP_S = 600
 def renew_if_expired(answer: dict, reader=None) -> dict:
     if answer.get("status") != "expired" or os.environ.get("WIZARD_CLAUDE_AUTO_RENEW", "1") == "0":
         return answer
+    if (answer.get("error") or {}).get("code") == usage.SIGNIN_ENDED:
+        return answer  # the sign-in itself ended: only a new Connect helps, a Claude Code turn would just fail
     with Renew.lock:
         if Renew.thread is not None and Renew.thread.is_alive():
             return {**answer, "status": "renewing"}
@@ -149,6 +151,20 @@ def claude_status() -> dict:
                 "detail": "Claude Code is signed in another way. Disconnect, then connect your Claude subscription."}
     account = data.get("email") or data.get("orgName") or ""
     return {"status": "connected", "plan": plan_label(data.get("subscriptionType")), "account": str(account)[:120]}
+
+
+def with_signin(status: dict) -> dict:
+    """Adds when the sign-in itself ends (usage.read_signin reads only its end date). Claude Code still says
+    loggedIn after that date, so an ended sign-in is reported as expired here, not as connected."""
+    if status.get("status") != "connected":
+        return status
+    signin = usage.read_signin(CLAUDE_DIR)
+    if not signin:
+        return status
+    out = {**status, "signin_expires_at": signin["signin_expires_at"], "signin_days_left": signin["signin_days_left"]}
+    if signin["signin_ended"]:
+        out.update(status="expired", detail=usage.MESSAGES[usage.SIGNIN_ENDED])
+    return out
 
 
 class Login:
@@ -446,6 +462,7 @@ class Handler(BaseHTTPRequestHandler):
             answer = renew_if_expired(CONNECTION.read())
             if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
                 # Service-supplied subscription credential, never written to the login volume.
+                answer = {k: v for k, v in answer.items() if not k.startswith("signin_")}
                 answer = {**answer, "status": "connected", "error": None}
             try:
                 return self.json(200, {**answer, "contract": "wizard.ai-connection/2", "models": inference.models()})
@@ -454,7 +471,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/accounts":
             login = State.login
             claude = {"id": "claude-subscription", "name": "Claude subscription", "kind": "subscription",
-                      "detail": "Pro or Max plan, signed in with the official Claude Code app.", **claude_status(),
+                      "detail": "Pro or Max plan, signed in with the official Claude Code app.", **with_signin(claude_status()),
                       "signing_in": bool(login and login.alive())}
             return self.json(200, {"accounts": [claude], "version": VERSION})
         if path in STATIC:

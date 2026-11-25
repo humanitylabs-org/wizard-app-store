@@ -8,7 +8,7 @@ import math
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -23,7 +23,9 @@ PASSWORD = os.environ.get(PREFIX + '_PASSWORD', '')
 LEGACY_PREFIX = '/claude-code'
 LEGACY = None
 LEGACY_RENEW = None
+usage = None  # Claude only: the sign-in end date reader (images/wizard-claude/usage.py)
 if PROVIDER == 'claude':
+    import usage
     import server as claude_owner
     LEGACY = claude_owner.CONNECTION
     LEGACY_RENEW = claude_owner.renew_if_expired
@@ -167,7 +169,12 @@ def with_legacy(result):
             if LEGACY_RENEW is not None:
                 old = LEGACY_RENEW(old, reader=LEGACY)
             if os.environ.get('CLAUDE_CODE_OAUTH_TOKEN'):
+                old = {k: v for k, v in old.items() if not k.startswith('signin_')}
                 old = {**old, 'status': 'connected', 'error': None}
+            if old.get('signin_expires_at'):
+                # When the original sign-in itself ends (its fixed date, about four weeks after Connect).
+                result['signin'] = {'expiresAt': old['signin_expires_at'], 'daysLeft': old.get('signin_days_left'),
+                                    'warnDays': usage.SIGNIN_WARN_DAYS}
             duplicate = False
             if old.get('status') != 'not_connected':
                 # Hermes mirrors this same Claude Code login into its pool; show one row, not two.
@@ -187,6 +194,7 @@ def with_legacy(result):
                 result['accounts'].insert(0, {'id': 'legacy-claude-code', 'name': old.get('account') or 'Claude',
                     'source': 'legacy-claude-code', 'email': old.get('account'), 'plan': old.get('plan'),
                     'status': old['status'], 'usage': old.get('usage'), 'error': old.get('error'),
+                    'signinExpiresAt': old.get('signin_expires_at'), 'signinDaysLeft': old.get('signin_days_left'),
                     'credentials': [c for m in mirrors for c in m.get('credentials') or []],
                     # Its Hermes mirror carries the agent's try-first order; reordering never touches the login.
                     'priority': min((m['priority'] for m in mirrors if isinstance(m.get('priority'), int)), default=None),
@@ -224,6 +232,10 @@ def connection(result):
     answer = {**result, 'contract': 'wizard.ai-connection/2', 'status': status,
               'plan': selected.get('plan'), 'usage': selected.get('usage'),
               'account': selected.get('email') or selected.get('account'), 'error': error}
+    if result.get('signin'):
+        # The original Claude Code sign-in's own end date, for Resources and other apps.
+        answer['signin_expires_at'] = result['signin'].get('expiresAt')
+        answer['signin_days_left'] = result['signin'].get('daysLeft')
     if result.get('inventoryStatus') == 'unavailable' and not (rows and selected.get('status') in ('connected', 'ready') and not result.get('alongside')):
         # The agent could not be asked. An empty list here would read as "signed out" on Home; say the agent is
         # unreachable instead, so Home keeps its last reading and shows why.
@@ -575,6 +587,33 @@ def use_first_begin(account):
     return target, str(old.get('account'))
 
 
+def signin_inbox(now=None):
+    """WizardOS inbox feed (`GET /api/inbox`): one item while the original Claude Code sign-in ends within
+    SIGNIN_WARN_DAYS days or has ended. Tapping it opens that sign-in's Connect (one-tap Reconnect). Its time is the
+    start of the current day, so once archived it comes back at most once a day. Only the end date is read."""
+    now = time.time() if now is None else now
+    items = []
+    if PROVIDER == 'claude' and not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN'):
+        signin = usage.read_signin(owner.CLAUDE_DIR, now)
+        if signin and (signin['signin_ended'] or signin['signin_days_left'] <= usage.SIGNIN_WARN_DAYS):
+            ends = _epoch(signin['signin_expires_at'])
+            day = now - now % 86400
+            warn_from = ends - (usage.SIGNIN_WARN_DAYS + 1) * 86400
+            date = datetime.fromtimestamp(ends, timezone.utc).strftime('%-d %b %H:%M UTC')
+            if signin['signin_ended']:
+                title, text = 'Claude sign-in has ended', ('Your agent can no longer use this Claude subscription. '
+                                                          'Tap to reconnect Claude (sign in again).')
+            else:
+                left = ends - now
+                when = ('in %d days' % signin['signin_days_left'] if left >= 2 * 86400 else
+                        'in 1 day' if left >= 86400 else 'in 1 hour' if left < 1.5 * 3600 else 'in %d hours' % round(left / 3600))
+                title = 'Claude sign-in ends %s' % when
+                text = 'On %s your agent stops answering with this Claude subscription. Tap to reconnect Claude now.' % date
+            items.append({'key': 'claude-signin:' + signin['signin_expires_at'], 'title': title, 'text': text,
+                          'time': int(max(day, warn_from)), 'priority': 4, 'open': 'claude-code/?connect=1'})
+    return {'inbox': 1, 'items': items}
+
+
 class Handler(owner.Handler):
     def setup(self):
         super().setup()
@@ -683,6 +722,8 @@ class Handler(owner.Handler):
                 return self.send(200, {'provider': 'claude', 'owner': 'hermes', 'modelCooldowns': evidence})
             except Exception:
                 return self.send(503, {'error': 'Cooldown inventory unavailable'})
+        if path == '/api/inbox':
+            return self.send(200, signin_inbox())
         if path in ('/api/accounts', '/api/connection'):
             if path == '/api/connection' and any(k.lower() in ('tailscale-user-login', 'x-forwarded-for', 'forwarded', 'x-real-ip') or k.lower().startswith('cf-') for k in self.headers):
                 return self.send(403, {'error': 'box-only'})
