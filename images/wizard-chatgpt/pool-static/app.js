@@ -224,6 +224,8 @@ function summary(accounts) {
   const list = ordered(accounts), open = list.find(a => availability(a).ok);
   const name = a => accountTitle(a).title + (a.plan ? ` (${a.plan})` : '');
   if (open) return list.length > 1 ? `Using ${name(open)} now.` : '';
+  // Nothing is at a limit: the accounts stopped because a sign-in expired or ended, not because of usage.
+  if (!list.some(a => OK.has(a.status)) && list.some(a => a.status === 'expired')) return 'Sign in again to keep using it.';
   const back = list.map(a => availability(a).until).filter(Boolean).sort()[0];
   return `Every account is at its limit${back ? `; the first is back ${whenText(back)}` : ''}.`;
 }

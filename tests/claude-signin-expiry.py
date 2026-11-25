@@ -143,7 +143,7 @@ class SigninExpiry(unittest.TestCase):
         self.assertEqual(self.get('/api/inbox')['items'][0]['title'], 'Claude sign-in has ended')
         page = self.get('/claude-code/api/accounts')['accounts'][0]
         self.assertEqual(page['status'], 'expired')
-        self.assertIn('Reconnect', page['detail'])
+        self.assertIn('Reconnect', page['message'])
 
     def test_past_the_date_expired_even_when_the_agent_is_unreachable(self):
         self.sign_in(-60)

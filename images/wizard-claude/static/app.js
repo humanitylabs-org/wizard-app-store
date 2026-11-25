@@ -56,7 +56,7 @@ function render(accounts) {
       row.append(button("Test", test, !soon), button("Disconnect", disconnect));
       li.append(row);
     } else if (a.status === "expired") {
-      li.append(el("p", "state bad", a.detail || "The Claude sign-in has ended. Press Reconnect to sign in again."));
+      li.append(el("p", "state bad", a.message || "The Claude sign-in has ended. Press Reconnect to sign in again."));
       const row = el("div", "buttons");
       row.append(button("Reconnect", connect, true), button("Disconnect", disconnect));
       li.append(row);

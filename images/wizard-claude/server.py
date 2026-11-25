@@ -163,7 +163,7 @@ def with_signin(status: dict) -> dict:
         return status
     out = {**status, "signin_expires_at": signin["signin_expires_at"], "signin_days_left": signin["signin_days_left"]}
     if signin["signin_ended"]:
-        out.update(status="expired", detail=usage.MESSAGES[usage.SIGNIN_ENDED])
+        out.update(status="expired", message=usage.MESSAGES[usage.SIGNIN_ENDED])
     return out
 
 
