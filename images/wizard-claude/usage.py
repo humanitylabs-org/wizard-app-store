@@ -33,11 +33,17 @@ TIMEOUT_S = 8
 MAX_RESPONSE_BYTES = 256 * 1024
 
 SIGNED_OUT, EXPIRED, UNREACHABLE, PROVIDER_ERROR = "signed_out", "expired", "unreachable", "provider_error"
+# The sign-in itself (Claude Code's refresh token) ends on a fixed date set at Connect, about four weeks later;
+# refreshing the access token does not move it. Past it only a new Connect helps (Test can't renew it).
+SIGNIN_ENDED = "signin_ended"
+SIGNIN_WARN_DAYS = 5
 STALE_ELIGIBLE = {UNREACHABLE, PROVIDER_ERROR}
 MESSAGES = {
     SIGNED_OUT: "Claude is not signed in. Open the Claude app and press Connect.",
     EXPIRED: "The Claude sign-in has expired. Open the Claude app and press Test (Claude Code renews it), "
              "or Connect again.",
+    SIGNIN_ENDED: "The Claude sign-in has ended (a Claude sign-in lasts about four weeks). Open the Claude app and "
+                  "press Reconnect to sign in again.",
     UNREACHABLE: "Couldn't reach Claude.",
     PROVIDER_ERROR: "Claude's usage service returned an error.",
 }
@@ -237,6 +243,26 @@ def read_json(path: str):
         return None
 
 
+def signin_expiry(creds, now: float) -> dict:
+    """When the sign-in itself ends: only `refreshTokenExpiresAt` (ms epoch) is read, never a token value.
+    {} when the file has no such date (older Claude Code, or no sign-in)."""
+    ends = get(creds, "refreshTokenExpiresAt")
+    if not is_finite_number(ends) or ends <= 0:
+        return {}
+    try:
+        at = iso_ms(datetime.fromtimestamp(ends / 1000, timezone.utc))
+    except (OverflowError, OSError, ValueError):
+        return {}
+    left = ends / 1000 - now
+    return {"signin_expires_at": at, "signin_days_left": max(0, math.floor(left / 86400)), "signin_ended": left <= 0}
+
+
+def read_signin(claude_dir: str, now: float | None = None) -> dict:
+    """The sign-in end date of the login in `claude_dir` (see signin_expiry)."""
+    creds = get(read_json(claude_dir.rstrip("/") + "/.credentials.json"), "claudeAiOauth")
+    return signin_expiry(creds, time.time() if now is None else now)
+
+
 def get_usage(url: str, token: str, timeout: float) -> dict:
     """GET the usage payload. Errors carry only a code: never the token, URL query or response body."""
     req = urllib.request.Request(url, method="GET", headers={
@@ -357,8 +383,14 @@ class ConnectionReader:
         plan = claude_plan(creds)
         expires = creds.get("expiresAt")
         now = self.now()
+        signin = signin_expiry(creds, now)
+        shown = {k: signin[k] for k in ("signin_expires_at", "signin_days_left")} if signin else {}
+        if signin.get("signin_ended"):
+            with self.lock:
+                self.result, self.last_good = None, None
+            return {**self.base("expired", plan, self.account(), error=SIGNIN_ENDED), **shown}
         if is_finite_number(expires) and expires <= now * 1000:
-            return self.base("expired", plan, self.account(), error=EXPIRED)
+            return {**self.base("expired", plan, self.account(), error=EXPIRED), **shown}
         plan, account = self.profile(token)[1] or plan, self.account(token)
         login = hashlib.sha256(token.encode()).hexdigest()
         with self.lock:  # one provider request at a time; concurrent callers share its result
@@ -369,6 +401,7 @@ class ConnectionReader:
                 self.at = now
             result = dict(self.result)
         result["plan"], result["account"] = plan, account
+        result.update(shown)
         return result
 
     def _attempt(self, token: str, now: float) -> dict:

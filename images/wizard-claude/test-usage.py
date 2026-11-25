@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -118,7 +119,7 @@ def main():
         out = reader.read()
         text = json.dumps(out)
         assert TOKEN not in text and REFRESH not in text and "Bearer" not in text, "token leaked"
-        assert set(out) == {"contract", "provider", "name", "status", "plan", "account", "usage", "error"}, sorted(out)
+        assert set(out) - {"signin_expires_at", "signin_days_left"} == {"contract", "provider", "name", "status", "plan", "account", "usage", "error"}, sorted(out)
         assert out["contract"] == "wizard.ai-connection/1" and out["provider"] == "claude" and out["name"] == "Claude"
         assert out["status"] in ("connected", "not_connected", "expired", "error"), out["status"]
         answers.append(text)
@@ -238,6 +239,38 @@ def main():
     assert out["status"] == "connected" and out["plan"] == "Pro" and out["usage"]["limits"] == EXPECTED_CURRENT_LIMITS
     assert sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits) == n + 1 and Upstream.hits[-1]["authorization"] == "Bearer " + TOKEN + "-2"
     assert all((TOKEN + "-2") not in a for a in answers)
+
+    # The sign-in's own end date (refreshTokenExpiresAt, fixed at Connect): shown, and past it the answer is expired.
+    def write_signin(ends_s, expires=None):
+        with open(creds_path, "w") as f:
+            json.dump({"claudeAiOauth": {"accessToken": TOKEN, "refreshToken": REFRESH,
+                                         "expiresAt": (clock[0] + 3600) * 1000 if expires is None else expires,
+                                         "refreshTokenExpiresAt": ends_s * 1000, "subscriptionType": "max",
+                                         "rateLimitTier": "default_claude_max_20x"}}, f)
+    Upstream.profile = {"account": {"email": "owner@example.com"},
+                        "organization": {"organization_type": "claude_max", "rate_limit_tier": "default_claude_max_20x"}}
+    r = reader()
+    write_signin(clock[0] + 20 * 86400 + 60)
+    out = read(r)
+    assert out["status"] == "connected" and out["signin_days_left"] == 20 and out["error"] is None, out
+    assert out["signin_expires_at"] == usage.iso_ms(datetime.fromtimestamp(clock[0] + 20 * 86400 + 60, timezone.utc)), out
+    write_signin(clock[0] + 2 * 3600)  # hours away: still connected, 0 days left
+    clock[0] += 61
+    out = read(r)
+    assert out["status"] == "connected" and out["signin_days_left"] == 0, out
+    n = sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits)
+    write_signin(clock[0] - 1)  # the date has passed, the 8 h access token has not: expired, not connected
+    out = read(r)
+    assert out["status"] == "expired" and out["error"]["code"] == "signin_ended" and out["usage"] is None, out
+    assert out["signin_days_left"] == 0 and out["plan"] == "Max 20x", out
+    assert sum(x["path"] == "/api/oauth/usage" for x in Upstream.hits) == n, "an ended sign-in asks Anthropic nothing"
+    assert usage.read_signin(d, clock[0])["signin_ended"] is True
+    assert usage.signin_expiry({"refreshTokenExpiresAt": "soon"}, clock[0]) == {}
+    assert usage.signin_expiry({}, clock[0]) == {} and usage.signin_expiry(None, clock[0]) == {}
+    write_creds()  # no refreshTokenExpiresAt (older Claude Code): no fields, as before
+    clock[0] += 61
+    out = read(r)
+    assert "signin_expires_at" not in out and out["status"] == "connected", out
 
     # Signed out again (logout empties the file): no stale usage.
     with open(creds_path, "w") as f:

@@ -85,6 +85,16 @@ function grantName(c) {
   return generic ? 'Sign-in ' + String(c.id).slice(0, 4) : c.name;
 }
 
+// When the original Claude Code sign-in ends (server: signinExpiresAt; warn from `signin.warnDays` days left).
+function signinLeft(at) { const t = Date.parse(at); return Number.isFinite(t) ? t - Date.now() : NaN; }
+function signinText(at) {
+  const left = signinLeft(at), day = 864e5;
+  if (!(left > 0)) return 'Sign-in has ended';
+  const when = left >= 2 * day ? `in ${Math.floor(left / day)} days` : left >= day ? 'in 1 day' : left < 1.5 * 36e5 ? 'in 1 hour' : `in ${Math.round(left / 36e5)} hours`;
+  return `Sign-in renews ${when}`;
+}
+function signinSoon(at) { const left = signinLeft(at); return Number.isFinite(left) && Math.floor(left / 864e5) <= (snapshot?.signin?.warnDays ?? 5); }
+
 function accountTitle(a) {
   const legacy = a.source === 'legacy-claude-code';
   // A masked email (o***@g***) says nothing; the owner's nickname for that sign-in is the readable title.
@@ -148,6 +158,17 @@ function renderAccount(a, i, all) {
     lead.addEventListener('click', () => ask('adopt', a));
     li.append(lead);
   }
+  if (legacy && a.signinExpiresAt && ['ready', 'connected', 'renewing'].includes(a.status)) {
+    // The original sign-in ends on a fixed date (about four weeks after Connect); say so, and warn in time.
+    const soon = signinSoon(a.signinExpiresAt);
+    const note = el('p', 'signin' + (soon ? ' warn' : ''), signinText(a.signinExpiresAt) + (soon ? ': reconnect before then or your agent stops answering with it.' : ''));
+    note.dataset.signin = soon ? 'warn' : 'ok';
+    li.append(note);
+    if (soon) {
+      const again = el('a', 'link', 'Reconnect'); again.href = 'claude-code/?connect=1'; again.dataset.legacySignin = 'renew';
+      li.append(again);
+    }
+  }
   if (legacy && !['ready', 'connected', 'renewing'].includes(a.status)) {
     // The original Claude Code sign-in (the one the agent's Claude Code provider uses) renews on its own page.
     const again = el('a', 'link', 'Sign in again'); again.href = 'claude-code/'; again.dataset.legacySignin = '1';
@@ -203,6 +224,8 @@ function summary(accounts) {
   const list = ordered(accounts), open = list.find(a => availability(a).ok);
   const name = a => accountTitle(a).title + (a.plan ? ` (${a.plan})` : '');
   if (open) return list.length > 1 ? `Using ${name(open)} now.` : '';
+  // Nothing is at a limit: the accounts stopped because a sign-in expired or ended, not because of usage.
+  if (!list.some(a => OK.has(a.status)) && list.some(a => a.status === 'expired')) return 'Sign in again to keep using it.';
   const back = list.map(a => availability(a).until).filter(Boolean).sort()[0];
   return `Every account is at its limit${back ? `; the first is back ${whenText(back)}` : ''}.`;
 }

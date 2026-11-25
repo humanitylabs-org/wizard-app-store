@@ -25,7 +25,8 @@ test("only usage.py touches the credential file, and nothing refreshes the token
   expect(server).not.toContain(".credentials.json");
   expect(server).not.toMatch(/accessToken|refreshToken|setup-token/);
   const usage = readFileSync(`${dir}/usage.py`, "utf8");
-  expect(usage).not.toMatch(/refreshToken|grant_type|oauth\/token/);
+  // The sign-in's end date (refreshTokenExpiresAt) is metadata it may read; the refresh token itself never.
+  expect(usage).not.toMatch(/refreshToken(?!ExpiresAt)|grant_type|oauth\/token/);
   expect(usage).toContain('"anthropic-beta": "oauth-2025-04-20"');
   expect(usage).toContain('CONTRACT = "wizard.ai-connection/1"');
   expect(server).toMatch(/STATIC = \{"\/": \("index.html"/);
