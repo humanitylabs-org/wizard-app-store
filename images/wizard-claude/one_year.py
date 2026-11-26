@@ -27,7 +27,7 @@ SCOPES = ["user:inference"]
 CREDENTIAL = re.compile(r"sk-ant-oat\d{2}-[A-Za-z0-9_-]{20,400}")
 _FORWARD = re.compile(r"\x1b\[(\d*)C")  # cursor-forward: the full-screen UI writes spaces this way
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]")
-FAILED = re.compile(r"OAuth error|Press Enter to retry|Failed to exchange|[Ee]rror:", re.I)
+FAILED = re.compile(r"OAuth error|Press Enter to retry|Failed to exchange", re.I)
 
 
 def screen(raw: str) -> str:
