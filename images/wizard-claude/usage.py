@@ -37,6 +37,11 @@ SIGNED_OUT, EXPIRED, UNREACHABLE, PROVIDER_ERROR = "signed_out", "expired", "unr
 # refreshing the access token does not move it. Past it only a new Connect helps (Test can't renew it).
 SIGNIN_ENDED = "signin_ended"
 SIGNIN_WARN_DAYS = 5
+# A one-year sign-in (Claude Code's long-lived subscription login, claude-connection#27): its file holds only an
+# inference-scope access credential that itself lasts a year, so its end date is `expiresAt`. Anthropic's usage and
+# profile endpoints need `user:profile`, which it lacks, so they are never asked (they would refuse it).
+ONE_YEAR = "one_year"
+ONE_YEAR_WARN_DAYS = (14, 3)
 STALE_ELIGIBLE = {UNREACHABLE, PROVIDER_ERROR}
 MESSAGES = {
     SIGNED_OUT: "Claude is not signed in. Open the Claude app and press Connect.",
@@ -44,6 +49,7 @@ MESSAGES = {
              "or Connect again.",
     SIGNIN_ENDED: "The Claude sign-in has ended (a Claude sign-in lasts about four weeks). Open the Claude app and "
                   "press Reconnect to sign in again.",
+    ONE_YEAR: "The one-year Claude sign-in has ended. Open the Claude app and press Reconnect to sign in again.",
     UNREACHABLE: "Couldn't reach Claude.",
     PROVIDER_ERROR: "Claude's usage service returned an error.",
 }
@@ -243,10 +249,22 @@ def read_json(path: str):
         return None
 
 
+ONE_YEAR_MARK = ("wizardSignin", "one-year")  # written next to it by one_year.save, the only writer of that sign-in
+
+
+def signin_kind(creds):
+    """ONE_YEAR for a one-year sign-in (this app's mark and no `user:profile` scope), else None. Never reads a token."""
+    scopes = get(creds, "scopes")
+    if get(creds, ONE_YEAR_MARK[0]) == ONE_YEAR_MARK[1] and isinstance(scopes, list) and "user:profile" not in scopes:
+        return ONE_YEAR
+    return None
+
+
 def signin_expiry(creds, now: float) -> dict:
-    """When the sign-in itself ends: only `refreshTokenExpiresAt` (ms epoch) is read, never a token value.
-    {} when the file has no such date (older Claude Code, or no sign-in)."""
-    ends = get(creds, "refreshTokenExpiresAt")
+    """When the sign-in itself ends: only `refreshTokenExpiresAt` (ms epoch) is read, never a token value; for a
+    one-year sign-in its `expiresAt`. {} when the file has no such date (older Claude Code, or no sign-in)."""
+    kind = signin_kind(creds)
+    ends = get(creds, "expiresAt" if kind == ONE_YEAR else "refreshTokenExpiresAt")
     if not is_finite_number(ends) or ends <= 0:
         return {}
     try:
@@ -254,7 +272,14 @@ def signin_expiry(creds, now: float) -> dict:
     except (OverflowError, OSError, ValueError):
         return {}
     left = ends / 1000 - now
-    return {"signin_expires_at": at, "signin_days_left": max(0, math.floor(left / 86400)), "signin_ended": left <= 0}
+    out = {"signin_expires_at": at, "signin_days_left": max(0, math.floor(left / 86400)), "signin_ended": left <= 0}
+    if kind == ONE_YEAR:  # only then: a four-week sign-in's answer stays exactly as it was
+        out.update(signin_kind=ONE_YEAR, signin_warn_days=ONE_YEAR_WARN_DAYS[0])
+    return out
+
+
+def ended_message(signin: dict) -> str:
+    return MESSAGES[ONE_YEAR if signin.get("signin_kind") == ONE_YEAR else SIGNIN_ENDED]
 
 
 def read_signin(claude_dir: str, now: float | None = None) -> dict:
@@ -384,13 +409,21 @@ class ConnectionReader:
         expires = creds.get("expiresAt")
         now = self.now()
         signin = signin_expiry(creds, now)
-        shown = {k: signin[k] for k in ("signin_expires_at", "signin_days_left")} if signin else {}
+        shown = {k: signin[k] for k in ("signin_expires_at", "signin_days_left", "signin_kind", "signin_warn_days")
+                 if k in signin}
         if signin.get("signin_ended"):
             with self.lock:
                 self.result, self.last_good = None, None
-            return {**self.base("expired", plan, self.account(), error=SIGNIN_ENDED), **shown}
+            ended = self.base("expired", plan, self.account(), error=SIGNIN_ENDED)
+            ended["error"]["message"] = ended_message(signin)
+            return {**ended, **shown}
         if is_finite_number(expires) and expires <= now * 1000:
             return {**self.base("expired", plan, self.account(), error=EXPIRED), **shown}
+        if signin.get("signin_kind") == ONE_YEAR:
+            # Usage and profile need a scope this sign-in doesn't have: ask Anthropic nothing, report it connected.
+            with self.lock:
+                self.login, self.result, self.last_good = "", None, None
+            return {**self.base("connected", plan, self.account()), **shown}
         plan, account = self.profile(token)[1] or plan, self.account(token)
         login = hashlib.sha256(token.encode()).hexdigest()
         with self.lock:  # one provider request at a time; concurrent callers share its result

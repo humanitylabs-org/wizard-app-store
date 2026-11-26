@@ -87,10 +87,12 @@ function grantName(c) {
 
 // When the original Claude Code sign-in ends (server: signinExpiresAt; warn from `signin.warnDays` days left).
 function signinLeft(at) { const t = Date.parse(at); return Number.isFinite(t) ? t - Date.now() : NaN; }
-function signinText(at) {
+// A one-year sign-in (claude-connection#27, `signinKind: one_year`) says until when, and warns from 14 days.
+function signinText(at, kind) {
   const left = signinLeft(at), day = 864e5;
   if (!(left > 0)) return 'Sign-in has ended';
   const when = left >= 2 * day ? `in ${Math.floor(left / day)} days` : left >= day ? 'in 1 day' : left < 1.5 * 36e5 ? 'in 1 hour' : `in ${Math.round(left / 36e5)} hours`;
+  if (kind === 'one_year') return signinSoon(at) ? `One-year sign-in ends ${when}` : `Signed in until ${new Date(at).toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'})}`;
   return `Sign-in renews ${when}`;
 }
 function signinSoon(at) { const left = signinLeft(at); return Number.isFinite(left) && Math.floor(left / 864e5) <= (snapshot?.signin?.warnDays ?? 5); }
@@ -141,7 +143,7 @@ function renderAccount(a, i, all) {
     bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100'); bar.setAttribute('aria-valuenow', String(u ?? 0));
     bar.append(fill); meter.append(label, bar); use.append(meter);
   }
-  if (!limits.length) use.append(el('span', 'muted', a.usageStatus === 'unavailable' ? 'Usage unavailable right now' : 'No usage yet'));
+  if (!limits.length) use.append(el('span', 'muted', a.signinKind === 'one_year' ? 'Usage not shown for a one-year sign-in' : a.usageStatus === 'unavailable' ? 'Usage unavailable right now' : 'No usage yet'));
 
   const fix = needsReconnect(a);
   if (fix) {
@@ -161,12 +163,16 @@ function renderAccount(a, i, all) {
   if (legacy && a.signinExpiresAt && ['ready', 'connected', 'renewing'].includes(a.status)) {
     // The original sign-in ends on a fixed date (about four weeks after Connect); say so, and warn in time.
     const soon = signinSoon(a.signinExpiresAt);
-    const note = el('p', 'signin' + (soon ? ' warn' : ''), signinText(a.signinExpiresAt) + (soon ? ': reconnect before then or your agent stops answering with it.' : ''));
+    const note = el('p', 'signin' + (soon ? ' warn' : ''), signinText(a.signinExpiresAt, a.signinKind) + (soon ? ': reconnect before then or your agent stops answering with it.' : ''));
     note.dataset.signin = soon ? 'warn' : 'ok';
     li.append(note);
     if (soon) {
       const again = el('a', 'link', 'Reconnect'); again.href = 'claude-code/?connect=1'; again.dataset.legacySignin = 'renew';
       li.append(again);
+    } else if (snapshot?.oneYearSignin === true && a.signinKind !== 'one_year') {
+      // Switch one-year-signin on: this four-week sign-in can be swapped for a one-year one in one tap.
+      const year = el('a', 'link', 'Sign in for a year'); year.href = 'claude-code/?connect=1&year=1'; year.dataset.legacySignin = 'year';
+      li.append(year);
     }
   }
   if (legacy && !['ready', 'connected', 'renewing'].includes(a.status)) {

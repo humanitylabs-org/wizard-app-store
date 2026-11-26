@@ -49,11 +49,14 @@ function render(accounts) {
       li.append(el("p", "state ok", `Connected as ${a.plan}${who}`));
       if (a.detail && a.plan === "Not a Claude subscription") li.append(el("p", "state bad", a.detail));
       // The sign-in ends on a fixed date (about four weeks after Connect); warn 5 days ahead with Reconnect.
-      const soon = a.signin_expires_at && a.signin_days_left <= 5;
-      if (a.signin_expires_at) li.append(el("p", soon ? "state bad signin" : "state signin", signinText(a.signin_expires_at) + (soon ? ": reconnect before then or your agent stops answering with it." : "")));
+      // A one-year sign-in (claude-connection#27) says until when and warns from 14 days.
+      const soon = signinSoon(a);
+      if (a.signin_expires_at) li.append(el("p", soon ? "state bad signin" : "state signin", signinText(a.signin_expires_at, a.signin_kind, soon) + (soon ? ": reconnect before then or your agent stops answering with it." : "")));
+      const swap = !soon && a.one_year_signin === true && a.signin_kind !== "one_year";
+      if (swap) li.append(el("p", "state signin", "One-year sign-in is on: press Reconnect to sign in for a year instead of about four weeks."));
       const row = el("div", "buttons");
-      if (soon) row.append(button("Reconnect", connect, true));
-      row.append(button("Test", test, !soon), button("Disconnect", disconnect));
+      if (soon || swap) row.append(button("Reconnect", connect, true));
+      row.append(button("Test", test, !soon && !swap), button("Disconnect", disconnect));
       li.append(row);
     } else if (a.status === "expired") {
       li.append(el("p", "state bad", a.message || "The Claude sign-in has ended. Press Reconnect to sign in again."));
@@ -72,23 +75,31 @@ function render(accounts) {
   }
 }
 
-function signinText(at) {
+function signinSoon(a) {
+  return Boolean(a.signin_expires_at) && a.signin_days_left <= (a.signin_warn_days ?? 5);
+}
+
+function signinText(at, kind, soon) {
   const left = Date.parse(at) - Date.now(), day = 864e5;
   if (!(left > 0)) return "Sign-in has ended";
   const when = left >= 2 * day ? `in ${Math.floor(left / day)} days` : left >= day ? "in 1 day" : left < 1.5 * 36e5 ? "in 1 hour" : `in ${Math.round(left / 36e5)} hours`;
+  if (kind === "one_year") return soon ? `One-year sign-in ends ${when}` : `Signed in until ${new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`;
   return `Sign-in renews ${when}`;
 }
 
 // ?connect=1 (the Wizard Welcome, or Connect on a fresh Wizard): just the sign-in link and the code box (Miguel, 30 Oct
 // 2026: "a link and a place to paste the code; all the steps in between are unnecessary"). It starts by itself.
 const FOCUS = new URLSearchParams(location.search).get("connect") === "1";
+// ?connect=1&year=1 (the main page's "Sign in for a year"): also starts for a working four-week sign-in.
+const YEAR = new URLSearchParams(location.search).get("year") === "1";
 if (FOCUS) document.body.classList.add("focus");
 let started = false;
 
 async function refresh() {
   const data = await call("api/accounts");
   if (data.accounts) render(data.accounts);
-  if (FOCUS && !started && !busy && (data.accounts || []).some((a) => a.status === "not_connected" || a.status === "expired" || (a.status === "connected" && a.signin_expires_at && a.signin_days_left <= 5))) {
+  if (FOCUS && !started && !busy && (data.accounts || []).some((a) => a.status === "not_connected" || a.status === "expired" || (a.status === "connected" && signinSoon(a)) ||
+      (YEAR && a.status === "connected" && a.one_year_signin === true && a.signin_kind !== "one_year"))) {
     started = true;
     connect();
   }
@@ -108,7 +119,7 @@ function connect() {
     loginId = data.login_id;
     const link = $("login-url");
     link.href = data.url;
-    link.textContent = "Open the Claude sign-in page";
+    link.textContent = data.year ? "Open the Claude sign-in page (one-year sign-in)" : "Open the Claude sign-in page";
     $("code").value = "";
     $("login").hidden = false;
     say("");
