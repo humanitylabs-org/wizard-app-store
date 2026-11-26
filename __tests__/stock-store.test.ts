@@ -51,6 +51,11 @@ describe("compile steps (same as the fork does at install/start)", () => {
     // A pre-rule-15 app keeps its own fixed-name volume (wam#289).
     expect(rewriteVolumes({ services: {}, volumes: { v: { name: "wizard-a-config" } } }, "a").volumes).toEqual({ v: { name: "wizard-a-config" } });
   });
+  test("a main port with a default is spelled the way Runtipi recognises it (no second public port)", () => {
+    const out = loopbackMainPort({ services: { a: { ports: ["127.0.0.1:${APP_PORT:-9207}:9207"], "x-runtipi": { is_main: true, internal_port: 9207 } }, b: { ports: ["${X:-1}:2"] } } });
+    expect(out.services.a.ports).toEqual(["127.0.0.1:${APP_PORT}:9207"]);
+    expect(out.services.b.ports).toEqual(["${X:-1}:2"]);
+  });
   test("every service gets the grants file read-only at /wizard and its requests folder (DECISIONS #76)", () => {
     const out = mountAppGrants({ services: { a: { volumes: ["${APP_DATA_DIR}/data:/data"], environment: { X: "1" } }, b: { environment: ["Y=2", "WIZARD_GRANTS_FILE=/x"] } } });
     expect(out.services.a.volumes).toEqual(["${APP_DATA_DIR}/data:/data", "${APP_DATA_DIR}/wizard:/wizard:ro", "${APP_DATA_DIR}/wizard-requests:/wizard-requests"]);

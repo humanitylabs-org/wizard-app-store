@@ -147,6 +147,10 @@ export function loopbackMainPort(compose) {
   for (const svc of Object.values(doc.services ?? {})) {
     const xr = svc?.["x-runtipi"] ?? {};
     if (xr.is_main && xr.internal_port && !(Array.isArray(svc.ports) && svc.ports.length)) svc.ports = [`127.0.0.1:\${APP_PORT}:${xr.internal_port}`];
+    // Runtipi only recognises its own mapping spelled `${APP_PORT}:<port>`; a default (`${APP_PORT:-9207}`) makes it
+    // publish a second, public `${APP_PORT}:<port>` for the same host port, and the app never starts.
+    else if (xr.is_main && Array.isArray(svc.ports))
+      svc.ports = svc.ports.map((p) => (typeof p === "string" ? p.replace(/\$\{APP_PORT:-[0-9]+\}/, "${APP_PORT}") : p));
   }
   return doc;
 }
