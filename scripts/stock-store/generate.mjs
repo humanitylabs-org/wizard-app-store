@@ -105,7 +105,7 @@ const readPrevious = (prevDir, id) => {
 /** Turn one checked-out app repo into a stock Runtipi app folder at dst. Throws with a plain reason when it can't. */
 // `publish` (images.mjs dockerPublisher) builds the images that replace source/build packaging; without it such apps
 // stay fork-only and are left out.
-export function buildApp({ rec, src, dst, previous, publish }) {
+export function buildApp({ rec, src, dst, previous, publish = undefined }) {
   const commit = rec.install.commit;
   const wizardPath = path.join(src, "wizard.md");
   if (!existsSync(wizardPath)) throw new Error("no wizard.md");

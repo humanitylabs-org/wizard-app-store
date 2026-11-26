@@ -43,7 +43,7 @@ export function anonymousPull(ref, run = sh) {
   }
 }
 
-export function dockerPublisher({ repo, push = false, platforms = "linux/amd64,linux/arm64", run = sh, log = console.error } = {}) {
+export function dockerPublisher({ repo = "", push = false, platforms = "linux/amd64,linux/arm64", run = sh, log = console.error } = {}) {
   if (!/^[a-z0-9.:/_-]+$/.test(String(repo ?? ""))) throw new Error(`bad image repo ${repo}`);
   const pullable = (ref) => {
     if (!anonymousPull(ref, run)) throw new Error(`image ${ref.split("@")[0]} is not public yet, so boxes could not pull it`);
