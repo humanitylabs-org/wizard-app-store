@@ -1,0 +1,42 @@
+services:
+  wizard-manager:
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-manager-wizard-manager-6dd377e8e0bb-fa4b6e85@sha256:424f2a712fd266bfadbdbf7787acc7f10d77e63e20611c01fea172a7bc7f0886
+    user: 0:0
+    working_dir: /app
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    tmpfs:
+      - /tmp
+    read_only: true
+    environment:
+      PORT: "8799"
+      BIND: 0.0.0.0
+      DATA_DIR: /data
+      PYTHONDONTWRITEBYTECODE: "1"
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      MANAGER_WAS_URL: ${MANAGER_WAS_URL:-}
+      MANAGER_MODEL_URL: ${MANAGER_MODEL_URL:-}
+      WIZARD_ROUTER_KEY: ${WIZARD_ROUTER_KEY:-}
+      MANAGER_READY_DB: ${MANAGER_READY_DB:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    command:
+      - python
+      - /app/app/server.py
+    x-runtipi:
+      is_main: true
+      internal_port: 8799
+    init: true
+    ports:
+      - 127.0.0.1:${APP_PORT}:8799
+x-runtipi:
+  schema_version: 2
+  overrides: []

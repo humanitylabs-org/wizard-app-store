@@ -1,0 +1,121 @@
+{
+  "name": "Recorder",
+  "id": "mizel",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Record meetings with live words, Ask cards and a live summary, and search transcripts.",
+  "author": "Humanity Labs",
+  "port": 8973,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Empty-by-default recorder backend with notes, native capture, audio upload, HTTP API, MCP and shared transcription.",
+  "tipi_version": 8,
+  "version": "0.2.10",
+  "source": "https://github.com/humanitylabs-org/wizard-recorder",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791850000000,
+  "updated_at": 1794369541955,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Shared transcription slot API (optional)",
+      "env_variable": "TRANSCRIPTION_URL",
+      "required": false,
+      "default": "http://transcriber:8000/v1/audio/transcriptions",
+      "hint": "Container-network endpoint of the selected transcription provider. The default points at the Transcriber app. No model is bundled."
+    },
+    {
+      "type": "text",
+      "label": "Shared transcription model (optional)",
+      "env_variable": "TRANSCRIPTION_MODEL",
+      "required": false,
+      "default": "Systran/faster-whisper-small"
+    },
+    {
+      "type": "text",
+      "label": "Additional trusted browser origins (optional)",
+      "env_variable": "MEETINGS_ALLOWED_ORIGINS",
+      "required": false,
+      "hint": "Same-host origins work automatically. Add comma-separated exact origins only if needed.",
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Trusted ingress hosts (optional)",
+      "env_variable": "MEETINGS_ALLOWED_HOSTS",
+      "required": false,
+      "hint": "Comma-separated host:port values. Blank uses the owner-authenticated Wizard ingress.",
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Owner name in notes (optional)",
+      "env_variable": "MEETINGS_OWNER_NAME",
+      "required": false,
+      "hint": "Notes, titles and action items name this person instead of 'Me'. Blank keeps 'Me'.",
+      "default": ""
+    },
+    {
+      "type": "password",
+      "label": "Live words key (optional)",
+      "env_variable": "TINFOIL_API_KEY",
+      "required": false,
+      "default": "",
+      "hint": "Tinfoil API key for live words and the live summary on the live screen. Blank leaves the live screen unconfigured."
+    },
+    {
+      "type": "text",
+      "label": "Live words model (optional)",
+      "env_variable": "MIZEL_LIVE_REALTIME_MODEL",
+      "required": false,
+      "default": "voxtral-mini-4b-realtime"
+    },
+    {
+      "type": "text",
+      "label": "Live summary model (optional)",
+      "env_variable": "MIZEL_LIVE_SUMMARY_MODEL",
+      "required": false,
+      "default": "deepseek-v4-1-flash"
+    },
+    {
+      "type": "text",
+      "label": "Your main agent's name (optional)",
+      "env_variable": "MIZEL_AGENT_NAME",
+      "required": false,
+      "default": "",
+      "hint": "The name the live screen uses for Ask cards and answers, e.g. the name you call your agent. Blank shows 'Wizard'."
+    },
+    {
+      "type": "text",
+      "label": "Agent endpoint for Ask (optional)",
+      "env_variable": "WIZARD_ORB_API_URL",
+      "required": false,
+      "default": "",
+      "hint": "Container-network address of your Wizard agent API (the /wizard/hermes prefix). Blank: Ask cards say the agent is not connected."
+    },
+    {
+      "type": "password",
+      "label": "Agent key for Ask (optional)",
+      "env_variable": "WIZARD_AGENT_KEY",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Timezone (optional)",
+      "env_variable": "MEETINGS_TIMEZONE",
+      "required": false,
+      "default": "UTC"
+    }
+  ],
+  "no_gui": false
+}

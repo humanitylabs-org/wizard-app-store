@@ -1,0 +1,29 @@
+{
+  "name": "SimpleFIN",
+  "id": "wizard-simplefin",
+  "wizard_type": "external",
+  "available": true,
+  "short_desc": "External: connect your banks through SimpleFIN; apps get read-only accounts and transactions.",
+  "author": "Humanity Labs",
+  "port": 8808,
+  "categories": [
+    "network"
+  ],
+  "description": "The bank connection for your Wizard. Link your banks in your own SimpleFIN account, paste one setup token, and your apps get read-only accounts, balances and transactions. The access address and data stay inside this app.",
+  "tipi_version": 2,
+  "version": "0.1.8",
+  "source": "https://github.com/oscarhenrycollins/wizard-simplefin",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1792600000000,
+  "updated_at": 1794360359458,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [],
+  "no_gui": false
+}

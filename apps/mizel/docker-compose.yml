@@ -1,0 +1,61 @@
+services:
+  mizel:
+    image: ghcr.io/humanitylabs-org/wizard-recorder-app:0.2.10
+    restart: unless-stopped
+    user: 0:0
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    pids_limit: 256
+    mem_limit: 768m
+    tmpfs:
+      - /tmp
+    environment:
+      MEETINGS_DATA: /data
+      TRANSCRIPTION_URL: ${TRANSCRIPTION_URL:-http://transcriber:8000/v1/audio/transcriptions}
+      TRANSCRIPTION_MODEL: ${TRANSCRIPTION_MODEL:-Systran/faster-whisper-small}
+      MEETINGS_ALLOWED_ORIGINS: ${MEETINGS_ALLOWED_ORIGINS:-}
+      MEETINGS_ALLOWED_HOSTS: ${MEETINGS_ALLOWED_HOSTS:-}
+      MEETINGS_TIMEZONE: ${MEETINGS_TIMEZONE:-UTC}
+      MEETINGS_OWNER_NAME: ${MEETINGS_OWNER_NAME:-}
+      MEETINGS_LLM_URL: ${MEETINGS_LLM_URL:-}
+      MEETINGS_LLM_MODEL: ${MEETINGS_LLM_MODEL:-}
+      MEETINGS_LLM_KEY: ${MEETINGS_LLM_KEY:-}
+      WIZARD_DELIVERY_URL: ${WIZARD_DELIVERY_URL:-}
+      WIZARD_DELIVERY_TOKEN: ${WIZARD_DELIVERY_TOKEN:-}
+      TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
+      MIZEL_LIVE_REALTIME_MODEL: ${MIZEL_LIVE_REALTIME_MODEL:-voxtral-mini-4b-realtime}
+      MIZEL_LIVE_SUMMARY_MODEL: ${MIZEL_LIVE_SUMMARY_MODEL:-deepseek-v4-1-flash}
+      MIZEL_AGENT_NAME: ${MIZEL_AGENT_NAME:-}
+      WIZARD_API_URL: ${WIZARD_ORB_API_URL:-}
+      WIZARD_ORB_API_URL: ${WIZARD_ORB_API_URL:-}
+      WIZARD_AGENT_KEY: ${WIZARD_AGENT_KEY:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3)
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    x-runtipi:
+      is_main: true
+      internal_port: 8080
+    ports:
+      - 127.0.0.1:${APP_PORT}:8080
+x-runtipi:
+  schema_version: 2
+  overrides: []

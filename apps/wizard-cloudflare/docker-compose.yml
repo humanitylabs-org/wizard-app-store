@@ -1,0 +1,52 @@
+services:
+  wizard-cloudflare:
+    image: ghcr.io/humanitylabs-org/wizard-cloudflare:sha-a0ffce7dfb98181cb9a55a989f3f22b045cd428c@sha256:d2f01ae8d313f3dcbbf69e9167f2ed50d43fd2743aad504812c50b0db00db1bb
+    user: 1000:1000
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:rw,nosuid,size=16m,uid=1000,gid=1000
+    environment:
+      PORT: "18805"
+      DATA_DIR: /data/private
+      CF_ALLOW_WRITES: ${CF_ALLOW_WRITES:-true}
+      CF_OAUTH_CLIENT_ID: ${CF_OAUTH_CLIENT_ID:-bffad5ef3191b0db5d44d3cfa045db5e}
+      CF_OAUTH_REDIRECT_URI: ${CF_OAUTH_REDIRECT_URI:-https://www.aiwizards.com/wizard-cloudflare/auth/callback}
+      CF_OAUTH_RELAY: ${CF_OAUTH_RELAY:-true}
+      CF_OAUTH_REDIRECT_URIS: ${CF_OAUTH_REDIRECT_URIS:-}
+      CF_OAUTH_SCOPE: ${CF_OAUTH_SCOPE_V2:-offline_access account-settings.read workers-r2.read workers-r2-bucket-item.read workers-scripts.read zone.read dns.read registrar-domains.read workers-scripts.write dns.write workers-r2.write workers-r2-bucket-item.write}
+      CF_ALLOW_TOKEN_CONNECT: ${CF_ALLOW_TOKEN_CONNECT:-false}
+      WIZARD_SHELL_AUTH: ${WIZARD_SHELL_AUTH:-tailscale-serve}
+      WIZARD_OWNER_LOGINS: ${WIZARD_OWNER_LOGINS:-}
+      WIZARD_SHELL_PATH: ${WIZARD_SHELL_PATH:-/wizard-cloudflare/}
+      WIZARD_OWNER_TOKEN: ${WIZARD_OWNER_TOKEN:-}
+      WIZARD_ADMIN_TOKEN: ${WIZARD_ADMIN_TOKEN:-}
+      WIZARD_MCP_BOX_ONLY: ${WIZARD_MCP_BOX_ONLY:-true}
+      WIZARD_FRAME_ANCESTORS: ${WIZARD_FRAME_ANCESTORS:-'self'}
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      MEDIA_DIR: /media
+      WIZARD_NOTIFY_URL: ${WIZARD_NOTIFY_URL:-http://notifications:8080/mcp}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - cloudflare-private-data:/data
+      - ${ROOT_FOLDER_HOST}/media:/media:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    x-runtipi:
+      is_main: true
+      internal_port: 18805
+    ports:
+      - 127.0.0.1:${APP_PORT}:18805
+volumes:
+  cloudflare-private-data:
+    name: wizard-cloudflare-private-data
+x-runtipi:
+  schema_version: 2
+  overrides: []

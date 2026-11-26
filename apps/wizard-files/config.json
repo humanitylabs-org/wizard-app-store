@@ -1,0 +1,41 @@
+{
+  "id": "wizard-files",
+  "name": "Wizard Files",
+  "version": "0.1.6",
+  "tipi_version": 6,
+  "short_desc": "Your Wizard owner files",
+  "author": "Wizard Files contributors",
+  "source": "https://github.com/humanitylabs-org/wizard-files",
+  "categories": [
+    "utilities"
+  ],
+  "description": "Confined owner-files browser with shared resumable uploads.",
+  "port": 18876,
+  "available": true,
+  "exposable": false,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Extra hostnames (comma separated, optional)",
+      "env_variable": "FILES_ALLOWED_HOSTS",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "App data paths (JSON array of relative paths)",
+      "env_variable": "FILES_APP_DATA_PREFIXES",
+      "required": false,
+      "default": "[]"
+    }
+  ],
+  "wizard_type": "service"
+}

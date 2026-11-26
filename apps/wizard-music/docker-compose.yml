@@ -1,0 +1,80 @@
+services:
+  wizard-music:
+    image: ghcr.io/humanitylabs-org/wizard-music:sha-927da80210eeefdf74c30a3e7e0eada2f0a744ef@sha256:d3cbc685275a4ad48e407b5d1a187e86541e59b62272795ad5fec83464cd5396
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${APP_PORT}:9205
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      WIZARD_MUSIC_APP_HOST: 0.0.0.0
+      WIZARD_MUSIC_APP_PORT: "9205"
+      WIZARD_MUSIC_HUB_ORIGIN: http://127.0.0.1:8793
+      WIZARD_MUSIC_CONNECTORS_URL: ${WIZARD_MUSIC_CONNECTORS_URL:-}
+      MUSIC_ADAPTER_TOKEN: ${MUSIC_ADAPTER_TOKEN:-}
+      WIZARD_MUSIC_SOURCES: wizard-youtube-music=http://wizard-youtube-music:9206
+      WIZARD_MUSIC_HUB_HOME: /data
+      WIZARD_MUSIC_LIBRARY: /music
+      WIZARD_MUSIC_ONLINE: "0"
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_MUSIC_NAVIDROME_URL: http://navidrome:4533/wizard-music
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/music:/music:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    x-runtipi:
+      is_main: true
+      internal_port: 9205
+  navidrome:
+    image: docker.io/deluan/navidrome:0.64.2@sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52
+    restart: unless-stopped
+    user: 1000:1000
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 768m
+    depends_on:
+      wizard-music:
+        condition: service_healthy
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_BASEURL: /wizard-music
+      ND_EXTAUTH_USERHEADER: X-Wizard-Navidrome-User
+      ND_EXTAUTH_TRUSTEDSOURCES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      ND_SUBSONIC_DEFAULTREPORTREALPATH: "true"
+      ND_ENABLEINSIGHTSCOLLECTOR: "false"
+      ND_ENABLEEXTERNALSERVICES: "false"
+      ND_LASTFM_ENABLED: "false"
+      ND_LISTENBRAINZ_ENABLED: "false"
+      ND_ENABLESHARING: "false"
+      ND_LOGLEVEL: warn
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data/navidrome:/data
+      - ${APP_DATA_DIR}/music:/music:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+x-runtipi:
+  schema_version: 2
+  overrides: []

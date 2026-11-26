@@ -1,0 +1,39 @@
+services:
+  wizard-monarch:
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-monarch-wizard-monarch-70166dcfc4c0-abe9a5d7@sha256:793a92a6bddc0655589554d21d9ae58d3580c2d5351c3b5756cdabbccbaa56ba
+    working_dir: /app
+    command:
+      - python
+      - /app/app/server.py
+    pids_limit: 64
+    user: 1000:1000
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    tmpfs:
+      - /tmp
+    environment:
+      PORT: "8806"
+      BIND: 0.0.0.0
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATA_DIR: /data/private
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    read_only: true
+    x-runtipi:
+      is_main: true
+      internal_port: 8806
+    init: true
+    ports:
+      - 127.0.0.1:${APP_PORT}:8806
+x-runtipi:
+  schema_version: 2
+  overrides: []

@@ -1,0 +1,29 @@
+{
+  "name": "Translator",
+  "id": "translator",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Translate Thai, English and more privately, or offline on your phone",
+  "author": "Humanity Labs",
+  "port": 8799,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Private translation between Thai, English, Japanese, Chinese, Korean, Vietnamese, Spanish, French, German and Russian. Best quality comes from a private AI model through your Tinfoil app (connect Tinfoil first); the Firefox Translations engine also runs offline on your phone. The box keeps no model of its own: about 160 MB of RAM.",
+  "tipi_version": 2,
+  "version": "0.2.0",
+  "source": "https://github.com/humanitylabs-org/wizard-translator",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1795000000000,
+  "updated_at": 1795006369499,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [],
+  "no_gui": false
+}

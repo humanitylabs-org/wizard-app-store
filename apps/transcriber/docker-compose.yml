@@ -1,0 +1,305 @@
+services:
+  transcriber:
+    image: python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+    user: 1000:1000
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 256m
+    environment:
+      WIZARD_APP: transcriber
+      APP_VERSION: 0.9.0-rc.3-cpu
+      FRONT_PORT: "8000"
+      UPSTREAM_HOST: transcriber-engine
+      UPSTREAM_PORT: "8000"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TRANSCRIBER_MODEL: ${TRANSCRIBER_MODEL}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    depends_on:
+      - transcriber-engine
+    command:
+      - python
+      - -c
+      - |
+        """Wizard MCP front: serves this app's MCP tools at /mcp and passes every other request,
+        byte for byte, to the app behind it (HTTP, streaming and WebSockets alike).
+        Stdlib only, so it runs on a stock python image with no build step.
+        Generated from the app repo's mcp/ folder; edit there, then run mcp/inline.py."""
+        import asyncio
+        import contextvars
+        import base64
+        import json
+        import os
+        import socket
+        import struct
+        import time
+        import urllib.parse
+        import urllib.request
+        import uuid
+
+        APP = os.environ.get("WIZARD_APP", "app")
+        VERSION = os.environ.get("APP_VERSION", "0")
+        PORT = int(os.environ.get("FRONT_PORT", "8080"))
+        UP_HOST = os.environ.get("UPSTREAM_HOST", "")
+        UP_PORT = int(os.environ.get("UPSTREAM_PORT", str(PORT)))
+        MCP_PATH = "/mcp"
+        MCP_TOKEN = os.environ.get("MCP_TOKEN", "")  # when set, /mcp needs Authorization: Bearer <token>
+        MAX_HEAD = 65536
+        MAX_BODY = 1 << 20
+        TOOLS = {}
+        REQUEST = contextvars.ContextVar("request", default={})  # headers of the current /mcp call
+
+
+        def tool(name, description, props=None, required=()):
+            def deco(fn):
+                schema = {"type": "object", "properties": props or {}, "required": list(required)}
+                TOOLS[name] = ({"name": name, "description": description, "inputSchema": schema}, fn)
+                return fn
+            return deco
+
+
+        def up_addr():
+            try:
+                return socket.gethostbyname(UP_HOST)
+            except OSError:
+                return UP_HOST
+
+
+        def http(method, path, body=None, headers=None, timeout=60):
+            url = "http://%s:%d%s" % (up_addr(), UP_PORT, path)
+            req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status, r.read()
+
+
+        def err(i, code, message):
+            return {"jsonrpc": "2.0", "id": i, "error": {"code": code, "message": message}}
+
+
+        def rpc(msg):
+            m, i, p = msg.get("method"), msg.get("id"), msg.get("params") or {}
+            if m == "initialize":
+                r = {"protocolVersion": p.get("protocolVersion", "2025-06-18"), "capabilities": {"tools": {}},
+                     "serverInfo": {"name": APP, "version": VERSION}}
+            elif m == "tools/list":
+                r = {"tools": [t[0] for t in TOOLS.values()]}
+            elif m == "tools/call":
+                name, args = p.get("name"), p.get("arguments") or {}
+                if name not in TOOLS:
+                    return err(i, -32602, "unknown tool %s" % name)
+                try:
+                    out = TOOLS[name][1](**args)
+                    if isinstance(out, dict) and "_content" in out:
+                        r = {"content": out["_content"]}
+                    else:
+                        text = out if isinstance(out, str) else json.dumps(out, indent=2)
+                        r = {"content": [{"type": "text", "text": text[:200000]}]}
+                except Exception as e:  # tool errors go back to the agent, not the transport
+                    r = {"content": [{"type": "text", "text": "%s: %s" % (type(e).__name__, e)}], "isError": True}
+            elif m == "ping":
+                r = {}
+            elif i is None:
+                return None  # notification
+            else:
+                return err(i, -32601, "unknown method %s" % m)
+            return {"jsonrpc": "2.0", "id": i, "result": r}
+
+
+        REASONS = {200: "OK", 202: "Accepted", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed",
+                   401: "Unauthorized", 413: "Payload Too Large", 502: "Bad Gateway"}
+
+
+        async def respond(writer, code, obj=None, extra=""):
+            body = b"" if obj is None else json.dumps(obj).encode()
+            head = "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n%s\r\n" % (
+                code, REASONS.get(code, "OK"), len(body), extra)
+            writer.write(head.encode() + body)
+            try:
+                await writer.drain()
+            finally:
+                writer.close()
+
+
+        async def mcp(reader, writer, method, rest):
+            headers = {}
+            for line in rest.decode("latin-1").split("\r\n"):
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+            if MCP_TOKEN:
+                import hmac
+                if not hmac.compare_digest(headers.get("authorization", "").encode(), ("Bearer " + MCP_TOKEN).encode()):
+                    return await respond(writer, 401, {"error": "this MCP needs Authorization: Bearer <token>"}, 'WWW-Authenticate: Bearer\r\n')
+            if method != "POST":
+                return await respond(writer, 405, {"error": "use POST %s" % MCP_PATH}, "Allow: POST\r\n")
+            n = int(headers.get("content-length") or 0)
+            if n > MAX_BODY:
+                return await respond(writer, 413, {"error": "request too large"})
+            body = await reader.readexactly(n) if n else b""
+            try:
+                msg = json.loads(body or b"{}")
+            except ValueError:
+                return await respond(writer, 400, err(None, -32700, "parse error"))
+            REQUEST.set(headers)
+            batch = msg if isinstance(msg, list) else [msg]
+            results = await asyncio.gather(*(asyncio.to_thread(rpc, x) for x in batch if isinstance(x, dict)))
+            out = [x for x in results if x]
+            if not out:
+                return await respond(writer, 202)
+            await respond(writer, 200, out if isinstance(msg, list) else out[0])
+
+
+        async def pipe(r, w):
+            try:
+                while True:
+                    data = await r.read(65536)
+                    if not data:
+                        break
+                    w.write(data)
+                    await w.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                try:
+                    w.close()
+                except Exception:
+                    pass
+
+
+        async def handle(reader, writer):
+            try:
+                head = await reader.readuntil(b"\r\n\r\n")
+            except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
+                writer.close()
+                return
+            line, _, rest = head.partition(b"\r\n")
+            parts = line.decode("latin-1").split(" ")
+            path = parts[1].split("?", 1)[0] if len(parts) >= 3 else ""
+            if path == MCP_PATH:
+                return await mcp(reader, writer, parts[0], rest)
+            if not UP_HOST:
+                return await respond(writer, 404, {"error": "not found"})
+            try:
+                ur, uw = await asyncio.open_connection(UP_HOST, UP_PORT)
+            except OSError:
+                return await respond(writer, 502, {"error": "%s is starting or not reachable" % APP})
+            # One request per proxied connection (unless it is an upgrade such as a WebSocket), so a
+            # later /mcp request can never ride an upstream keep-alive connection.
+            lines = head.decode("latin-1").split("\r\n")
+            if not any(l.lower().startswith("upgrade:") for l in lines):
+                lines = [l for l in lines if l and not l.lower().startswith(("connection:", "keep-alive:"))]
+                head = ("\r\n".join(lines) + "\r\nConnection: close\r\n\r\n").encode("latin-1")
+            uw.write(head)
+            await uw.drain()
+            await asyncio.gather(pipe(reader, uw), pipe(ur, writer))
+
+
+        async def main():
+            srv = await asyncio.start_server(handle, "0.0.0.0", PORT, limit=MAX_HEAD)
+            async with srv:
+                await srv.serve_forever()
+
+
+        # ---- tools for this app ----
+        MEDIA = "/media"  # the owner's files (Runtipi media folder), mounted read-only
+        AUDIO_MAX = 512 * 1024 * 1024
+        DEFAULT_MODEL = os.environ.get("TRANSCRIBER_MODEL", "")
+
+
+        def _media_path(path):
+            full = os.path.realpath(os.path.join(MEDIA, str(path).lstrip("/")))
+            if full != MEDIA and not full.startswith(MEDIA + "/"):
+                raise ValueError("path must be inside the owner's files")
+            if not os.path.isfile(full):
+                raise FileNotFoundError("no file at %s (paths are relative to the Files root, e.g. Videos/talk.mp4)" % path)
+            if os.path.getsize(full) > AUDIO_MAX:
+                raise ValueError("file is larger than 512 MB")
+            return full
+
+
+        def _multipart(fields, filename, data):
+            boundary = uuid.uuid4().hex
+            out = []
+            for k, v in fields:
+                out.append(('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n' % (boundary, k, v)).encode())
+            out.append(('--%s\r\nContent-Disposition: form-data; name="file"; filename="%s"\r\nContent-Type: application/octet-stream\r\n\r\n'
+                        % (boundary, os.path.basename(filename).replace('"', ""))).encode())
+            out.append(data)
+            out.append(("\r\n--%s--\r\n" % boundary).encode())
+            return b"".join(out), "multipart/form-data; boundary=" + boundary
+
+
+        @tool("transcribe", "Transcribe an audio or video file from the owner's files to text, optionally with word timings. "
+              "Runs locally; nothing leaves the box.",
+              {"path": {"type": "string", "description": "File path relative to the Files root, e.g. Videos/talk.mp4"},
+               "language": {"type": "string", "description": "ISO code such as en; omit to auto-detect"},
+               "word_timestamps": {"type": "boolean", "description": "Include per-word start/end times (default false)"},
+               "model": {"type": "string", "description": "Model id; defaults to the one this app preloads"}},
+              ["path"])
+        def transcribe(path, language=None, word_timestamps=False, model=None):
+            full = _media_path(path)
+            fields = [("model", model or DEFAULT_MODEL), ("response_format", "verbose_json")]
+            if language:
+                fields.append(("language", language))
+            if word_timestamps:
+                fields.append(("timestamp_granularities[]", "word"))
+            fields.append(("timestamp_granularities[]", "segment"))
+            with open(full, "rb") as f:
+                body, ctype = _multipart(fields, full, f.read())
+            _, raw = http("POST", "/v1/audio/transcriptions", body, {"Content-Type": ctype}, timeout=3600)
+            d = json.loads(raw)
+            out = {"text": d.get("text", ""), "language": d.get("language"), "duration": d.get("duration")}
+            if word_timestamps:
+                out["words"] = [{"word": w.get("word"), "start": w.get("start"), "end": w.get("end")} for w in d.get("words") or []]
+            else:
+                out["segments"] = [{"start": s.get("start"), "end": s.get("end"), "text": s.get("text")} for s in d.get("segments") or []]
+            return out
+
+
+        @tool("transcriber_status", "Check the Transcriber is up and list the speech models it has downloaded.")
+        def transcriber_status():
+            _, raw = http("GET", "/v1/models", timeout=30)
+            models = [m.get("id") for m in json.loads(raw).get("data") or []]
+            return {"ok": True, "default_model": DEFAULT_MODEL, "models": models,
+                    "api": "OpenAI-compatible /v1/audio/transcriptions on this app's address"}
+
+
+        if __name__ == "__main__":
+            asyncio.run(main())
+    volumes:
+      - ${ROOT_FOLDER_HOST}/media:/media:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    x-runtipi:
+      is_main: true
+      internal_port: 8000
+    init: true
+    ports:
+      - 127.0.0.1:${APP_PORT}:8000
+  transcriber-engine:
+    image: ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cpu@sha256:2163775b6df5e451a71200e8f675fed68dbd8ab184fc604453d549e486f22fd2
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,size=256m
+    environment:
+      LOG_LEVEL: info
+      ENABLE_UI: "false"
+      WHISPER__COMPUTE_TYPE: int8
+      PRELOAD_MODELS: '["${TRANSCRIBER_MODEL}"]'
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data/huggingface:/home/ubuntu/.cache/huggingface
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+x-runtipi:
+  schema_version: 2
+  overrides: []

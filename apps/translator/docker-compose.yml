@@ -1,0 +1,49 @@
+services:
+  translator:
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:translator-translator-0b9074a88ceb-be44243d@sha256:843fa74bcafcb3f25512a8b7a2e7a3a33a608febd53ef3672c4e5cbae84341f3
+    user: 1000:1000
+    working_dir: /app
+    command:
+      - python
+      - /app/app/server.py
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    mem_limit: 160m
+    tmpfs:
+      - /tmp
+    init: true
+    restart: unless-stopped
+    environment:
+      PORT: "8799"
+      DATA_DIR: /data
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_APP_HOSTS: 127.0.0.1:${APP_PORT},localhost:${APP_PORT}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://127.0.0.1:8799/healthz',timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    x-runtipi:
+      is_main: true
+      internal_port: 8799
+    ports:
+      - 127.0.0.1:${APP_PORT}:8799
+x-runtipi:
+  schema_version: 2
+  overrides: []

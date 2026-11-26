@@ -1,0 +1,59 @@
+{
+  "name": "Claude",
+  "id": "wizard-claude",
+  "wizard_type": "external",
+  "available": true,
+  "short_desc": "External: Connect one or more Claude subscriptions; your agents on this server use them.",
+  "author": "Humanity Labs",
+  "port": 8799,
+  "categories": [
+    "network"
+  ],
+  "description": "Connect your Claude Pro or Max subscriptions to your Wizard server: the original one with Anthropic's official Claude Code login, and as many more as you like, each signed in inside your agent with Hermes' own Claude sign-in. Your agent uses them all and moves to the next one when one hits its limit. The app shows each subscription's plan and how much of its usage is left, and reports them to Wizard's Resources screen. Sign-ins stay in your agent's own store and in a private shared folder (the same one AI Accounts used, so an existing sign-in carries over); this app never shows or sends a token.",
+  "tipi_version": 2,
+  "version": "0.2.24",
+  "source": "https://github.com/oscarhenrycollins/claude-connection",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1792076857232,
+  "updated_at": 1795090206000,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "password",
+      "label": "Page password (optional)",
+      "env_variable": "WIZARD_CLAUDE_PASSWORD",
+      "required": false,
+      "hint": "Leave empty on a Tailscale-only server. If set (use 16+ characters), your browser asks for it (any username) before showing this page."
+    },
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard username",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
+      "required": true,
+      "default": "hermes",
+      "hint": "Filled in automatically from your agent. Used only to add, reconnect or remove Claude subscriptions inside the agent."
+    },
+    {
+      "type": "password",
+      "label": "Hermes Agent dashboard password",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
+      "required": true,
+      "min": 16,
+      "hint": "Filled in automatically from your agent (the same dashboard password). Added subscriptions sign in inside the agent, so this app never sees those tokens."
+    },
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard address (optional)",
+      "env_variable": "WIZARD_CLAUDE_HERMES_URL",
+      "required": false,
+      "hint": "Leave empty to use the Hermes Agent app (http://hermes-agent:9119). Set it only if your agent's dashboard runs elsewhere."
+    }
+  ]
+}

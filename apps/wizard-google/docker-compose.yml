@@ -1,0 +1,41 @@
+services:
+  wizard-google:
+    image: ghcr.io/humanitylabs-org/wizard-google:sha-252c5cfbd6e565028028a0d7ca38ba2e43e46914@sha256:fe626897a629638e0d570534cd99a1c8fd0467b2acdc4518a71e73c61e23781c
+    user: 0:0
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 384m
+    tmpfs:
+      - /tmp:rw,nosuid,size=64m,uid=1000,gid=1000
+    environment:
+      PORT: "18812"
+      DATA_DIR: /data
+      GOOGLE_RELAY_CALLBACK: ${GOOGLE_RELAY_CALLBACK:-}
+      GOOGLE_SIGNIN_SERVICE: ${GOOGLE_SIGNIN_SERVICE:-https://www.aiwizards.com/wizard-google/auth}
+      WIZARD_SHELL_AUTH: ${WIZARD_SHELL_AUTH:-tailscale-serve}
+      WIZARD_OWNER_LOGINS: ${WIZARD_OWNER_LOGINS:-}
+      WIZARD_SHELL_PATH: ${WIZARD_SHELL_PATH:-/wizard-google/}
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_OWNER_TOKEN: ${WIZARD_OWNER_TOKEN:-}
+      WIZARD_ADMIN_TOKEN: ${WIZARD_ADMIN_TOKEN:-}
+      WIZARD_MCP_BOX_ONLY: ${WIZARD_MCP_BOX_ONLY:-true}
+      WIZARD_FRAME_ANCESTORS: ${WIZARD_FRAME_ANCESTORS:-'self'}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    x-runtipi:
+      is_main: true
+      internal_port: 18812
+    ports:
+      - 127.0.0.1:${APP_PORT}:18812
+x-runtipi:
+  schema_version: 2
+  overrides: []

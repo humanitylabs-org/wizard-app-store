@@ -1,0 +1,29 @@
+{
+  "name": "Health",
+  "id": "wizard-health",
+  "wizard_type": "view",
+  "available": true,
+  "short_desc": "View: your recovery, sleep and activity from connected wearables such as WHOOP, in plain sentences, every day as a square like a GitHub graph.",
+  "author": "Humanity Labs",
+  "port": 8826,
+  "categories": [
+    "media"
+  ],
+  "description": "A health tracker over the wearables you connect (WHOOP, Oura, Fitbit, Polar, Withings, Garmin, Coros, Apple Health). Activity, Recovery and Sleep each get a card in one traffic-light colour with a big number and one plain sentence (tap it for the numbers behind it), above a GitHub-style graph of every day; tap a day to see it. Wide windows show all three side by side; on a phone a bottom bar switches between Activity and Recovery & sleep. Health reads connector apps through the health-data contract and never holds a wearable's keys. Your agent gets read-only tools for the same data.",
+  "tipi_version": 29,
+  "version": "0.19.0",
+  "source": "https://github.com/oscarhenrycollins/wizard-health",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1793380828795,
+  "updated_at": 1795368272008,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [],
+  "no_gui": false
+}

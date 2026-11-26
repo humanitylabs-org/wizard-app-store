@@ -1,0 +1,35 @@
+services:
+  wizard-youtube-music:
+    image: ghcr.io/humanitylabs-org/wizard-youtube-music:sha-5998b6da961440f4f2b2d5f9b3820d7097e5eea2@sha256:df6d58d9a5355add1d9d575408184a77ff13c008216302a7d7c140994099fb62
+    restart: unless-stopped
+    user: 1000:1000
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 512m
+    environment:
+      PORT: "9206"
+      DATA_DIR: /data
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_RELAY_IMPORT_ORIGIN: ${WIZARD_RELAY_IMPORT_ORIGIN:-}
+      WIZARD_TAILNET_PROXY: ${WIZARD_TAILNET_PROXY:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    ports:
+      - 127.0.0.1:${APP_PORT}:9206
+    x-runtipi:
+      is_main: true
+      internal_port: 9206
+x-runtipi:
+  schema_version: 2
+  overrides: []

@@ -1,0 +1,34 @@
+services:
+  wizard-podcasts:
+    image: ghcr.io/humanitylabs-org/wizard-podcasts:sha-7844336954427e994b33bf7ee1bd3230eddcaf74@sha256:f3a0d979dd38c6b7d798f8e63db589bad63d959632719855eb4161563de16563
+    restart: unless-stopped
+    user: 1000:1000
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    environment:
+      PORT: "9207"
+      DATA_DIR: /data
+      PODCASTS_YOUTUBE_SOURCES: wizard-youtube-music=http://wizard-youtube-music:9206
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_OWNER_LOGINS: ${WIZARD_OWNER_LOGINS:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    ports:
+      - 127.0.0.1:${APP_PORT}:9207
+    x-runtipi:
+      is_main: true
+      internal_port: 9207
+x-runtipi:
+  schema_version: 2
+  overrides: []

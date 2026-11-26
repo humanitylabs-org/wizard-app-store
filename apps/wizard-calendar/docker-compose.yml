@@ -1,0 +1,116 @@
+services:
+  wizard-calendar:
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-calendar-wizard-calendar-1b03af2108f4-47d51fa6@sha256:3169207d7b6d3fbcda1ba4be3254c9265030a4ca60c9a72edda819011186895d
+    user: 0:0
+    working_dir: /app
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    tmpfs:
+      - /tmp
+    read_only: true
+    environment:
+      BIND: 0.0.0.0
+      PORT: "8799"
+      DATA_DIR: /data
+      PYTHONDONTWRITEBYTECODE: "1"
+      CALENDAR_TIMEZONE: ${CALENDAR_TIMEZONE:-UTC}
+      ICAL_SYNC_INTERVAL: ${ICAL_SYNC_INTERVAL:-900}
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_LOCAL_HOSTS: 127.0.0.1:${APP_PORT},localhost:${APP_PORT},wizard-calendar:8799
+      WIZARD_SHELL_AUTH: ${WIZARD_SHELL_AUTH:-tailscale-serve}
+      WIZARD_OWNER_LOGINS: ${WIZARD_OWNER_LOGINS:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      CALENDAR_RADICALE_URL: http://wizard-calendar-dav:5232
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    command:
+      - python
+      - app/server.py
+    x-runtipi:
+      is_main: true
+      internal_port: 8799
+    init: true
+    ports:
+      - 127.0.0.1:${APP_PORT}:8799
+  wizard-calendar-dav:
+    image: ghcr.io/kozea/radicale:3.9.2@sha256:c74545ef669a3166646ec13438a31b5d0bfff198d8ba7ecd214c0a5f40f03fb4
+    user: 0:0
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - SETPCAP
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - /app/bin/python
+      - -c
+      - |
+        import ctypes, os, sys, time
+        d = '/var/lib/radicale'
+        f = d + '/users'
+        first = os.stat(d)
+        opened = False
+        while not os.path.isfile(f):
+            if not opened:
+                print('wizard-calendar-dav: waiting for Calendar to write its password file', file=sys.stderr, flush=True)
+                if first.st_uid == os.getuid() and first.st_mode & 0o777 != 0o777:
+                    os.chmod(d, 0o777)
+                opened = True
+            time.sleep(1)
+        st = os.stat(f)
+        uid, gid = st.st_uid, st.st_gid
+        if opened and first.st_uid == os.getuid() and first.st_mode & 0o777 != 0o777:
+            os.chmod(d, first.st_mode & 0o7777)
+        for top, dirs, files in os.walk(d, onerror=lambda e: print('wizard-calendar-dav:', e, file=sys.stderr)):
+            for p in [top] + [os.path.join(top, n) for n in dirs + files]:
+                try:
+                    s = os.lstat(p)
+                    if (s.st_uid, s.st_gid) != (uid, gid):
+                        os.lchown(p, uid, gid)
+                except OSError as e:
+                    print('wizard-calendar-dav:', e, file=sys.stderr)
+        libc = ctypes.CDLL(None, use_errno=True)
+        for cap in range(64):
+            libc.prctl(24, cap, 0, 0, 0)  # PR_CAPBSET_DROP
+        os.setgroups([])
+        os.setgid(gid)
+        os.setuid(uid)
+        print(f'wizard-calendar-dav: Radicale runs as {uid}:{gid}, the owner of Calendar\'s password file', file=sys.stderr, flush=True)
+        os.execv('/app/bin/python', ['/app/bin/python', '/app/bin/radicale', *sys.argv[1:]])
+    mem_limit: 128m
+    tmpfs:
+      - /tmp
+    read_only: true
+    volumes:
+      - ${APP_DATA_DIR}/data/radicale:/var/lib/radicale
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    command:
+      - --hosts
+      - 0.0.0.0:5232
+      - --auth-type
+      - htpasswd
+      - --auth-htpasswd-filename
+      - /var/lib/radicale/users
+      - --auth-htpasswd-encryption
+      - sha512
+      - --rights-type
+      - owner_only
+      - --storage-filesystem-folder
+      - /var/lib/radicale/collections
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+x-runtipi:
+  schema_version: 2
+  overrides: []

@@ -1,0 +1,43 @@
+services:
+  wizard-tinfoil:
+    image: ghcr.io/humanitylabs-org/wizard-tinfoil:0.3.21@sha256:eb047feee5ff176989809333b98c4958978fedf1055e1aac38f1529eb3a8d481
+    user: 1000:1000
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    tmpfs:
+      - /tmp:rw,nosuid,size=64m,uid=1000,gid=1000
+    environment:
+      PORT: "18804"
+      APP_PORT: ${APP_PORT:-18804}
+      DATA_DIR: /data/private
+      HOME: /data/private
+      XDG_CACHE_HOME: /data/private/cache
+      XDG_DATA_HOME: /data/private/share
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_OWNER_LOGINS: ${WIZARD_OWNER_LOGINS:-}
+      WIZARD_TINFOIL_HERMES_URL: ${WIZARD_TINFOIL_HERMES_URL:-http://hermes-agent:9119}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-hermes}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - tinfoil-private-data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    x-runtipi:
+      is_main: true
+      internal_port: 18804
+    ports:
+      - 127.0.0.1:${APP_PORT}:18804
+volumes:
+  tinfoil-private-data:
+    name: wizard-tinfoil-private-data
+x-runtipi:
+  schema_version: 2
+  overrides: []

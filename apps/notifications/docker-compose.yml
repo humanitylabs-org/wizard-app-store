@@ -1,0 +1,1839 @@
+services:
+  notifications:
+    image: python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+    user: ${NOTIFICATIONS_USER:-1000:1000}
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 128m
+    environment:
+      WIZARD_APP: notifications
+      APP_VERSION: 2.29.0-wizard29
+      FRONT_PORT: "8080"
+      UPSTREAM_HOST: notifications-engine
+      UPSTREAM_PORT: "8080"
+      NOTIFY_TOPIC: ${NOTIFY_TOPIC:-wizard}
+      PYTHONDONTWRITEBYTECODE: "1"
+      INBOX_TOPICS: ${NOTIFY_TOPIC:-wizard},cron
+      INBOX_STATE: /data/inbox.json
+      PHONE_OWNER_LOGIN: ${PHONE_OWNER_LOGIN:-}
+      CRON_DIR: /hermes-cron
+      CRON_QUIET_JOBS: ${CRON_QUIET_JOBS:-}
+      CRON_JOB_APPS: ${CRON_JOB_APPS:-}
+      CRON_TRUSTED_JOBS: ${CRON_TRUSTED_JOBS:-}
+      CRON_RELAY: ${CRON_RELAY:-on}
+      CRON_FAILURES: ${CRON_FAILURES:-auto}
+      CRON_ESCALATE_H: ${CRON_ESCALATE_H:-24}
+      INBOX_MEDIA_ROOTS: ${INBOX_MEDIA_1:-}:${INBOX_MEDIA_2:-}:${INBOX_MEDIA_3:-}:${INBOX_MEDIA_4:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/inbox:/data
+      - ${HERMES_CRON_DIR:-${APP_DATA_DIR}/no-hermes-cron}:/hermes-cron:ro
+      - ${INBOX_MEDIA_1:-${APP_DATA_DIR}/no-media-1}:${INBOX_MEDIA_1:-/no-media-1}:ro
+      - ${INBOX_MEDIA_2:-${APP_DATA_DIR}/no-media-2}:${INBOX_MEDIA_2:-/no-media-2}:ro
+      - ${INBOX_MEDIA_3:-${APP_DATA_DIR}/no-media-3}:${INBOX_MEDIA_3:-/no-media-3}:ro
+      - ${INBOX_MEDIA_4:-${APP_DATA_DIR}/no-media-4}:${INBOX_MEDIA_4:-/no-media-4}:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      - notifications-engine
+    command:
+      - python
+      - -c
+      - |
+        """Wizard MCP front: serves this app's MCP tools at /mcp and passes every other request,
+        byte for byte, to the app behind it (HTTP, streaming and WebSockets alike).
+        Stdlib only, so it runs on a stock python image with no build step.
+        Generated from the app repo's mcp/ folder; edit there, then run mcp/inline.py."""
+        import asyncio
+        import contextvars
+        import base64
+        import json
+        import os
+        import socket
+        import struct
+        import time
+        import urllib.parse
+        import urllib.request
+        import uuid
+
+        APP = os.environ.get("WIZARD_APP", "app")
+        VERSION = os.environ.get("APP_VERSION", "0")
+        PORT = int(os.environ.get("FRONT_PORT", "8080"))
+        UP_HOST = os.environ.get("UPSTREAM_HOST", "")
+        UP_PORT = int(os.environ.get("UPSTREAM_PORT", str(PORT)))
+        MCP_PATH = "/mcp"
+        MCP_TOKEN = os.environ.get("MCP_TOKEN", "")  # when set, /mcp needs Authorization: Bearer <token>
+        MAX_HEAD = 65536
+        MAX_BODY = 1 << 20
+        TOOLS = {}
+        ROUTES = {}  # path prefix -> fn(method, path, query, headers, body) -> (status, content_type, bytes); app pages and APIs
+        STREAMS = {}  # exact path -> async fn(reader, writer, method, target, rest): a response that stays open (event streams)
+        REQUEST = contextvars.ContextVar("request", default={})  # headers of the current /mcp call
+
+
+        def tool(name, description, props=None, required=()):
+            def deco(fn):
+                schema = {"type": "object", "properties": props or {}, "required": list(required)}
+                TOOLS[name] = ({"name": name, "description": description, "inputSchema": schema}, fn)
+                return fn
+            return deco
+
+
+        def route(prefix):
+            def deco(fn):
+                ROUTES[prefix] = fn
+                return fn
+            return deco
+
+
+        def stream(path):
+            def deco(fn):
+                STREAMS[path] = fn
+                return fn
+            return deco
+
+
+        async def serve_route(reader, writer, fn, method, target, rest):
+            headers = {}
+            for line in rest.decode("latin-1").split("\r\n"):
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+            # The caller's address, under a key no request header can produce (header names never start with ':').
+            headers[":peer"] = (writer.get_extra_info("peername") or ("",))[0]
+            n = int(headers.get("content-length") or 0)
+            if n > MAX_BODY:
+                return await respond(writer, 413, {"error": "request too large"})
+            body = await reader.readexactly(n) if n else b""
+            path, _, query = target.partition("?")
+            try:
+                code, ctype, data = await asyncio.to_thread(fn, method, path, query, headers, body)
+            except Exception as e:  # an app route error is a 500 for that request only
+                code, ctype, data = 500, "application/json", json.dumps({"error": "%s: %s" % (type(e).__name__, e)}).encode()
+            head = "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n" % (
+                code, REASONS.get(code, "OK"), ctype, len(data))
+            writer.write(head.encode() + data)
+            try:
+                await writer.drain()
+            finally:
+                writer.close()
+
+
+        def up_addr():
+            try:
+                return socket.gethostbyname(UP_HOST)
+            except OSError:
+                return UP_HOST
+
+
+        def http(method, path, body=None, headers=None, timeout=60):
+            url = "http://%s:%d%s" % (up_addr(), UP_PORT, path)
+            req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status, r.read()
+
+
+        def err(i, code, message):
+            return {"jsonrpc": "2.0", "id": i, "error": {"code": code, "message": message}}
+
+
+        def rpc(msg):
+            m, i, p = msg.get("method"), msg.get("id"), msg.get("params") or {}
+            if m == "initialize":
+                r = {"protocolVersion": p.get("protocolVersion", "2025-06-18"), "capabilities": {"tools": {}},
+                     "serverInfo": {"name": APP, "version": VERSION}}
+            elif m == "tools/list":
+                r = {"tools": [t[0] for t in TOOLS.values()]}
+            elif m == "tools/call":
+                name, args = p.get("name"), p.get("arguments") or {}
+                if name not in TOOLS:
+                    return err(i, -32602, "unknown tool %s" % name)
+                try:
+                    out = TOOLS[name][1](**args)
+                    if isinstance(out, dict) and "_content" in out:
+                        r = {"content": out["_content"]}
+                    else:
+                        text = out if isinstance(out, str) else json.dumps(out, indent=2)
+                        r = {"content": [{"type": "text", "text": text[:200000]}]}
+                except Exception as e:  # tool errors go back to the agent, not the transport
+                    r = {"content": [{"type": "text", "text": "%s: %s" % (type(e).__name__, e)}], "isError": True}
+            elif m == "ping":
+                r = {}
+            elif i is None:
+                return None  # notification
+            else:
+                return err(i, -32601, "unknown method %s" % m)
+            return {"jsonrpc": "2.0", "id": i, "result": r}
+
+
+        REASONS = {200: "OK", 202: "Accepted", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed",
+                   401: "Unauthorized", 403: "Forbidden", 415: "Unsupported Media Type", 500: "Internal Server Error", 413: "Payload Too Large", 502: "Bad Gateway"}
+
+
+        async def respond(writer, code, obj=None, extra=""):
+            body = b"" if obj is None else json.dumps(obj).encode()
+            head = "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n%s\r\n" % (
+                code, REASONS.get(code, "OK"), len(body), extra)
+            writer.write(head.encode() + body)
+            try:
+                await writer.drain()
+            finally:
+                writer.close()
+
+
+        def parse_headers(rest):
+            headers = {}
+            for line in rest.decode("latin-1").split("\r\n"):
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+            return headers
+
+
+        def networked(headers):
+            """The request came through Tailscale Serve, a tunnel or a proxy (not from an app on this box)."""
+            return any(k.startswith(("tailscale-", "x-forwarded-", "cf-")) or k in ("forwarded", "x-real-ip") for k in headers)
+
+
+        GET_PUBLISH = ("/publish", "/send", "/trigger")  # ntfy also publishes on GET /<topic>/publish?message=...
+
+
+        def cross_site(method, path, headers):
+            """A browser request made by a page on another origin: another website, or another app's port on this box.
+            ntfy answers every request with Access-Control-Allow-Origin: * (its built-in default, not configurable in
+            v2.29) and has no login here, so such a page could read and publish the owner's notifications. The ntfy web
+            app (same origin) and the ntfy phone apps (no browser headers) are unaffected; a link that opens the web app
+            in a tab is a top-level visit and still works."""
+            host = headers.get("host", "").lower()
+            origin = headers.get("origin")
+            if origin is not None and (origin == "null" or urllib.parse.urlsplit(origin).netloc.lower() != host):
+                return True
+            publish = method in ("GET", "HEAD") and path.rstrip("/").endswith(GET_PUBLISH) and path.rstrip("/").count("/") == 2
+            if headers.get("sec-fetch-site", "") in ("cross-site", "same-site"):
+                visit = (method in ("GET", "HEAD") and headers.get("sec-fetch-mode") == "navigate"
+                         and headers.get("sec-fetch-dest") == "document")
+                if not visit or publish:
+                    return True
+            # Browsers without Fetch Metadata still send the linking page as Referer on an <img>/<script> GET.
+            ref = headers.get("referer")
+            return bool(publish and ref and urllib.parse.urlsplit(ref).netloc.lower() != host)
+
+
+        async def mcp(reader, writer, method, rest):
+            headers = parse_headers(rest)
+            if MCP_TOKEN:
+                import hmac
+                if not hmac.compare_digest(headers.get("authorization", "").encode(), ("Bearer " + MCP_TOKEN).encode()):
+                    return await respond(writer, 401, {"error": "this MCP needs Authorization: Bearer <token>"}, 'WWW-Authenticate: Bearer\r\n')
+            elif networked(headers):
+                # Without a token the MCP is for apps on this box only, the handshake (initialize, tools/list) included,
+                # like every tool already is (_box_only).
+                return await respond(writer, 403, {"error": "this MCP is only for apps on this box"})
+            if method != "POST":
+                return await respond(writer, 405, {"error": "use POST %s" % MCP_PATH}, "Allow: POST\r\n")
+            n = int(headers.get("content-length") or 0)
+            if n > MAX_BODY:
+                return await respond(writer, 413, {"error": "request too large"})
+            body = await reader.readexactly(n) if n else b""
+            try:
+                msg = json.loads(body or b"{}")
+            except ValueError:
+                return await respond(writer, 400, err(None, -32700, "parse error"))
+            REQUEST.set(headers)
+            batch = msg if isinstance(msg, list) else [msg]
+            results = await asyncio.gather(*(asyncio.to_thread(rpc, x) for x in batch if isinstance(x, dict)))
+            out = [x for x in results if x]
+            if not out:
+                return await respond(writer, 202)
+            await respond(writer, 200, out if isinstance(msg, list) else out[0])
+
+
+        async def pipe(r, w):
+            try:
+                while True:
+                    data = await r.read(65536)
+                    if not data:
+                        break
+                    w.write(data)
+                    await w.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                try:
+                    w.close()
+                except Exception:
+                    pass
+
+
+        async def handle(reader, writer):
+            try:
+                head = await reader.readuntil(b"\r\n\r\n")
+            except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
+                writer.close()
+                return
+            line, _, rest = head.partition(b"\r\n")
+            parts = line.decode("latin-1").split(" ")
+            path = parts[1].split("?", 1)[0] if len(parts) >= 3 else ""
+            if path in STREAMS:
+                return await STREAMS[path](reader, writer, parts[0], parts[1], rest)
+            for prefix, fn in sorted(ROUTES.items(), key=lambda r: -len(r[0])):   # the most specific prefix wins
+                if path == prefix.rstrip("/") or path.startswith(prefix):
+                    return await serve_route(reader, writer, fn, parts[0], parts[1], rest)
+            if cross_site(parts[0], path, parse_headers(rest)):
+                # No Access-Control-* header: the page that sent it can neither read the answer nor pass a preflight.
+                return await respond(writer, 403, {"error": "cross-site requests are refused"})
+            if path == MCP_PATH:
+                return await mcp(reader, writer, parts[0], rest)
+            if not UP_HOST:
+                return await respond(writer, 404, {"error": "not found"})
+            try:
+                ur, uw = await asyncio.open_connection(UP_HOST, UP_PORT)
+            except OSError:
+                return await respond(writer, 502, {"error": "%s is starting or not reachable" % APP})
+            # One request per proxied connection (unless it is an upgrade such as a WebSocket), so a
+            # later /mcp request can never ride an upstream keep-alive connection.
+            lines = head.decode("latin-1").split("\r\n")
+            if not any(l.lower().startswith("upgrade:") for l in lines):
+                lines = [l for l in lines if l and not l.lower().startswith(("connection:", "keep-alive:"))]
+                head = ("\r\n".join(lines) + "\r\nConnection: close\r\n\r\n").encode("latin-1")
+            uw.write(head)
+            await uw.drain()
+            await asyncio.gather(pipe(reader, uw), pipe(ur, writer))
+
+
+        async def main():
+            srv = await asyncio.start_server(handle, "0.0.0.0", PORT, limit=MAX_HEAD)
+            async with srv:
+                await srv.serve_forever()
+
+
+        # ---- tools for this app ----
+        # Notifications tools: the agent sends the owner a notification and reads recent ones.
+        # Everything goes to one topic on the box's own ntfy server (the engine behind this front), which the owner
+        # subscribes to once in the ntfy phone app or the web app. Nothing leaves the box unless the owner points
+        # their phone at it.
+
+        TOPIC = os.environ.get("NOTIFY_TOPIC", "wizard")
+        # A notification about one app carries the tag `app:<app id>`: the inbox files it under that app (its name, mark and
+        # Chats / Badge / Off choice) instead of the agent's own group. Untagged = the agent's own.
+        import re as _re
+        APP_TAG = "app:"
+        APP_ID_RX = _re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+
+
+        def item_app(tags):
+            """The app a notification is about (its `app:<id>` tag), or ''."""
+            for t in tags or []:
+                t = str(t)
+                if t.startswith(APP_TAG) and APP_ID_RX.fullmatch(t[len(APP_TAG):]):
+                    return t[len(APP_TAG):]
+            return ""
+        PRIORITIES = {"min": 1, "low": 2, "default": 3, "high": 4, "urgent": 5}
+
+
+        def _box_only():
+            """Only apps on this box (e.g. the agent through the Wizard hub) can use these tools, never a request that
+            came in through Tailscale Serve, a tunnel or a proxy."""
+            h = REQUEST.get()
+            if any(h.get(k) for k in ("tailscale-user-login", "x-forwarded-for", "forwarded", "cf-connecting-ip",
+                                      "cf-access-jwt-assertion", "x-real-ip")):
+                raise PermissionError("the Notifications tools are only for apps on this box")
+
+
+        def _clean(text, limit):
+            text = " ".join(str(text or "").split()) if limit <= 250 else str(text or "").strip()
+            return text[:limit]
+
+
+        @tool("notify", "Send the owner a notification on their phone and in the Notifications app. Use it for things "
+              "they asked to be told about, finished long jobs, or problems that need them. Keep it short and plain.",
+              {"message": {"type": "string", "description": "What happened, in one or two sentences"},
+               "title": {"type": "string", "description": "Short title, e.g. 'Video ready' (optional)"},
+               "priority": {"type": "string", "enum": list(PRIORITIES), "description": "default unless it is urgent"},
+               "link": {"type": "string", "description": "https link to open when tapped (optional)"},
+               "tags": {"type": "string", "description": "Comma-separated emoji short codes, e.g. 'white_check_mark' (optional)"},
+               "app": {"type": "string", "description": "Id of the installed app this is about, e.g. 'sniper' (optional): it is "
+                       "then listed under that app and follows that app's notification choice; leave empty for your own"}},
+              ["message"])
+        def notify(message, title="", priority="default", link="", tags="", app=""):
+            _box_only()
+            body = _clean(message, 4000)
+            if not body:
+                raise ValueError("say what to tell the owner")
+            payload = {"topic": TOPIC, "message": body, "priority": PRIORITIES.get(str(priority or "default"), 3)}
+            if title:
+                payload["title"] = _clean(title, 250)
+            if link:
+                url = str(link).strip()
+                if not url.startswith("https://") or any(c.isspace() for c in url):
+                    raise ValueError("link must be an https:// address")
+                payload["click"] = url[:2000]
+            if tags:
+                payload["tags"] = [t for t in (_clean(x, 40) for x in str(tags).split(",")) if t and not t.startswith(APP_TAG)][:5]
+            app = str(app or "").strip().lower()
+            if app:
+                if not APP_ID_RX.fullmatch(app):
+                    raise ValueError("app is an app id like 'sniper'")
+                payload["tags"] = payload.get("tags", []) + [APP_TAG + app]
+            status, raw = http("POST", "/", json.dumps(payload).encode(), {"Content-Type": "application/json"}, timeout=20)
+            sent = json.loads(raw or b"{}")
+            return {"sent": True, "id": sent.get("id"), "topic": TOPIC, "time": sent.get("time")}
+
+
+        @tool("notifications_recent", "Read the notifications sent to the owner recently, newest last.",
+              {"since": {"type": "string", "description": "How far back: e.g. '30m', '12h', '2d' (default 24h)"},
+               "limit": {"type": "integer", "description": "Max notifications, default 20, up to 100"}})
+        def notifications_recent(since="24h", limit=20):
+            _box_only()
+            window = str(since or "24h").strip()
+            if not window or len(window) > 6 or not window[:-1].isdigit() or window[-1] not in "smhd":
+                raise ValueError("since looks like 30m, 12h or 2d")
+            cap = max(1, min(int(limit or 20), 100))
+            status, raw = http("GET", "/%s/json?poll=1&since=%s" % (urllib.parse.quote(TOPIC), window), timeout=20)
+            items = []
+            for line in raw.decode("utf-8", "replace").splitlines():
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if m.get("event") != "message":
+                    continue
+                items.append({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(m.get("time", 0))),
+                              "title": m.get("title", ""), "message": m.get("message", ""),
+                              "priority": m.get("priority", 3), "link": m.get("click", "")})
+            return {"topic": TOPIC, "since": window, "count": len(items), "notifications": items[-cap:]}
+
+
+        # ---- Inbox: the owner's view of everything sent here, with read / flag / archive ----
+        # The page and its API live on this front at /notifications/ (the Wizard shell opens it at the same path on its own
+        # origin). ntfy keeps the messages (30 days); this keeps only the owner's marks, in a small JSON file.
+        import tempfile
+        import threading
+
+        INBOX = "/notifications/"
+        STATE_FILE = os.environ.get("INBOX_STATE", "/data/inbox.json")
+        TOPICS = [t for t in os.environ.get("INBOX_TOPICS", TOPIC).split(",") if t.strip()]
+        _lock = threading.Lock()
+
+
+        def _load_state():
+            try:
+                with open(STATE_FILE) as f:
+                    d = json.load(f)
+                return d if isinstance(d, dict) else {}
+            except (OSError, ValueError):
+                return {}
+
+
+        def _save_state(d):
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(d, f)
+            os.replace(tmp, STATE_FILE)
+
+
+        def _messages(since="all"):
+            out = []
+            for t in TOPICS:
+                status, raw = http("GET", "/%s/json?poll=1&since=%s" % (urllib.parse.quote(t.strip()), since), timeout=20)
+                for line in raw.decode("utf-8", "replace").splitlines():
+                    try:
+                        m = json.loads(line)
+                    except ValueError:
+                        continue
+                    if m.get("event") == "message":
+                        out.append(m)
+                    elif m.get("error") or m.get("http"):
+                        # ntfy can stop a poll part-way with HTTP 200 and an error line (e.g. its daily bandwidth limit).
+                        # A cut-off list is not the inbox: fail loudly instead of returning half of it.
+                        raise RuntimeError("ntfy stopped the %s list part-way: %s" % (t.strip(), m.get("error") or m.get("http")))
+            out.sort(key=lambda m: m.get("time", 0), reverse=True)
+            return out
+
+
+        def inbox_items(view="inbox", limit=200):
+            st = _load_state()
+            items = []
+            for m in _messages():
+                s = st.get(m["id"], {})
+                tags = m.get("tags") or []
+                it = {"id": m["id"], "time": m.get("time", 0), "title": m.get("title", ""), "message": m.get("message", ""),
+                      "priority": m.get("priority", 3), "link": m.get("click", ""), "tags": tags,
+                      "source": "cron" if "cron" in tags else "agent",
+                      **({"from": item_app(tags)} if item_app(tags) else {}),
+                      "read": bool(s.get("read")), "flag": bool(s.get("flag")), "archived": bool(s.get("archived"))}
+                items.append(it)
+            counts = {"unread": sum(1 for i in items if not i["read"] and not i["archived"]),
+                      "needs": sum(1 for i in items if not i["read"] and not i["archived"] and i["priority"] >= 4),
+                      "flagged": sum(1 for i in items if i["flag"] and not i["archived"])}
+            if view == "flagged":
+                items = [i for i in items if i["flag"] and not i["archived"]]
+            elif view == "archive":
+                items = [i for i in items if i["archived"]]
+            elif view == "all":
+                pass
+            else:
+                items = [i for i in items if not i["archived"]]
+            return {"view": view, "counts": counts, "items": items[:max(1, min(int(limit or 200), 500))]}
+
+
+        APP_ID = "a-"          # app inbox feed items (Wizard OS inbox feed v1): "a-<app id>-<key hash>", kept by the shell
+        APP_KEEP = 60 * 86400   # an app item's mark outlives ntfy's 30 days; dropped 60 days after the activity it covers
+
+
+        def _app_id(i):
+            return isinstance(i, str) and i.startswith(APP_ID) and 3 < len(i) <= 128 and all(c.isalnum() or c in "-_" for c in i)
+
+
+        MARK_GONE_GRACE = 3 * 86400   # a notification mark is forgotten only after ntfy has stopped listing it for 3 days
+
+
+        def _prune_marks(st, now):
+            """Forget marks for messages ntfy has expired. Never on a partial or failed read: one bad poll must not wipe
+            the owner's read/archived state (that brought weeks of old items back as unread)."""
+            try:
+                live = {m["id"] for m in _messages()}
+            except Exception:
+                return st
+            out = {}
+            for k, v in st.items():
+                if _app_id(k):
+                    if now - float(v.get("at") or 0) < APP_KEEP:
+                        out[k] = v
+                elif k in live:
+                    v.pop("gone", None)
+                    out[k] = v
+                else:
+                    try:
+                        gone = float(v.get("gone") or now)
+                    except (TypeError, ValueError):
+                        gone = now
+                    if now - gone < MARK_GONE_GRACE:
+                        v["gone"] = gone
+                        out[k] = v
+            return out
+
+
+        def inbox_mark(ids, at=None, **marks):
+            ids = [str(i)[:128] if _app_id(str(i)) else str(i)[:40] for i in (ids or [])][:500]
+            keep = {k: bool(v) for k, v in marks.items() if k in ("read", "flag", "archived") and v is not None}
+            if not ids or not keep:
+                raise ValueError("give ids and at least one of read, flag, archived")
+            at = at if isinstance(at, dict) else {}
+            now = time.time()
+            with _lock:
+                st = _load_state()
+                for i in ids:
+                    cur = st.get(i, {})
+                    cur.update(keep)
+                    if keep.get("archived"):
+                        cur["read"] = True
+                    if _app_id(i):
+                        # The mark covers the item as it was (its latest activity): newer activity in the app brings it back.
+                        try:
+                            cur["at"] = max(0, min(float(at.get(i, now)), now + 60))
+                        except (TypeError, ValueError):
+                            cur["at"] = now
+                    st[i] = cur
+                st = _prune_marks(st, now)
+                _save_state(st)
+            return {"ok": True, "changed": len(ids)}
+
+
+        def app_marks():
+            st = _load_state()
+            return {"marks": {k: {"read": bool(v.get("read")), "archived": bool(v.get("archived")), "at": float(v.get("at") or 0)}
+                              for k, v in st.items() if _app_id(k)}}
+
+
+        # ---- Inbox sources: per app, whether its "needs you" items show in the Chats inbox (and, later, on the phone) ----
+        # One small JSON file beside the marks (never inside inbox.json: marks pruning would drop it). An app that is not
+        # listed shows in Chats (chats: true). "phone" is reserved for phone notifications; nothing reads it yet.
+        SOURCES_FILE = os.environ.get("INBOX_SOURCES", os.path.join(os.path.dirname(STATE_FILE) or ".", "sources.json"))
+        SOURCES_MAX_APPS = 200
+        SOURCES_MAX_BODY = 4096
+        _SOURCE_FLAGS = ("chats", "phone")
+
+
+        def _source_app(a):
+            return isinstance(a, str) and 0 < len(a) <= 64 and a[0].isalnum() and all(c.islower() or c.isdigit() or c == "-" for c in a)
+
+
+        def _clean_sources(d):
+            out = {}
+            if isinstance(d, dict):
+                for app, v in d.items():
+                    if _source_app(app) and isinstance(v, dict):
+                        out[app] = {k: bool(v.get(k, True)) for k in _SOURCE_FLAGS}
+                    if len(out) >= SOURCES_MAX_APPS:
+                        break
+            return out
+
+
+        def inbox_sources():
+            try:
+                with open(SOURCES_FILE) as f:
+                    d = json.load(f)
+            except (OSError, ValueError):
+                d = {}
+            return {"sources": _clean_sources(d.get("sources") if isinstance(d, dict) else None)}
+
+
+        def set_inbox_source(app, chats=None, phone=None):
+            if not _source_app(app):
+                raise ValueError("give an app id")
+            patch = {k: v for k, v in (("chats", chats), ("phone", phone)) if v is not None}
+            if not patch or any(not isinstance(v, bool) for v in patch.values()):
+                raise ValueError("give chats and/or phone as true or false")
+            with _lock:
+                cur = inbox_sources()["sources"]
+                if app not in cur and len(cur) >= SOURCES_MAX_APPS:
+                    raise ValueError("too many apps")
+                cur[app] = {**{k: True for k in _SOURCE_FLAGS}, **cur.get(app, {}), **patch}
+                # Atomic: a temp file in the same folder, flushed to disk, then renamed over the old one.
+                folder = os.path.dirname(SOURCES_FILE) or "."
+                fd, tmp = tempfile.mkstemp(prefix=".sources-", suffix=".tmp", dir=folder)
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        json.dump({"sources": cur}, f)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.chmod(tmp, 0o666)
+                    os.replace(tmp, SOURCES_FILE)
+                except BaseException:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
+            return {"ok": True, "sources": cur}
+
+
+        # ---- Routes: where each source's notifications go, ONE place each (Miguel, 2 Nov 2026) ----
+        # Chats (a thread that waits), Badge (a count on its icon), Morning report ("daily": one line in tomorrow's report) or Off (only
+        # this app's history). Stored on the box, so every device shows the same choice. Sources: an app id, "notifications"
+        # (the agent's own alerts) or "system:<kind>" for notices about Wizard itself. Daily is for System only: an app's own
+        # items (Mail, Messenger) would lose their point if they waited a day. The agent's own alerts (about no app) only ever
+        # wait in Chats (Miguel, 5 Nov 2026): no Badge, Daily or Off, so the owner fixes their cause or gives the noise an app.
+        ROUTES_FILE = os.environ.get("INBOX_ROUTES", os.path.join(os.path.dirname(STATE_FILE) or ".", "routes.json"))
+        ROUTE_TO = ("chats", "badge", "daily", "off")
+        SYSTEM_KINDS = {
+            "app-updates": ("App updates", r"(\d+ apps? updated|App updates need a look)"),
+            "connections": ("App connections", r"(App connection added|Connection needs your OK)"),
+            "wizard-updates": ("Wizard updates", r"(App Manager updated|Wizard OS updated|Your release needs you to finish an update)"),
+        }
+        ROUTE_DEFAULTS = {"notifications": "chats", **{"system:" + k: "daily" for k in SYSTEM_KINDS}}
+        ROUTES_MAX = 300
+        ROUTE_HOOKS = []   # fn(changes) after a saved change (the phone router takes an app's notifications away)
+        # What a source is called (the Morning Report's Overnight lines use these, so its picker knows which line is which).
+        ROUTE_NAMES = {"notifications": "Notifications", **{"system:" + k: v[0] for k, v in SYSTEM_KINDS.items()}}
+
+
+        # Morning Report sections (format wizard.report-section/1): "report:<section id>", e.g. report:wizard-health or
+        # report:wizard-calendar.today. A section lives in the Morning report (default) or is Off; Chats and Badge are refused
+        # until an app can send its section on its own, so a section is never lost between places.
+        REPORT_TO = ("daily", "off")
+        REPORT_ROUTES = {"prefix": "report:", "default": "daily", "allowed": list(REPORT_TO)}
+
+
+        def _report_id(i):
+            import re
+            return isinstance(i, str) and bool(re.fullmatch(r"report:[a-z0-9][a-z0-9-]{0,47}(\.[a-z0-9][a-z0-9-]{0,31})?", i))
+
+
+        def _route_id(i):
+            if not isinstance(i, str):
+                return False
+            if i.startswith("system:"):
+                return i[7:] in SYSTEM_KINDS
+            if i.startswith("report:"):
+                return _report_id(i)
+            return _source_app(i)
+
+
+        def _daily_ok(i):
+            return i == "notifications" or i.startswith("system:") or _report_id(i)
+
+
+        CHATS_ONLY = ("notifications",)
+        CHATS_ONLY_MSG = "The agent's own notifications always wait in Chats"
+
+
+        def _route_ok(k, v):
+            if k in CHATS_ONLY:
+                return v == "chats"
+            if v not in ROUTE_TO or (v == "daily" and not _daily_ok(k)):
+                return False
+            return v in REPORT_TO if k.startswith("report:") else True
+
+
+        def _clean_routes(d):
+            out = {}
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    if _route_id(k) and _route_ok(k, v):
+                        out[k] = v
+                    if len(out) >= ROUTES_MAX:
+                        break
+            return out
+
+
+        def inbox_routes():
+            try:
+                with open(ROUTES_FILE) as f:
+                    d = json.load(f)
+            except (OSError, ValueError):
+                d = {}
+            raw = d.get("routes") if isinstance(d, dict) else None
+            saved = _clean_routes(raw)
+            for k in CHATS_ONLY:   # an old saved Badge/Daily/Off for them reads as Chats
+                if isinstance(raw, dict) and k in raw:
+                    saved[k] = "chats"
+            return {"routes": saved, "defaults": dict(ROUTE_DEFAULTS), "names": ROUTE_NAMES, "report": REPORT_ROUTES,
+                    "saved": bool(saved) or bool(isinstance(d, dict) and d.get("saved"))}
+
+
+        def set_inbox_routes(changes):
+            """changes: {source id: chats|badge|daily|off}. Unknown ids, values or a Daily an app can't take are refused."""
+            if not isinstance(changes, dict) or not changes:
+                raise ValueError("give routes as {source: chats|badge|daily|off}")
+            for k, v in changes.items():
+                if not _route_id(k):
+                    raise ValueError("unknown source: %s" % str(k)[:70])
+                if v not in ROUTE_TO:
+                    raise ValueError("route must be chats, badge, daily or off")
+                if k in CHATS_ONLY and v != "chats":
+                    raise ValueError(CHATS_ONLY_MSG)
+                if v == "daily" and not _daily_ok(k):
+                    raise ValueError("%s can't wait for the morning report" % k)
+                if k.startswith("report:") and v not in REPORT_TO:
+                    raise ValueError("a report section is in the Morning report or Off")
+            with _lock:
+                cur = inbox_routes()["routes"]
+                cur.update(changes)
+                if len(cur) > ROUTES_MAX:
+                    raise ValueError("too many sources")
+                folder = os.path.dirname(ROUTES_FILE) or "."
+                fd, tmp = tempfile.mkstemp(prefix=".routes-", suffix=".tmp", dir=folder)
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        json.dump({"routes": cur, "saved": True}, f)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.chmod(tmp, 0o666)
+                    os.replace(tmp, ROUTES_FILE)
+                except BaseException:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
+            for hook in ROUTE_HOOKS:
+                try:
+                    hook(changes)
+                except Exception as e:   # the choice is saved; a hook never undoes it
+                    print("route hook error: %s: %s" % (type(e).__name__, e), flush=True)
+            return {"ok": True, "routes": cur, "defaults": dict(ROUTE_DEFAULTS), "saved": True}
+
+
+        def system_kind(it):
+            """Which System kind an item is: its sender's tags (wizard-system + kind), else its known title. None if not System."""
+            import re
+            tags = [str(t) for t in (it.get("tags") or [])]
+            if "wizard-system" in tags:
+                for k in SYSTEM_KINDS:
+                    if k in tags:
+                        return k
+            title = str(it.get("title") or "").strip()
+            for k, (_, rx) in SYSTEM_KINDS.items():
+                if re.fullmatch(rx, title, re.I):
+                    return k
+            return None
+
+
+        def needs_you(it):
+            import re
+            return "needs-you" in (it.get("tags") or []) or int(it.get("priority") or 3) >= 4 or \
+                bool(re.search(r"need(s)? (a look|your OK|you)", str(it.get("title") or ""), re.I))
+
+
+        def item_route_id(it):
+            app = item_app(it.get("tags"))
+            if app and not needs_you(it):
+                return app
+            k = system_kind(it)
+            return "system:" + k if k and not needs_you(it) else "notifications"
+
+
+        def daily_items(hours=24, now=None):
+            """What waits for the Morning Report: items of the last `hours` whose source is set to Daily, grouped by source.
+            Something that needs the owner is never here (it follows Notifications' own choice)."""
+            now = now or time.time()
+            try:
+                hours = max(1, min(int(hours), 72))
+            except (TypeError, ValueError):
+                hours = 24
+            r = inbox_routes()
+            routes = {**r["defaults"], **r["routes"]}
+            groups = {}
+            for it in inbox_items("all", 500)["items"]:
+                if now - float(it.get("time") or 0) > hours * 3600:
+                    continue
+                rid = item_route_id(it)
+                if routes.get(rid) != "daily":
+                    continue
+                g = groups.setdefault(rid, {"source": rid, "name": SYSTEM_KINDS[rid[7:]][0] if rid.startswith("system:") else "Notifications", "items": []})
+                g["items"].append({"id": it["id"], "time": it["time"], "title": it["title"], "message": it["message"][:500]})
+            return {"hours": hours, "groups": list(groups.values())}
+
+
+        @tool("notifications_inbox", "Read the owner's notification inbox (agent notes and scheduled-job results) with what they "
+              "have read, flagged or archived. Use it to answer 'what came in', 'what failed overnight' or 'what did I flag'.",
+              {"view": {"type": "string", "enum": ["inbox", "flagged", "archive", "all"], "description": "default inbox"},
+               "unread_only": {"type": "boolean", "description": "only unread items"},
+               "limit": {"type": "integer", "description": "max items, default 30"}})
+        def notifications_inbox(view="inbox", unread_only=False, limit=30):
+            _box_only()
+            d = inbox_items(view, 500)
+            items = [i for i in d["items"] if not (unread_only and i["read"])][:max(1, min(int(limit or 30), 200))]
+            for i in items:
+                i["time"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(i["time"]))
+                i["message"] = i["message"][:600]
+            return {"counts": d["counts"], "items": items}
+
+
+        @tool("notifications_mark", "Mark inbox items read, unread, flagged or archived for the owner, when they ask.",
+              {"ids": {"type": "array", "items": {"type": "string"}, "description": "item ids from notifications_inbox"},
+               "read": {"type": "boolean"}, "flag": {"type": "boolean"}, "archived": {"type": "boolean"}},
+              ["ids"])
+        def notifications_mark(ids, read=None, flag=None, archived=None):
+            _box_only()
+            return inbox_mark(ids, read=read, flag=flag, archived=archived)
+
+
+        def _json(code, obj):
+            return code, "application/json", json.dumps(obj).encode()
+
+
+        # ---- Notification pictures: MEDIA:/abs/path lines in a body show as thumbnails ----
+        # Read-only, image files only, under an explicit allowlist of roots (mounted read-only at the same paths).
+        # Every path is resolved with realpath first, so ../ and symlinks that leave a root are refused.
+        MEDIA_ROOTS = [os.path.realpath(r) for r in os.environ.get("INBOX_MEDIA_ROOTS", "").split(":") if r.strip().startswith("/")]
+        MEDIA_MAX = int(os.environ.get("INBOX_MEDIA_MAX", str(8 << 20)))
+        MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp"}
+
+
+        def _sniff(head):
+            if head[:3] == b"\xff\xd8\xff":
+                return "image/jpeg"
+            if head[:8] == b"\x89PNG\r\n\x1a\n":
+                return "image/png"
+            if head[:6] in (b"GIF87a", b"GIF89a"):
+                return "image/gif"
+            if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+                return "image/webp"
+            return ""
+
+
+        def media_file(raw):
+            """(status, content_type, bytes) for one allowed image; never a listing, never a non-image."""
+            raw = str(raw or "")
+            if not raw.startswith("/") or len(raw) > 1000 or "\x00" in raw:
+                return _json(400, {"error": "bad path"})
+            real = os.path.realpath(raw)
+            if not any(real.startswith(root.rstrip("/") + "/") for root in MEDIA_ROOTS):
+                return _json(404, {"error": "not found"})
+            want = MEDIA_TYPES.get(os.path.splitext(real)[1].lower())
+            if not want:
+                return _json(404, {"error": "not found"})
+            try:
+                fd = os.open(real, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            except OSError:
+                return _json(404, {"error": "not found"})
+            try:
+                st = os.fstat(fd)
+                if (st.st_mode & 0o170000) != 0o100000:  # regular files only
+                    return _json(404, {"error": "not found"})
+                if st.st_size > MEDIA_MAX:
+                    return _json(413, {"error": "image too large"})
+                with os.fdopen(fd, "rb", closefd=False) as f:
+                    data = f.read(MEDIA_MAX + 1)
+            finally:
+                os.close(fd)
+            if len(data) > MEDIA_MAX:
+                return _json(413, {"error": "image too large"})
+            if _sniff(data[:16]) != want:
+                return _json(415, {"error": "not an image"})
+            return 200, want, data
+
+
+        @route(INBOX)
+        def inbox_route(method, path, query, headers, body):
+            sub = path[len(INBOX):] if path.startswith(INBOX) else ""
+            q = urllib.parse.parse_qs(query)
+            if method == "GET" and sub in ("", "index.html"):
+                html = MINIMAL_HTML if (q.get("layout") or [""])[0] == "minimal" else PAGE_HTML.replace('<script defer', '<script src="layout.js"></script><script defer')
+                return 200, "text/html; charset=utf-8", html.encode()
+            if method == "GET" and sub in MINIMAL_ASSETS:
+                mime, content = MINIMAL_ASSETS[sub]
+                return 200, mime + "; charset=utf-8", content.encode()
+            if method == "GET" and sub == "inbox.js":
+                return 200, "text/javascript; charset=utf-8", PAGE_JS.encode()
+            if method == "GET" and sub == "inbox.css":
+                return 200, "text/css; charset=utf-8", PAGE_CSS.encode()
+            if method == "GET" and sub == "api/items":
+                return _json(200, inbox_items((q.get("view") or ["inbox"])[0], (q.get("limit") or [200])[0]))
+            if method == "GET" and sub == "api/count":
+                return _json(200, inbox_items("inbox", 1)["counts"])
+            if method == "POST" and sub == "api/mark":
+                # JSON only: a form on another site cannot send this without a CORS preflight, which is never granted.
+                if not headers.get("content-type", "").startswith("application/json"):
+                    return _json(415, {"error": "send application/json"})
+                d = json.loads(body or b"{}")
+                return _json(200, inbox_mark(d.get("ids"), at=d.get("at"), read=d.get("read"), flag=d.get("flag"), archived=d.get("archived")))
+            if method == "GET" and sub == "api/marks":
+                return _json(200, app_marks())
+            if method == "GET" and sub == "api/sources":
+                return _json(200, inbox_sources())
+            if method == "POST" and sub == "api/sources":
+                # JSON only and small: { "app": "<id>", "chats": true|false, "phone": true|false }.
+                if not headers.get("content-type", "").startswith("application/json"):
+                    return _json(415, {"error": "send application/json"})
+                if len(body or b"") > SOURCES_MAX_BODY:
+                    return _json(413, {"error": "request too large"})
+                try:
+                    d = json.loads(body or b"{}")
+                except ValueError:
+                    return _json(400, {"error": "bad json"})
+                if not isinstance(d, dict):
+                    return _json(400, {"error": "send an object"})
+                try:
+                    return _json(200, set_inbox_source(d.get("app"), chats=d.get("chats"), phone=d.get("phone")))
+                except ValueError as e:
+                    return _json(400, {"error": str(e)})
+            if method == "GET" and sub == "api/routes":
+                return _json(200, inbox_routes())
+            if method == "POST" and sub == "api/routes":
+                # JSON only and small: { "routes": { "<source>": "chats"|"badge"|"daily"|"off" } }.
+                if not headers.get("content-type", "").startswith("application/json"):
+                    return _json(415, {"error": "send application/json"})
+                if len(body or b"") > SOURCES_MAX_BODY * 4:
+                    return _json(413, {"error": "request too large"})
+                try:
+                    d = json.loads(body or b"{}")
+                except ValueError:
+                    return _json(400, {"error": "bad json"})
+                try:
+                    return _json(200, set_inbox_routes(d.get("routes") if isinstance(d, dict) else None))
+                except ValueError as e:
+                    return _json(400, {"error": str(e)})
+            if method == "GET" and sub == "api/daily":
+                return _json(200, daily_items((q.get("hours") or [24])[0]))
+            if method == "GET" and sub.startswith("media/"):
+                # /notifications/media/<absolute path>: the path keeps its image extension so the shell's viewer opens it.
+                return media_file("/" + urllib.parse.unquote(sub[len("media/"):]))
+            if method == "GET" and sub == "healthz":
+                return _json(200, {"ok": True, "view_revision": MINIMAL_REVISION})
+            return _json(404, {"error": "not found"})
+
+
+        PAGE_HTML = """<!doctype html>
+        <html lang="en" data-app="notifications">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+        <meta name="color-scheme" content="dark light">
+        <title>Notifications</title>
+        <script>try { if (window.parent !== window) document.documentElement.classList.add('wz-hosted'); } catch (e) { document.documentElement.classList.add('wz-hosted'); }</script>
+        <link rel="stylesheet" href="inbox.css">
+        <script src="/wizard-os-home/core/app-client.js" onerror="this.remove()"></script>
+        <script defer src="inbox.js"></script>
+        </head>
+        <body>
+        <div class="wz-app">
+          <header class="wz-head"><h1>Notifications</h1></header>
+          <nav class="nt-tabs" role="tablist">
+            <button role="tab" data-view="inbox" aria-selected="true">Inbox <small id="c-inbox"></small></button>
+            <button role="tab" data-view="flagged" aria-selected="false">Flagged <small id="c-flagged"></small></button>
+            <button role="tab" data-view="archive" aria-selected="false">Archive</button>
+            <button class="nt-allread" id="allread" type="button">Mark all read</button>
+          </nav>
+          <main class="wz-scroll" id="scroll"><ul class="wz-list" id="list"></ul>
+            <div class="wz-empty" id="empty" hidden><div class="wz-tile">&#128276;</div><strong>Nothing here</strong><p id="empty-p">Scheduled jobs and your Wizard's notes land here.</p></div>
+          </main>
+          <p class="wz-status" id="status" role="status" aria-live="polite"></p>
+        </div>
+        </body>
+        </html>
+        """
+
+        PAGE_CSS = """
+        :root { --ink: var(--wz-text, #f3efff); --ink-2: var(--wz-text-secondary, #b9b0d8); --ink-3: var(--wz-text-muted, #a59abf);
+          --line-2: var(--wz-border, rgba(205,190,255,.24)); --line: color-mix(in srgb, var(--line-2) 55%, transparent);
+          --fill: color-mix(in srgb, var(--ink) 6%, transparent); --fill-2: color-mix(in srgb, var(--ink) 10%, transparent);
+          --accent: var(--wz-accent, #b99bff); --on-accent: var(--wz-on-accent, #160b32); --canvas: var(--wz-canvas, #05030c);
+          --danger: #ff8f8f; --amber: #ffbe55; --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color-scheme: dark; }
+        html[data-color-scheme="light"] { color-scheme: light; --danger: #b42318; --amber: #a15c00; }
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
+        body { font: 15px/1.4 var(--font); color: var(--ink); background: transparent; -webkit-font-smoothing: antialiased; overscroll-behavior: none; }
+        html:not(.wz-hosted) body { background: var(--canvas); }
+        button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; padding: 0; }
+        :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .wz-app { display: flex; flex-direction: column; height: 100%; max-width: 680px; margin: 0 auto; }
+        .wz-head { flex: none; padding: 18px 18px 4px; }
+        .wz-head h1 { margin: 0; font-size: 26px; font-weight: 750; letter-spacing: -.02em; }
+        html.wz-hosted .wz-head { display: none; }
+        .nt-tabs { flex: none; display: flex; gap: 6px; align-items: center; padding: 10px 10px 6px; overflow-x: auto; scrollbar-width: none; }
+        .nt-tabs::-webkit-scrollbar { display: none; }
+        .nt-tabs [role=tab] { flex: none; white-space: nowrap; height: 32px; padding: 0 12px; border-radius: 99px; font-size: 14px; font-weight: 600; color: var(--ink-2); background: var(--fill); }
+        .nt-tabs [role=tab][aria-selected=true] { color: var(--on-accent); background: var(--accent); }
+        .nt-tabs small { font-size: 12px; font-weight: 700; opacity: .8; margin-left: 2px; }
+        .nt-allread { flex: none; white-space: nowrap; margin-left: auto; font-size: 13px; color: var(--ink-3); padding: 6px 8px; border-radius: 8px; }
+        .wz-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 10px 16px; scrollbar-width: none; }
+        .wz-list { list-style: none; margin: 0; padding: 0; }
+        .nt-item { border-radius: 14px; }
+        .nt-item + .nt-item { margin-top: 2px; }
+        .nt-row { display: flex; gap: 12px; width: 100%; padding: 10px 8px; border-radius: 14px; text-align: left; align-items: flex-start; }
+        .nt-row:active { background: var(--fill); }
+        @media (hover: hover) { .nt-row:hover { background: var(--fill); } }
+        .nt-dot { flex: none; width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: transparent; }
+        .nt-item.unread .nt-dot { background: var(--accent); }
+        .nt-item.unread.p4 .nt-dot, .nt-item.unread.p5 .nt-dot { background: var(--danger); }
+        .nt-main { flex: 1; min-width: 0; }
+        .nt-top { display: flex; gap: 8px; align-items: baseline; }
+        .nt-top b { flex: 1; min-width: 0; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nt-item:not(.unread) .nt-top b { font-weight: 500; color: var(--ink-2); }
+        .nt-top time { flex: none; font-size: 12px; color: var(--ink-3); }
+        .nt-src { display: inline-block; font-weight: 800; color: var(--danger); margin-right: 5px; }
+        .nt-flag { color: var(--amber); font-size: 13px; }
+        .nt-msg { margin: 2px 0 0; font-size: 13.5px; color: var(--ink-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+        .nt-item.open .nt-msg { display: block; white-space: pre-wrap; color: var(--ink-2); -webkit-line-clamp: none; }
+        .nt-acts { display: none; gap: 6px; padding: 0 8px 10px 28px; flex-wrap: wrap; }
+        .nt-item.open .nt-acts { display: flex; }
+        .nt-acts button, .nt-acts a { height: 30px; padding: 0 12px; border-radius: 99px; font-size: 13px; font-weight: 600; background: var(--fill); color: var(--ink); display: inline-flex; align-items: center; text-decoration: none; }
+        .nt-acts .on { color: var(--amber); }
+        .wz-empty { padding: 44px 24px; text-align: center; color: var(--ink-3); }
+        .wz-tile { margin: 0 auto 14px; width: 52px; height: 52px; border-radius: 18px; display: grid; place-items: center; font-size: 24px; background: var(--fill); }
+        .wz-empty strong { display: block; margin-bottom: 4px; font-size: 16px; color: var(--ink); }
+        .wz-empty p { margin: 0 auto; max-width: 32ch; font-size: 14px; }
+        .wz-status { flex: none; margin: 0; padding: 0 18px 6px; font-size: 13px; color: var(--danger); }
+        .wz-status:empty { padding: 0; }
+        html[data-skin="signal"] .nt-row, html[data-skin="signal"] .nt-tabs [role=tab], html[data-skin="signal"] .nt-acts button { border-radius: 2px; }
+        """
+
+        PAGE_JS = r"""'use strict';
+        (() => {
+          const el = id => document.getElementById(id);
+          let view = 'inbox', items = [], open = '';
+          const ago = t => { const s = Date.now() / 1000 - t; if (s < 60) return 'now'; if (s < 3600) return Math.floor(s / 60) + 'm';
+            if (s < 86400) return Math.floor(s / 3600) + 'h'; const d = new Date(t * 1000); return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); };
+          const say = t => { el('status').textContent = t || ''; };
+          async function api(path, data) {
+            const r = await fetch('api/' + path, data ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : { cache: 'no-store' });
+            const b = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(b.error || 'Notifications are not reachable right now.');
+            return b;
+          }
+          const plain = t => String(t || '').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (m, t) => t).replace(/^\s*[-*]\s+/gm, '').replace(/\*\*|`/g, '').trim();
+          function node(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+          function row(it) {
+            const li = node('li', 'nt-item p' + it.priority + (it.read ? '' : ' unread') + (open === it.id ? ' open' : ''));
+            li.dataset.id = it.id;
+            const b = node('button', 'nt-row'); b.type = 'button'; b.dataset.act = 'toggle'; b.setAttribute('aria-expanded', String(open === it.id));
+            b.appendChild(node('span', 'nt-dot'));
+            const m = node('span', 'nt-main'), top = node('span', 'nt-top');
+            const title = node('b'); if (it.priority >= 4) title.appendChild(node('span', 'nt-src', '!'));
+            title.appendChild(document.createTextNode((it.title || it.message.split('\n')[0]).replace(/^Failed: /, '')));
+            top.appendChild(title); if (it.flag) top.appendChild(node('span', 'nt-flag', '\u2691'));
+            const tm = node('time', '', ago(it.time)); tm.dateTime = new Date(it.time * 1000).toISOString(); top.appendChild(tm);
+            m.appendChild(top); m.appendChild(node('p', 'nt-msg', plain(it.message))); b.appendChild(m); li.appendChild(b);
+            const acts = node('div', 'nt-acts');
+            const btn = (act, label, on) => { const x = node('button', on ? 'on' : '', label); x.type = 'button'; x.dataset.act = act; acts.appendChild(x); };
+            btn('flag', it.flag ? '\u2691 Flagged' : '\u2690 Flag', it.flag);
+            btn('read', it.read ? 'Mark unread' : 'Mark read');
+            btn('archive', it.archived ? 'Move to inbox' : 'Archive');
+            if (/^https:\/\//.test(it.link || '')) { const a = node('a', '', 'Open'); a.href = it.link; a.target = '_blank'; a.rel = 'noopener'; acts.appendChild(a); }
+            li.appendChild(acts);
+            return li;
+          }
+          function paint(d) {
+            items = d.items; const c = d.counts;
+            el('c-inbox').textContent = c.unread ? String(c.unread) : '';
+            el('c-flagged').textContent = c.flagged ? String(c.flagged) : '';
+            el('list').replaceChildren(...items.map(row));
+            el('empty').hidden = items.length > 0;
+            el('empty-p').textContent = view === 'flagged' ? 'Flag a notification to keep it here.' : view === 'archive' ? 'Archived notifications stay here for 30 days.' : 'Scheduled jobs and your Wizard\u2019s notes land here.';
+            el('allread').hidden = view !== 'inbox' || !c.unread;
+            try { parent !== window && parent.postMessage({ type: 'wizard:notifications:count', unread: c.unread, needs: c.needs }, location.origin); } catch (e) {}
+          }
+          async function load() { try { paint(await api('items?view=' + view)); say(''); } catch (e) { say(e.message); } }
+          async function mark(ids, marks) { try { await api('mark', Object.assign({ ids }, marks)); await load(); } catch (e) { say(e.message); } }
+          document.addEventListener('click', e => {
+            const tab = e.target.closest('[role=tab]');
+            if (tab) { view = tab.dataset.view; open = ''; document.querySelectorAll('[role=tab]').forEach(t => t.setAttribute('aria-selected', String(t === tab))); el('scroll').scrollTop = 0; return load(); }
+            if (e.target.closest('#allread')) return mark(items.filter(i => !i.read).map(i => i.id), { read: true });
+            const a = e.target.closest('[data-act]'); const li = e.target.closest('.nt-item'); if (!a || !li) return;
+            const it = items.find(i => i.id === li.dataset.id); if (!it) return;
+            if (a.dataset.act === 'toggle') { open = open === it.id ? '' : it.id; if (open && !it.read) return mark([it.id], { read: true }); return paint({ items, counts: countsNow() }); }
+            if (a.dataset.act === 'flag') return mark([it.id], { flag: !it.flag });
+            if (a.dataset.act === 'read') return mark([it.id], { read: !it.read });
+            if (a.dataset.act === 'archive') { open = ''; return mark([it.id], { archived: !it.archived }); }
+          });
+          function countsNow() { return { unread: Number(el('c-inbox').textContent || 0), flagged: Number(el('c-flagged').textContent || 0), needs: 0 }; }
+          // Back inside the shell: an open item closes first.
+          window.__wizardCloseOverlay = () => { if (!open) return false; open = ''; paint({ items, counts: countsNow() }); return true; };
+          document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+          setInterval(() => { if (!document.hidden) load(); }, 60000);
+          load();
+        })();
+        """
+
+        MINIMAL_REVISION = '5939227eeb4c8c4bc0e91fbc5f01d2040e60d676ad63fdc963941b0f5a4715ae'
+        MINIMAL_BLOB = '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'
+        _minimal = __import__('json').loads(__import__('zlib').decompress(__import__('base64').b64decode(MINIMAL_BLOB)))
+        MINIMAL_HTML = _minimal['html']
+        MINIMAL_ASSETS = {k: tuple(v) for k, v in _minimal['assets'].items()}
+
+
+        # ---- Scheduled-job relay: the agent's cron results become notifications ----
+        # Reads the Hermes cron folder (mounted read-only at CRON_DIR) every few minutes and posts each new run to the
+        # `cron` topic, so the inbox shows what scheduled jobs did without the agent spending a turn on it. Rules:
+        # - silent runs ([SILENT], "no change") post nothing;
+        # - an identical failure alerts once, then at most once a day while it keeps failing; a changed error, or a
+        #   failure that comes back after a success, alerts at once;
+        # - dated outcomes are never merged (numbers and dates are kept), so each daily report is its own item;
+        # - jobs listed in CRON_QUIET_JOBS (ids or names) never post a success (an app badge covers them); their
+        #   failures still alert;
+        # - a post the server does not confirm is retried on the next pass; it never consumes the run.
+        # The first pass on a box only looks back CRON_LOOKBACK_H hours, so installing never floods the inbox.
+        #
+        # Failures go to the agent, not the owner, once the box has a failure responder: a Hermes cron job named
+        # CRON_RESPONDER (default "Failure responder", or its id). Then a failed run is not posted; it is kept in the open-
+        # failures file (cron-failures.json beside the relay state) that the responder watches, fixes and acknowledges in
+        # cron-failures-ack.json (written by the agent on the host: {"<job id>": <first_seen of the episode it handled>}). The next success of that job
+        # closes it. Safety net: a failure still open and unacknowledged after CRON_ESCALATE_H hours posts once per episode,
+        # and the responder's own runs always post (its failures included), so a broken responder is never silent.
+        # CRON_FAILURES=owner forces the old behaviour (every failure posts); =agent forces routing even without a responder.
+        #
+        # CRON_TRUSTED_JOBS (job ids): agent jobs whose replies discuss failures as their subject (e.g. AI reviews); their
+        # run counts as failed only from Hermes' Error/Status or a [CRON_FAILURE] first line, never from keywords.
+        # Which app a job is about: CRON_JOB_APPS = "<job id or name>=<app id>, ..." tags that job's posts `app:<app id>`
+        # (APP_TAG), so the inbox files them under that app (its name, its mark, its own Chats / Badge / Off choice) instead
+        # of the agent's catch-all group. Unlisted jobs are the agent's own. A shell without that app installed shows them as
+        # the agent's again, so naming an app that is not installed yet is harmless.
+        import hashlib
+        import re
+
+        CRON_DIR = os.environ.get("CRON_DIR", "/hermes-cron")
+        CRON_TOPIC = os.environ.get("CRON_TOPIC", "cron")
+        CRON_RELAY = os.environ.get("CRON_RELAY", "on").strip().lower() not in ("off", "0", "false", "no")
+        CRON_EVERY = max(30, int(os.environ.get("CRON_EVERY_S", "300") or 300))
+        CRON_LOOKBACK_H = float(os.environ.get("CRON_LOOKBACK_H", "24") or 24)
+        CRON_TRUSTED = {x.strip().lower() for x in os.environ.get("CRON_TRUSTED_JOBS", "").split(",") if x.strip()}
+        CRON_QUIET = {x.strip().lower() for x in os.environ.get("CRON_QUIET_JOBS", "").split(",") if x.strip()}
+        CRON_STATE = os.environ.get("CRON_STATE", os.path.join(os.path.dirname(STATE_FILE) or "/data", "cron-relay.json"))
+        CRON_FAILURES = os.environ.get("CRON_FAILURES", "auto").strip().lower()
+        CRON_RESPONDER = {x.strip().lower() for x in os.environ.get("CRON_RESPONDER", "Failure responder").split(",") if x.strip()}
+        CRON_ESCALATE_H = float(os.environ.get("CRON_ESCALATE_H", "24") or 24)
+
+
+        def _job_apps(raw):
+            out = {}
+            for part in str(raw or "").split(","):
+                job, _, app = part.partition("=")
+                job, app = job.strip().lower(), app.strip().lower()
+                if job and APP_ID_RX.fullmatch(app):
+                    out[job] = app
+            return out
+
+
+        CRON_JOB_APPS = _job_apps(os.environ.get("CRON_JOB_APPS", ""))
+        _EOL = r"[ \t]*(?=\n|\Z)"   # end of line without a dollar sign (compose would interpolate one)
+        _relay_lock = threading.Lock()
+
+
+        def _jobs(cron_dir):
+            try:
+                with open(os.path.join(cron_dir, "jobs.json")) as f:
+                    d = json.load(f)
+                jobs = d.get("jobs", d) if isinstance(d, dict) else d
+                return [j for j in jobs if isinstance(j, dict) and j.get("id")]
+            except (OSError, ValueError, KeyError, TypeError):
+                return []
+
+
+        def _job_names(cron_dir):
+            return {j["id"]: j.get("name") or j["id"] for j in _jobs(cron_dir)}
+
+
+        def _app_tags(job, name):
+            app = CRON_JOB_APPS.get(str(job).lower()) or CRON_JOB_APPS.get(str(name).strip().lower())
+            return [APP_TAG + app] if app else []
+
+
+        def _is_responder(job, name):
+            return job.lower() in CRON_RESPONDER or str(name).strip().lower() in CRON_RESPONDER
+
+
+        def _route_to_agent(cron_dir):
+            """True when failures go to the agent's responder instead of the owner."""
+            if CRON_FAILURES in ("owner", "off", "no", "0"):
+                return False
+            if CRON_FAILURES == "agent":
+                return True
+            return any(_is_responder(j["id"], j.get("name") or "") and j.get("enabled", True) is not False
+                       and j.get("state", "") != "paused" for j in _jobs(cron_dir))
+
+
+        def _read_json(path, default):
+            try:
+                with open(path) as f:
+                    v = json.load(f)
+                return v if isinstance(v, type(default)) else default
+            except (OSError, ValueError):
+                return default
+
+
+        def _write_json(path, value):
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(value, f, indent=1, sort_keys=True)
+            os.replace(tmp, path)
+
+
+        def _section(text, name):
+            m = list(re.finditer(r"^## %s%s" % (re.escape(name), _EOL), text, re.M))
+            if not m:
+                return ""
+            rest = text[m[-1].end():]
+            nxt = re.search(r"^## |^\*\*Response Characters", rest, re.M)
+            return (rest[:nxt.start()] if nxt and name != "Response" else rest).strip()
+
+
+        _SILENT_LINE = re.compile(r"\[?\s*(SILENT|NO[_ ]REPLY|NO[_ ]CHANGE)\s*\]?[.!]?", re.I)
+
+
+        def cron_silent(body):
+            """Hermes' own rule for autonomous runs (gateway.response_filters.is_autonomous_silence_response): the marker as
+            the whole answer, on its own first or last line, or opening it as "[SILENT] ...". Agents often add a short note
+            before it ("Already logged.\n\n[SILENT]"); Hermes delivers nothing then, so neither may the inbox."""
+            lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+            if not lines:
+                return True
+            if body.upper().startswith(("[SILENT]", "[NO_REPLY]", "[NO REPLY]")):
+                return True
+            return any(_SILENT_LINE.fullmatch(c) for c in (body.strip(), lines[0], lines[-1]))
+
+
+        def cron_summarize(text, job=None):
+            """(failed, body) for a run worth telling the owner about, or None when the run is silent."""
+            status = (re.search(r"^\*\*Status:\*\*[ \t]*(.+)", text, re.M) or [None, ""])[1].strip()
+            if any(s in status for s in ("silent", "no_change")):
+                return None
+            err = _section(text, "Error")
+            failed = bool(err) or any(w in status.lower() for w in ("failed", "blocked", "error"))
+            if err:
+                body = err.strip("`\n ") or "The job failed."
+            else:
+                resp = _section(text, "Response")
+                body = resp or _section(text, "Script Output")
+                if not body:
+                    parts = re.split(r"^---%s" % _EOL, text, maxsplit=1, flags=re.M)
+                    body = parts[1] if len(parts) > 1 else text.split(status, 1)[-1] if status else ""
+            body = body.strip()
+            if not body or cron_silent(body):
+                return None
+            if body.split("\n", 1)[0].strip().upper() == "[CRON_FAILURE]":
+                return True, body
+            if not err and resp and job and job.lower() in CRON_TRUSTED:
+                # Trusted agent jobs (reviews, reports) mention "failed" as their subject; only Hermes' Error/Status or
+                # [CRON_FAILURE] marks their run failed.
+                return failed, body
+            head = body[:240].lower()
+            if re.search(r"\b(failed|failure|needs review|needs you|error|stale|not_started|action required)\b", head) and \
+                    not re.search(r"\b(no|0) (failures|errors)\b|all monitored checks passed", head):
+                failed = True
+            return failed, body
+
+
+        def cron_failure_policy(job, body, failed, alerts, now):
+            """(suppress, receipt). Exact-body repeats are quiet for 24 hours; anything else alerts."""
+            if not failed:
+                alerts.pop(job, None)
+                return False, None
+            digest = hashlib.sha256(body.encode()).hexdigest()
+            prior = alerts.get(job, {})
+            suppress = prior.get("digest") == digest and 0 <= now - prior.get("sent_at", 0) < 86400
+            return suppress, {"digest": digest, "sent_at": now}
+
+
+        def _cron_post(title, message, priority, tags):
+            payload = {"topic": CRON_TOPIC, "title": title[:250], "message": message[:3800], "priority": priority, "tags": tags}
+            status, _ = http("POST", "/", json.dumps(payload).encode(), {"Content-Type": "application/json"}, timeout=20)
+            return status == 200
+
+
+        def cron_relay_once(cron_dir=None, state_path=None, post=None, now=None):
+            """One pass. Returns {"sent", "skipped"} (or {"off": reason})."""
+            cron_dir = cron_dir or CRON_DIR
+            state_path = state_path or CRON_STATE
+            post = post or _cron_post
+            out_dir = os.path.join(cron_dir, "output")
+            if not os.path.isdir(out_dir):
+                return {"off": "no cron output folder at %s" % out_dir}
+            with _relay_lock:
+                try:
+                    with open(state_path) as f:
+                        st = json.load(f)
+                except (OSError, ValueError):
+                    st = {"since": (now or time.time()) - CRON_LOOKBACK_H * 3600, "done": []}
+                done = set(st.get("done", []))
+                alerts = st.get("failure_alerts", {})
+                quiet_days = st.get("quiet_days", {})
+                since = float(st.get("since", 0))
+                names = _job_names(cron_dir)
+                to_agent = _route_to_agent(cron_dir)
+                failures_path = os.path.join(os.path.dirname(state_path) or ".", "cron-failures.json")
+                open_f = _read_json(failures_path, {}) if to_agent else {}
+                files = []
+                for job in os.listdir(out_dir):
+                    d = os.path.join(out_dir, job)
+                    if os.path.isdir(d):
+                        for fn in os.listdir(d):
+                            if fn.endswith(".md"):
+                                p = os.path.join(d, fn)
+                                try:
+                                    files.append((os.stat(p).st_mtime, job, fn, p))
+                                except OSError:
+                                    pass
+                sent = skipped = 0
+                for mt, job, fn, p in sorted(files):
+                    key = job + "/" + fn
+                    if key in done:
+                        continue
+                    clock = now or time.time()
+                    if mt < since or clock - mt < 20:     # older than the first pass, or still being written
+                        if mt < since:
+                            done.add(key)
+                        continue
+                    try:
+                        with open(p, errors="replace") as f:
+                            raw = f.read()
+                    except OSError:
+                        continue
+                    s = cron_summarize(raw, job)
+                    if s is None:
+                        if not re.search(r"^\*\*Status:\*\*[ \t]*(error|failed|blocked)", raw, re.M | re.I):
+                            alerts.pop(job, None)
+                            open_f.pop(job, None)              # a clean run closes the agent's open failure
+                        skipped += 1
+                        done.add(key)
+                        continue
+                    failed, body = s
+                    name = names.get(job) or (re.search(r"^# Cron Job: (.+)", raw, re.M) or [0, job])[1]
+                    if to_agent and not _is_responder(job, name):
+                        if failed:                             # the agent's job: queue it, tell the owner nothing
+                            o = open_f.get(job) or {"first_seen": mt, "runs": 0}
+                            o.update(name=str(name), body=body[:3800], last_seen=mt, runs=o.get("runs", 0) + 1,
+                                     digest=hashlib.sha256(body.encode()).hexdigest()[:16])
+                            open_f[job] = o
+                            skipped += 1
+                            done.add(key)
+                            continue
+                        open_f.pop(job, None)
+                    responder = to_agent and _is_responder(job, name)
+                    if responder:                              # it speaks only when the owner must act; its own crash is a failure
+                        failed = bool(_section(raw, "Error")) or bool(re.search(r"^\*\*Status:\*\*[ \t]*(error|failed)", raw, re.M | re.I))
+                    suppress, receipt = cron_failure_policy(job, body, failed, alerts, mt)
+                    if suppress:
+                        skipped += 1
+                        done.add(key)
+                        continue
+                    if not failed and (job.lower() in CRON_QUIET or str(name).strip().lower() in CRON_QUIET):
+                        quiet_days.setdefault(fn[:10], key)
+                        skipped += 1
+                        done.add(key)
+                        continue
+                    when = time.strftime("%d %b %H:%M UTC", time.gmtime(mt))
+                    try:
+                        ok = post(("Failed: " if failed else "") + str(name), "%s\n\n%s" % (body, when),
+                                  4 if failed or responder else 2, ["cron", "warning" if failed or responder else "clock"] + _app_tags(job, name))
+                    except OSError:
+                        ok = False
+                    if not ok:
+                        break                              # retried next pass; the run and its fingerprint stay unconsumed
+                    done.add(key)
+                    if receipt is not None:
+                        alerts[job] = receipt
+                    sent += 1
+                if to_agent:
+                    sent += _escalate(open_f, _read_json(os.path.join(os.path.dirname(state_path) or ".", "cron-failures-ack.json"), {}), post, now or time.time())
+                    _write_json(failures_path, open_f)
+                keep = sorted(k for k in done if os.path.exists(os.path.join(out_dir, k)))
+                quiet_days = dict(sorted(quiet_days.items())[-60:])
+                tmp = state_path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump({"since": since, "done": keep, "failure_alerts": alerts, "quiet_days": quiet_days}, f)
+                os.replace(tmp, state_path)
+                return {"sent": sent, "skipped": skipped}
+
+
+        def _escalate(open_f, ack, post, now):
+            """Safety net: one post per failure episode left open and unacknowledged for CRON_ESCALATE_H hours."""
+            sent = 0
+            for job, o in sorted(open_f.items()):
+                handled = ack.get(job)
+                if o.get("escalated") or (handled is not None and float(handled) >= float(o.get("first_seen", 0)) - 1):
+                    continue
+                if now - float(o.get("first_seen", now)) < CRON_ESCALATE_H * 3600:
+                    continue
+                hours = int((now - float(o["first_seen"])) // 3600)
+                msg = "Failing for %d hours and the agent has not fixed it yet. Latest:\n%s" % (hours, o.get("body", ""))
+                try:
+                    ok = post("Still failing: " + o.get("name", job), msg, 4, ["cron", "warning"] + _app_tags(job, o.get("name", job)))
+                except OSError:
+                    ok = False
+                if ok:
+                    o["escalated"] = now
+                    sent += 1
+            return sent
+
+
+        def _cron_loop():
+            time.sleep(20)                                 # let the engine start first
+            while True:
+                try:
+                    r = cron_relay_once()
+                    if r.get("sent"):
+                        print("cron relay: sent %d, skipped %d" % (r["sent"], r["skipped"]), flush=True)
+                except Exception as e:                     # never take the front down; try again next pass
+                    print("cron relay error: %s: %s" % (type(e).__name__, e), flush=True)
+                time.sleep(CRON_EVERY)
+
+
+        if __name__ == "__main__" and CRON_RELAY and os.path.isdir(CRON_DIR):
+            threading.Thread(target=_cron_loop, name="cron-relay", daemon=True).start()
+
+
+
+        # ---- Phone: instant per-app notifications on the owner's phone, without Google ----
+        # Apps on this box send their inbox feed (the Wizard OS inbox feed v1 shape: one item per thing that needs the
+        # owner) to POST /notifications/api/app-feed whenever it changes. The app is known by the Docker link network its
+        # request comes from (wizard-link-<app>--notifications, made by the App Manager for a declared `uses: [notifications]`),
+        # never by anything in the request. The router compares the feed with the last one and, for apps routed to Chats
+        # (api/routes, the same choice Settings › Notifications saves), records numbered events: notify (new or newer
+        # activity), clear (the thing left the feed: read somewhere else). Badge apps only get a count, Morning report / Off
+        # apps nothing. Text of apps not routed to Chats is never stored.
+        #
+        # The Wizard OS Android app keeps ONE connection open to GET /notifications/api/phone/stream (Server-Sent Events,
+        # through the box's private Tailscale address) and posts real Android notifications. On reconnect it sends the last
+        # event id it saw (?since=<id>&sid=<server id>): it gets every event after it, or a full `reset` snapshot when the
+        # id is too old or the router's store is new. GET /notifications/api/phone/events is the same catch-up as one JSON
+        # answer (the phone's backstop job). Readers must come through Tailscale Serve with a user identity
+        # (Tailscale-User-Login; PHONE_OWNER_LOGIN pins it to the owner) and never from another app's container.
+        import re
+        import socket
+        import sqlite3
+
+        PHONE_DB = os.environ.get("PHONE_DB", os.path.join(os.path.dirname(STATE_FILE) or "/data", "phone.sqlite3"))
+        PHONE_OWNER = os.environ.get("PHONE_OWNER_LOGIN", "").strip().lower()
+        PHONE_KEEP_S = 7 * 86400          # events are kept a week (and at most PHONE_KEEP_N); older cursors get a reset
+        PHONE_KEEP_N = 5000
+        PHONE_PING_S = float(os.environ.get("PHONE_PING_S", "25") or 25)
+        PHONE_STREAMS_MAX = 8
+        PHONE_ITEMS_MAX = 200
+        PHONE_ACTIONS_MAX = 4
+        PHONE_FEED = INBOX + "api/app-feed"
+        PHONE_STREAM = INBOX + "api/phone/stream"
+        PHONE_EVENTS = INBOX + "api/phone/events"
+        PHONE_INFO = INBOX + "api/phone"
+        _phone_lock = threading.Lock()
+        _phone_wake = []                  # (loop, asyncio.Event) of each open stream; set after every new event
+        _phone_streams = []               # stop flags of open streams, oldest first
+        _peer_cache = {}
+
+
+        # -- who is asking --
+
+        def peer_name(ip):
+            """The Docker DNS name of a container peer (`<container>.<network>`), or "" for anything else (the host)."""
+            hit = _peer_cache.get(ip)
+            if hit and time.time() - hit[1] < 60:
+                return hit[0]
+            try:
+                name = socket.gethostbyaddr(ip)[0]
+            except (OSError, UnicodeError):
+                name = ""
+            if name == ip or not re.search(r"[a-z]", name or ""):
+                name = ""
+            _peer_cache[ip] = (name, time.time())
+            return name
+
+
+        def peer_app(ip):
+            """The app a box-local request comes from: only through its link network to this app (Docker names it, the
+            caller can't). None for the host, the tailnet or a container on any other network."""
+            name = peer_name(ip) if ip else ""
+            net = name.partition(".")[2]
+            m = re.fullmatch(r"wizard-link-([a-z0-9][a-z0-9-]{0,63})--notifications", net)
+            app = m.group(1) if m else None
+            return app if app and app != "notifications" and _source_app(app) else None
+
+
+        def phone_reader_ok(headers):
+            """The phone stream: through Tailscale Serve (it sets the user identity and replaces any sent one), not from
+            another app's container on the box (which could send any header)."""
+            if peer_name(headers.get(":peer", "")):
+                return False
+            login = headers.get("tailscale-user-login", "").strip().lower()
+            if not login:
+                return False
+            return not PHONE_OWNER or login == PHONE_OWNER
+
+
+        # -- store --
+
+        def _db():
+            db = sqlite3.connect(PHONE_DB, timeout=10)
+            db.execute("PRAGMA journal_mode=WAL")
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+                CREATE TABLE IF NOT EXISTS items (app TEXT, key TEXT, time INTEGER, hash TEXT, data TEXT, shown INTEGER,
+                                                  PRIMARY KEY (app, key));
+                CREATE TABLE IF NOT EXISTS counts (app TEXT PRIMARY KEY, n INTEGER);
+                CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL, data TEXT);
+            """)
+            if not db.execute("SELECT v FROM meta WHERE k='sid'").fetchone():
+                db.execute("INSERT INTO meta VALUES ('sid', ?)", (uuid.uuid4().hex[:16],))
+                db.commit()
+            return db
+
+
+        def phone_route(app):
+            if app in CHATS_ONLY:
+                return "chats"
+            r = inbox_routes()
+            return {**r["defaults"], **r["routes"]}.get(app, "badge")   # an app nobody picked is a Badge (shell default)
+
+
+        def _txt(v, limit):
+            return " ".join(str(v or "").split())[:limit] if isinstance(v, (str, int, float)) else ""
+
+
+        def clean_feed_items(items):
+            if not isinstance(items, list):
+                raise ValueError("send the feed as {inbox: 1, items: [...]}")
+            out = {}
+            for it in items[:PHONE_ITEMS_MAX]:
+                if not isinstance(it, dict):
+                    continue
+                key = it.get("key")
+                if not isinstance(key, str) or not 0 < len(key) <= 200:
+                    continue
+                try:
+                    t = int(it.get("time") or 0)
+                    pr = max(1, min(int(it.get("priority") or 3), 5))
+                except (TypeError, ValueError):
+                    continue
+                acts = []
+                for a in (it.get("actions") or [])[:PHONE_ACTIONS_MAX] if isinstance(it.get("actions"), list) else []:
+                    # The phone can run an app action (posted back to the app's own api/inbox/act) or take typed words
+                    # (input). An `ask` goes to the agent, which the phone can't do from a notification: left out.
+                    if not isinstance(a, dict) or a.get("ask") or not re.fullmatch(r"[a-z0-9_-]{1,40}", str(a.get("id") or "")):
+                        continue
+                    acts.append({"id": a["id"], "label": _txt(a.get("label"), 40) or a["id"], **({"input": True} if a.get("input") is True else {})})
+                out[key] = {"key": key, "title": _txt(it.get("title"), 200), "text": str(it.get("text") or "").strip()[:2000],
+                            "time": t, "priority": pr, "actions": acts}
+            return out
+
+
+        def _event(db, ev, now):
+            db.execute("INSERT INTO events (at, data) VALUES (?, ?)", (now, json.dumps(ev, separators=(",", ":"))))
+
+
+        def _prune(db, now):
+            top = db.execute("SELECT MAX(id) FROM events").fetchone()[0] or 0
+            db.execute("DELETE FROM events WHERE at < ? OR id <= ?", (now - PHONE_KEEP_S, top - PHONE_KEEP_N))
+
+
+        def _wake():
+            for loop, ev in list(_phone_wake):
+                try:
+                    loop.call_soon_threadsafe(ev.set)
+                except RuntimeError:
+                    pass
+
+
+        def ingest_feed(app, feed, now=None):
+            """One app's whole current feed. Returns how many phone events it made."""
+            if not _source_app(app):
+                raise ValueError("unknown app")
+            if not isinstance(feed, dict) or feed.get("inbox") != 1:
+                raise ValueError("send the feed as {inbox: 1, items: [...]}")
+            items = clean_feed_items(feed.get("items"))
+            now = now or time.time()
+            route = phone_route(app)
+            made = 0
+            with _phone_lock:
+                db = _db()
+                try:
+                    prev = {k: (t, h, s) for k, t, h, s in db.execute("SELECT key, time, hash, shown FROM items WHERE app=?", (app,))}
+                    # The first feed an app ever sends is its backlog (every chat already unread): shown quietly, no buzz each.
+                    first = db.execute("SELECT 1 FROM meta WHERE k=?", ("seen:" + app,)).fetchone() is None
+                    if first:
+                        db.execute("INSERT INTO meta VALUES (?, ?)", ("seen:" + app, str(int(now))))
+                    for key, it in items.items():
+                        h = hashlib.sha256(json.dumps(it, sort_keys=True).encode()).hexdigest()[:20]
+                        old = prev.get(key)
+                        shown = bool(old and old[2])
+                        if route == "chats" and (old is None or old[1] != h):
+                            # Newer activity alerts; the same activity re-worded (a translation, a name) updates quietly.
+                            alert = not first and (old is None or it["time"] > old[0])
+                            _event(db, dict(it, type="notify", app=app, alert=alert), now)
+                            made += 1
+                            shown = True
+                        db.execute("INSERT OR REPLACE INTO items VALUES (?, ?, ?, ?, ?, ?)",
+                                   (app, key, it["time"], h, json.dumps(it) if route == "chats" else None, int(shown)))
+                    for key, (_, _, shown) in prev.items():
+                        if key not in items:
+                            if shown:
+                                _event(db, {"type": "clear", "app": app, "key": key}, now)
+                                made += 1
+                            db.execute("DELETE FROM items WHERE app=? AND key=?", (app, key))
+                    n = len(items) if route == "badge" else 0
+                    row = db.execute("SELECT n FROM counts WHERE app=?", (app,)).fetchone()
+                    if (row[0] if row else 0) != n:
+                        db.execute("INSERT OR REPLACE INTO counts VALUES (?, ?)", (app, n))
+                        _event(db, {"type": "count", "app": app, "count": n}, now)
+                        made += 1
+                    if made:
+                        _prune(db, now)
+                    db.commit()
+                finally:
+                    db.close()
+            if made:
+                _wake()
+            return made
+
+
+        def phone_routes_changed(changes, now=None):
+            """Settings moved an app: one that left Chats takes its phone notifications away and forgets their text."""
+            now = now or time.time()
+            made = 0
+            with _phone_lock:
+                db = _db()
+                try:
+                    for app, to in (changes or {}).items():
+                        if to == "chats" or not _source_app(app):
+                            continue
+                        for (key,) in db.execute("SELECT key FROM items WHERE app=? AND shown=1", (app,)).fetchall():
+                            _event(db, {"type": "clear", "app": app, "key": key}, now)
+                            made += 1
+                        db.execute("UPDATE items SET data=NULL, shown=0 WHERE app=?", (app,))
+                    if made:
+                        _prune(db, now)
+                    db.commit()
+                finally:
+                    db.close()
+            if made:
+                _wake()
+
+
+        ROUTE_HOOKS.append(phone_routes_changed)
+
+
+        def phone_snapshot(db):
+            items = []
+            for app, data in db.execute("SELECT app, data FROM items WHERE data IS NOT NULL ORDER BY time"):
+                if phone_route(app) == "chats":
+                    items.append(dict(json.loads(data), app=app))
+            counts = {a: n for a, n in db.execute("SELECT app, n FROM counts WHERE n > 0")}
+            return {"items": items, "counts": counts}
+
+
+        def phone_since(since, sid, limit=500):
+            """Catch-up for a reader: {sid, latest, reset?, items?, counts?, events:[(id, event)]}."""
+            db = _db()
+            try:
+                mine = db.execute("SELECT v FROM meta WHERE k='sid'").fetchone()[0]
+                latest = db.execute("SELECT MAX(id) FROM events").fetchone()[0] or 0
+                oldest = db.execute("SELECT MIN(id) FROM events").fetchone()[0] or latest + 1
+                try:
+                    since = int(since)
+                except (TypeError, ValueError):
+                    since = -1
+                out = {"v": 1, "sid": mine, "latest": latest}
+                if sid != mine or since < 0 or since > latest or (since < oldest - 1):
+                    out.update(phone_snapshot(db), reset=True, events=[])
+                    return out
+                rows = db.execute("SELECT id, data FROM events WHERE id > ? ORDER BY id LIMIT ?", (since, limit)).fetchall()
+                out["events"] = [(i, json.loads(d)) for i, d in rows]
+                return out
+            finally:
+                db.close()
+
+
+        def phone_after(last, limit=200):
+            db = _db()
+            try:
+                return [(i, json.loads(d)) for i, d in db.execute("SELECT id, data FROM events WHERE id > ? ORDER BY id LIMIT ?", (last, limit))]
+            finally:
+                db.close()
+
+
+        @route(PHONE_FEED)
+        def phone_feed_route(method, path, query, headers, body):
+            if path != PHONE_FEED:
+                return _json(404, {"error": "not found"})
+            if method != "POST":
+                return _json(405, {"error": "POST your inbox feed"})
+            if networked(headers):
+                return _json(403, {"error": "only apps on this box send their feed"})
+            app = peer_app(headers.get(":peer", ""))
+            if not app:
+                return _json(403, {"error": "declare uses: [notifications] in wizard.md to send your feed"})
+            if not headers.get("content-type", "").startswith("application/json"):
+                return _json(415, {"error": "send application/json"})
+            try:
+                feed = json.loads(body or b"{}")
+                return _json(200, {"ok": True, "app": app, "events": ingest_feed(app, feed), "route": phone_route(app)})
+            except ValueError as e:
+                return _json(400, {"error": str(e)})
+
+
+        @route(PHONE_INFO)
+        def phone_info_route(method, path, query, headers, body):
+            if path == PHONE_EVENTS:
+                if method != "GET":
+                    return _json(405, {"error": "use GET"})
+                if not phone_reader_ok(headers):
+                    return _json(403, {"error": "open it from the owner's own device"})
+                q = urllib.parse.parse_qs(query)
+                out = phone_since((q.get("since") or [""])[0], (q.get("sid") or [""])[0])
+                out["events"] = [dict(e, id=i) for i, e in out["events"]]
+                return _json(200, out)
+            if path in (PHONE_INFO, PHONE_INFO + "/") and method == "GET":
+                return _json(200, {"phone": 1, "stream": "api/phone/stream", "events": "api/phone/events"})
+            return _json(404, {"error": "not found"})
+
+
+        def _sse(i, ev):
+            head = "id: %d\n" % i if i is not None else ""
+            return (head + "event: %s\ndata: %s\n\n" % (ev.get("type", "message"), json.dumps(ev, separators=(",", ":"), ensure_ascii=False))).encode()
+
+
+        @stream(PHONE_STREAM)
+        async def phone_stream(reader, writer, method, target, rest):
+            headers = parse_headers(rest)
+            headers[":peer"] = (writer.get_extra_info("peername") or ("",))[0]
+            if method != "GET":
+                return await respond(writer, 405, {"error": "use GET"})
+            if not await asyncio.to_thread(phone_reader_ok, headers):
+                return await respond(writer, 403, {"error": "open it from the owner's own device"})
+            q = urllib.parse.parse_qs(target.partition("?")[2])
+            since = (q.get("since") or [headers.get("last-event-id", "")])[0]
+            first = await asyncio.to_thread(phone_since, since, (q.get("sid") or [""])[0])
+            stop = asyncio.Event()
+            _phone_streams.append(stop)
+            while len(_phone_streams) > PHONE_STREAMS_MAX:      # a phone that reconnects never leaves a ghost behind
+                _phone_streams.pop(0).set()
+            wake = (asyncio.get_running_loop(), asyncio.Event())
+            _phone_wake.append(wake)
+            gone = asyncio.ensure_future(reader.read(1))        # the phone hung up
+            try:
+                writer.write(("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-store\r\n"
+                              "X-Accel-Buffering: no\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\nretry: 5000\n\n").encode())
+                writer.write(_sse(None, {"type": "hello", "v": 1, "sid": first["sid"], "latest": first["latest"]}))
+                last = first["latest"] if first.get("reset") else int(since)
+                if first.get("reset"):
+                    writer.write(_sse(first["latest"], {"type": "reset", "items": first["items"], "counts": first["counts"]}))
+                for i, ev in first["events"]:
+                    writer.write(_sse(i, ev))
+                    last = i
+                await writer.drain()
+                while not stop.is_set() and not gone.done():
+                    wake[1].clear()
+                    evs = await asyncio.to_thread(phone_after, last)
+                    for i, ev in evs:
+                        writer.write(_sse(i, ev))
+                        last = i
+                    if evs:
+                        await writer.drain()
+                        continue
+                    waits = [asyncio.ensure_future(wake[1].wait()), asyncio.ensure_future(stop.wait())]
+                    done, _ = await asyncio.wait(waits + [gone], timeout=PHONE_PING_S, return_when=asyncio.FIRST_COMPLETED)
+                    for t in waits:
+                        t.cancel()
+                    if not done:
+                        writer.write(b": ping\n\n")
+                        await writer.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                if wake in _phone_wake:
+                    _phone_wake.remove(wake)
+                if stop in _phone_streams:
+                    _phone_streams.remove(stop)
+                gone.cancel()
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+
+
+        if __name__ == "__main__":
+            asyncio.run(main())
+    x-runtipi:
+      is_main: true
+      internal_port: 8080
+    init: true
+    ports:
+      - 127.0.0.1:${APP_PORT}:8080
+  notifications-engine:
+    image: binwiederhier/ntfy:v2.29.0@sha256:4c599cf0818965782f93f652bd843e92714992e84d6b88ad17713dc0951cda1f
+    user: 1000:1000
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    command:
+      - serve
+    environment:
+      NTFY_LISTEN_HTTP: :8080
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-http://127.0.0.1:${APP_PORT}}
+      NTFY_BEHIND_PROXY: "true"
+      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+      NTFY_CACHE_DURATION: 720h
+      NTFY_VISITOR_ATTACHMENT_DAILY_BANDWIDTH_LIMIT: 100G
+      NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS: ${NTFY_EXEMPT_HOSTS:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      NTFY_ATTACHMENT_CACHE_DIR: /var/lib/ntfy/attachments
+      NTFY_UPSTREAM_BASE_URL: ${NTFY_UPSTREAM_BASE_URL:-}
+      NTFY_ENABLE_LOGIN: "false"
+      NTFY_ENABLE_SIGNUP: "false"
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/var/lib/ntfy
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q --tries=1 http://127.0.0.1:8080/v1/health -O - | grep -q healthy
+      interval: 30s
+      timeout: 5s
+      retries: 3
+x-runtipi:
+  schema_version: 2
+  overrides: []

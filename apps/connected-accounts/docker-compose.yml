@@ -1,0 +1,145 @@
+x-security: &a1
+  user: 1000:1000
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  mem_limit: 512m
+  pids_limit: 128
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=128m,uid=1000,gid=1000
+services:
+  wizard-connectors-calendar:
+    <<: *a1
+    image: ghcr.io/humanitylabs-org/wizard-connectors:sha-90959904f05679246722e16af398be5ee9f37cc1@sha256:2b7a3539c9f0d3e917eb40faaddbdfe84e029e35541d248c04e3c58f0575cc2c
+    command:
+      - python
+      - app/ingress.py
+    networks:
+      - ingress-lane
+      - edge
+    x-runtipi:
+      is_main: true
+      internal_port: 8799
+    init: true
+    volumes:
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    ports:
+      - 127.0.0.1:${APP_PORT}:8799
+  wizard-connectors:
+    <<: *a1
+    image: ghcr.io/humanitylabs-org/wizard-connectors:sha-90959904f05679246722e16af398be5ee9f37cc1@sha256:2b7a3539c9f0d3e917eb40faaddbdfe84e029e35541d248c04e3c58f0575cc2c
+    environment:
+      PORT: "8799"
+      DATA_DIR: /data
+      CONNECTORS_OWNER_TOKEN: ${CONNECTORS_OWNER_TOKEN:?Required}
+      CONNECTORS_MCP_TOKEN: ${CONNECTORS_MCP_TOKEN:?Required}
+      MUSIC_ADAPTER_TOKEN: ${MUSIC_ADAPTER_TOKEN:?Required}
+      BROKER_TOKEN: ${BROKER_TOKEN:?Required}
+      PRIVATE_WORKER_TOKEN: ${PRIVATE_WORKER_TOKEN:?Required}
+      PRIVATE_ROUTE_CONFIGURED: ${PRIVATE_ROUTE_CONFIGURED:-false}
+      MEDIA_WORKER_TOKEN: ${MEDIA_WORKER_TOKEN:?Required}
+      ISOLATED_PACKAGE: "true"
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/volumes/ui-data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    networks:
+      - ingress-lane
+      - google-lane
+      - private-lane
+      - media-lane
+  google-broker:
+    <<: *a1
+    image: ghcr.io/humanitylabs-org/wizard-connectors:sha-90959904f05679246722e16af398be5ee9f37cc1@sha256:2b7a3539c9f0d3e917eb40faaddbdfe84e029e35541d248c04e3c58f0575cc2c
+    command:
+      - python
+      - app/services.py
+    environment:
+      SERVICE_ROLE: google
+      PORT: "8800"
+      BROKER_DATA_DIR: /data
+      BROKER_TOKEN: ${BROKER_TOKEN:?Required}
+      GOOGLE_DISABLED: ${GOOGLE_DISABLED:-false}
+      GOOGLE_STORE_SECRET: ${GOOGLE_STORE_SECRET:-}
+      GOOGLE_STORE_KEY: ${GOOGLE_STORE_KEY:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/volumes/google-data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    networks:
+      - google-lane
+      - google-egress
+    init: true
+  media-worker:
+    <<: *a1
+    image: ghcr.io/humanitylabs-org/wizard-connectors:sha-90959904f05679246722e16af398be5ee9f37cc1@sha256:2b7a3539c9f0d3e917eb40faaddbdfe84e029e35541d248c04e3c58f0575cc2c
+    command:
+      - python
+      - app/services.py
+    environment:
+      SERVICE_ROLE: media
+      PORT: "8802"
+      MEDIA_WORKER_TOKEN: ${MEDIA_WORKER_TOKEN:?Required}
+      HOME: /tmp
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    networks:
+      - media-lane
+      - media-egress
+    init: true
+    volumes:
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+  private-worker:
+    <<: *a1
+    image: ghcr.io/humanitylabs-org/wizard-connectors:sha-90959904f05679246722e16af398be5ee9f37cc1@sha256:2b7a3539c9f0d3e917eb40faaddbdfe84e029e35541d248c04e3c58f0575cc2c
+    command:
+      - python
+      - app/services.py
+    environment:
+      SERVICE_ROLE: private
+      PORT: "8801"
+      PRIVATE_WORKER_TOKEN: ${PRIVATE_WORKER_TOKEN:?Required}
+      TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/cache
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    networks:
+      - private-lane
+      - model-egress
+    init: true
+    volumes:
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+networks:
+  google-lane:
+    internal: true
+  ingress-lane:
+    internal: true
+  edge: {}
+  private-lane:
+    internal: true
+  google-egress: {}
+  model-egress: {}
+  media-lane:
+    internal: true
+  media-egress: {}
+x-runtipi:
+  schema_version: 2
+  overrides: []

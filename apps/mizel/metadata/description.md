@@ -1,0 +1,5 @@
+# Recorder
+
+Record meetings from your device, upload audio, keep notes and search transcripts. This package is the recorder backend: HTTP API, MCP tools, storage and the transcription queue. The shared transcription provider does the speech recognition; this app contains no model. It starts empty and keeps SQLite, audio and notes in its own app-data volume. Uninstall preserves that volume.
+
+Capture uses the existing Wizard recorder bridge on the owner's device. The full Recorder screen (live words, Ask cards, live summary, playback, transcript and outline; `live/`) is served by this app at `/live/` (opening the app's address goes there) and needs a live words key in the app settings. Optional OpenAI-compatible notes enhancement uses owner-supplied configuration only. Finished recaps go to the agent this app routes through (chosen in Wizard, the main agent by default) through the Wizard delivery endpoint; the app never names an agent, and a bound agent that is down keeps recaps queued (`GET /api/agent-delivery`).

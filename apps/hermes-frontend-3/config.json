@@ -1,0 +1,38 @@
+{
+  "name": "Hermes Desktop in Browser",
+  "id": "hermes-frontend-3",
+  "wizard_type": "view",
+  "available": true,
+  "short_desc": "The Hermes Desktop experience in your browser, for the Hermes Agent on this box.",
+  "author": "przbadu / Nous Research; packaged by Humanity Labs",
+  "port": 9120,
+  "categories": [
+    "media"
+  ],
+  "description": "Community browser extraction of Hermes Desktop. Connects to a separately installed Hermes Agent without replacing it.",
+  "tipi_version": 4,
+  "version": "1af684e-1",
+  "source": "https://github.com/przbadu/hermes-ui",
+  "website": "https://github.com/przbadu/hermes-ui",
+  "exposable": true,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791199719541,
+  "updated_at": 1791596739372,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 101,
+  "gid": 101,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Existing Hermes backend URL",
+      "env_variable": "HERMES_BACKEND_URL",
+      "required": true,
+      "hint": "Leave the default to use the Hermes Agent app on this box. Otherwise a private HTTP(S) origin reachable from this container; no trailing slash, path, or credentials.",
+      "default": "http://hermes-agent:9119"
+    }
+  ]
+}

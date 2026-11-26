@@ -1,0 +1,37 @@
+services:
+  wizard-notes:
+    image: ghcr.io/humanitylabs-org/wizard-notes:0.1.0-alpha.16
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      PORT: "8799"
+      DATA_DIR: /data
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      NOTES_VAULT_FOLDER: ${NOTES_VAULT_FOLDER:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${NOTES_VAULT_FOLDER:-${APP_DATA_DIR}/data/vault}:/vault
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    x-runtipi:
+      is_main: true
+      internal_port: 8799
+    ports:
+      - 127.0.0.1:${APP_PORT}:8799
+x-runtipi:
+  schema_version: 2
+  overrides: []

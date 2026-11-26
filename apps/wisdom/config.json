@@ -1,0 +1,52 @@
+{
+  "id": "wisdom",
+  "name": "Wisdom",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Private modular collection reader.",
+  "description": "Shared and personal collection shelves with previewed collection-only export. First-install seeding never resets an existing library. Private documents and reading state stay on the installation.",
+  "author": "Humanity Labs",
+  "port": 9230,
+  "categories": [
+    "utilities"
+  ],
+  "tipi_version": 5,
+  "version": "0.4.0-private.40",
+  "source": "https://github.com/humanitylabs-org/wisdom",
+  "exposable": false,
+  "supported_architectures": [
+    "arm64",
+    "amd64"
+  ],
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Trusted Wizard browser origin",
+      "env_variable": "WISDOM_ORIGINS",
+      "required": true,
+      "default": "",
+      "hint": "Required: the address you open Wizard at, e.g. https://wizard.example.ts.net (comma-separate several). Wisdom only answers requests for these hosts or from this box."
+    },
+    {
+      "type": "text",
+      "label": "Configured source manifest",
+      "env_variable": "WISDOM_COLLECTION_SOURCE",
+      "required": false,
+      "default": "",
+      "hint": "Optional mounted manifest path /sources/manifest.json; no global store."
+    },
+    {
+      "type": "text",
+      "label": "Library timezone",
+      "env_variable": "WISDOM_TIMEZONE",
+      "required": false,
+      "default": "UTC",
+      "hint": "An installed IANA timezone name."
+    }
+  ],
+  "no_gui": false
+}

@@ -1,0 +1,86 @@
+{
+  "name": "Notifications",
+  "id": "notifications",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Service: your Wizard's own notification server. The agent tells you when something is done or needs you.",
+  "author": "ntfy (ntfy.sh, Philipp C. Heckel); packaged by Humanity Labs",
+  "port": 8790,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Unmodified ntfy, the open-source push notification server, running on your own box. Your agent sends you notifications through it (finished jobs, things you asked to be told about, problems that need you), and every Wizard app can use it. Read them in the ntfy web app on this address, or subscribe once in the free ntfy phone app (Android or iPhone) to the topic 'wizard' on this server. Nothing leaves the box by default. On iPhone, instant delivery needs the optional ntfy.sh relay below, which forwards only a wake-up ping, never the text. No login: keep it on your private network (e.g. Tailscale).",
+  "tipi_version": 17,
+  "version": "v2.29.0-wizard29",
+  "source": "https://github.com/binwiederhier/ntfy",
+  "website": "https://ntfy.sh",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791807428739,
+  "updated_at": 1794656451555,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Topic (optional)",
+      "env_variable": "NOTIFY_TOPIC",
+      "required": false,
+      "default": "wizard",
+      "hint": "The topic the agent posts to. Subscribe to the same name in the ntfy app."
+    },
+    {
+      "type": "url",
+      "label": "Address you open it on (optional)",
+      "env_variable": "NTFY_BASE_URL",
+      "required": false,
+      "placeholder": "https://mybox.tail1234.ts.net:8790",
+      "hint": "Set it to the private address you reach this app on, so links in notifications open correctly."
+    },
+    {
+      "type": "url",
+      "label": "Instant iPhone delivery relay (optional)",
+      "env_variable": "NTFY_UPSTREAM_BASE_URL",
+      "required": false,
+      "placeholder": "https://ntfy.sh",
+      "hint": "iPhones only get notifications instantly through Apple's push service. Set https://ntfy.sh to forward a wake-up ping (the message ID only, never the text). Leave empty to keep everything on the box."
+    },
+    {
+      "type": "text",
+      "label": "Hermes scheduled jobs folder (optional)",
+      "env_variable": "HERMES_CRON_DIR",
+      "required": false,
+      "placeholder": "/home/you/.hermes/cron",
+      "hint": "Your agent's cron folder on this box. When set, every scheduled-job result shows up in the inbox automatically. Read-only."
+    },
+    {
+      "type": "text",
+      "label": "Jobs to keep quiet when they succeed (optional)",
+      "env_variable": "CRON_QUIET_JOBS",
+      "required": false,
+      "placeholder": "Morning briefing",
+      "hint": "Comma-separated job names or ids whose successes should not post (their failures still alert)."
+    },
+    {
+      "type": "text",
+      "label": "Which app each job is about (optional)",
+      "env_variable": "CRON_JOB_APPS",
+      "required": false,
+      "placeholder": "Backup check=backup, Daily scan=sniper",
+      "hint": "Comma-separated job=app pairs (job name or id, app id). Those jobs' results are listed under that app and follow its notification choice; other jobs stay your agent's own."
+    },
+    {
+      "type": "text",
+      "label": "Phone notifications: owner's Tailscale login (optional)",
+      "env_variable": "PHONE_OWNER_LOGIN",
+      "required": false,
+      "placeholder": "you@example.com",
+      "hint": "The Wizard OS Android app gets instant notifications from this box over Tailscale. Set your Tailscale login so only your own devices can read them; empty = any signed-in person on your tailnet."
+    }
+  ]
+}

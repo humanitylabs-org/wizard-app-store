@@ -1,0 +1,37 @@
+{
+  "name": "Profiles",
+  "id": "profiles",
+  "wizard_type": "view",
+  "available": true,
+  "short_desc": "Your Wizard profile: share your build, look and App Store apps with friends, and try on theirs.",
+  "author": "Humanity Labs",
+  "port": 8836,
+  "categories": [
+    "media"
+  ],
+  "description": "Your Wizard profile with its own Nostr ID. Share your look, your build and your App Store apps with friends or everyone, encrypted through Nostr. Nobody connects to your Wizard; apps you build never show.",
+  "tipi_version": 8,
+  "version": "0.5.3",
+  "source": "https://github.com/oscarhenrycollins/profiles",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1792800000000,
+  "updated_at": 1793764303000,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Who can edit this profile (optional)",
+      "hint": "Your Tailscale login, if other people share your tailnet. Leave empty when the tailnet is only yours. Never shown or shared.",
+      "required": false,
+      "env_variable": "PROFILES_OWNER_LOGINS"
+    }
+  ],
+  "no_gui": false
+}

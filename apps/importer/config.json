@@ -1,0 +1,53 @@
+{
+  "name": "Importer",
+  "id": "importer",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Bring your ChatGPT, Claude, Claude Code or Hermes memories, chats, skills and personality into your Wizard.",
+  "author": "Humanity Labs",
+  "port": 8799,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Move to Wizard without losing your history. Pick where your AI lives now: the Importer shows you exactly how to get the export (with direct links), waits for it, then shows what it found. You choose what comes in and approve a short 'What I know about you' card before anything becomes memory. Chats become searchable files in Files › Imported, skills and personality come along, and every import can be undone. Claude Code and Hermes on this Wizard need no export. Everything stays on your Wizard.",
+  "tipi_version": 13,
+  "version": "0.1.12",
+  "source": "https://github.com/humanitylabs-org/wizard-importer",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791500000000,
+  "updated_at": 1795474362869,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard username",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
+      "required": true,
+      "default": "hermes",
+      "hint": "Filled in automatically from your agent. Used only to reach the agent's Importer engine."
+    },
+    {
+      "type": "password",
+      "label": "Hermes Agent dashboard password",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
+      "required": true,
+      "min": 16,
+      "hint": "Filled in automatically from your Hermes Agent app (the same dashboard password). The import runs inside your agent; this app only relays."
+    },
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard address (optional)",
+      "env_variable": "WIZARD_IMPORTER_HERMES_URL",
+      "required": false,
+      "hint": "Leave empty to use the Hermes Agent app (http://hermes-agent:9119). Set it only if your agent's dashboard runs elsewhere."
+    }
+  ],
+  "no_gui": false
+}

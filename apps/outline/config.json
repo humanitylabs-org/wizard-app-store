@@ -1,0 +1,30 @@
+{
+  "id": "outline",
+  "name": "Outline",
+  "available": true,
+  "port": 18883,
+  "exposable": false,
+  "no_gui": false,
+  "version": "0.2.2",
+  "tipi_version": 2,
+  "supported_architectures": [
+    "arm64",
+    "amd64"
+  ],
+  "categories": [
+    "utilities"
+  ],
+  "description": "A minimal nested outline you can type or dictate into. Connects Wizard to the owner-supervised Outline runtime; stopping or uninstalling preserves notes and audio.",
+  "short_desc": "Minimal notes outline: type or dictate.",
+  "author": "Humanity Labs",
+  "source": "https://github.com/humanitylabs-org/outline",
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Private runtime address (host:port)",
+      "env_variable": "OUTLINE_TRIAL_UPSTREAM",
+      "required": true
+    }
+  ],
+  "wizard_type": "service"
+}

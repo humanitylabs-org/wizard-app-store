@@ -1,0 +1,29 @@
+{
+  "name": "WizardOS Tracker",
+  "id": "wizardos-tracker",
+  "wizard_type": "view",
+  "available": true,
+  "short_desc": "The WizardOS team's build line: goals, features and bugs on GitHub. Install, sign in with GitHub, done.",
+  "author": "Humanity Labs",
+  "port": 18884,
+  "categories": [
+    "media"
+  ],
+  "description": "The WizardOS team's tracker: goals, core and app features and bugs across humanitylabs-org, each moving Queued → Building → AI review → Human review → Done, with the builder switch, Try it switches and Works / Doesn't work for reviews. Open it and tap Sign in with GitHub: approve the short code on github.com and you're in. For WizardOS team members (your own GitHub account; agents use the Tracker's tools). When a new version is out, the Tracker shows an Update button on its main screen.",
+  "tipi_version": 36,
+  "version": "0.63.0",
+  "source": "https://github.com/humanitylabs-org/wizardos-tracker",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1793845776995,
+  "updated_at": 1794927560346,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [],
+  "no_gui": false
+}

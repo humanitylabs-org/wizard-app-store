@@ -1,0 +1,31 @@
+services:
+  wizard-files:
+    user: 0:0
+    environment:
+      FILES_ROOT: /files
+      FILES_ALLOWED_HOSTS: ${FILES_ALLOWED_HOSTS:-}
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      FILES_APP_DATA_PREFIXES: ${FILES_APP_DATA_PREFIXES:-[]}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${ROOT_FOLDER_HOST}/media:/files:ro
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    x-runtipi:
+      is_main: true
+      internal_port: 8080
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-files-wizard-files-5fd3169bbdf9-41cc9198@sha256:c022ecfdaceecdac0d679f708f4f8d220257920103346eb7238e8278e0f7d181
+    ports:
+      - 127.0.0.1:${APP_PORT}:8080
+x-runtipi:
+  schema_version: 2
+  overrides: []

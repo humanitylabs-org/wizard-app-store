@@ -1,0 +1,29 @@
+{
+  "name": "Sovereignty",
+  "id": "sovereignty",
+  "wizard_type": "view",
+  "available": true,
+  "short_desc": "See how much of your digital life you own, area by area.",
+  "author": "Humanity Labs",
+  "port": 8799,
+  "categories": [
+    "media"
+  ],
+  "description": "A checklist of your digital life on a ladder from rented services up to self-hosted, with where you are now and the next step up.",
+  "tipi_version": 2,
+  "version": "0.2.1",
+  "source": "https://github.com/oscarhenrycollins/sovereignty",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791500000000,
+  "updated_at": 1795007916187,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [],
+  "no_gui": false
+}

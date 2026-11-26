@@ -1,0 +1,28 @@
+services:
+  wizard-ux:
+    image: ghcr.io/humanitylabs-org/wizard-ux@sha256:a7cf5391cf34f6526c5df70c44d08b541cf56d4377eddb728ab79e3cc778a4bc
+    user: 101:101
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=101,gid=101
+    environment:
+      WIZARD_AGENT_SERVICE_ORIGIN: http://wizard-agent-service:8787
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    ports:
+      - 127.0.0.1:${APP_PORT}:8788
+    x-runtipi:
+      is_main: true
+      internal_port: 8788
+    volumes:
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+x-runtipi:
+  schema_version: 2
+  overrides: []

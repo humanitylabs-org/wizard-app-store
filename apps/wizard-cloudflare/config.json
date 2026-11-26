@@ -1,0 +1,65 @@
+{
+  "name": "Cloudflare",
+  "id": "wizard-cloudflare",
+  "wizard_type": "external",
+  "available": true,
+  "short_desc": "External: Sign in once; your Wizard publishes sites, backs up files and manages domains.",
+  "author": "Humanity Labs",
+  "port": 18805,
+  "categories": [
+    "network"
+  ],
+  "description": "Sign in to Cloudflare once (or create a free account there). The app shows each account's websites, storage and domains; your Wizard does the work: publish a Files folder as a website, back up folders to R2, change DNS and price domains. Every change waits for your Approve tap; nothing is deleted or bought. Configure your own shell host/origin and owner login.",
+  "tipi_version": 13,
+  "version": "1.4.6",
+  "source": "https://github.com/oscarhenrycollins/wizard-cloudflare",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791500000000,
+  "updated_at": 1794360921251,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "External: Owner tailnet logins",
+      "hint": "Comma-separated Tailscale logins allowed to use the page inside the Wizard shell.",
+      "required": false,
+      "env_variable": "WIZARD_OWNER_LOGINS"
+    },
+    {
+      "type": "text",
+      "label": "External: Trusted hosts",
+      "hint": "Comma-separated exact shell Host values.",
+      "required": false,
+      "env_variable": "WIZARD_TRUSTED_HOSTS"
+    },
+    {
+      "type": "text",
+      "label": "External: Trusted origins",
+      "hint": "Comma-separated exact shell origins.",
+      "required": false,
+      "env_variable": "WIZARD_TRUSTED_ORIGINS"
+    },
+    {
+      "type": "password",
+      "label": "External: Gateway owner secret",
+      "hint": "Optional: for a gateway that injects X-Wizard-Owner-Token instead of Tailscale identity.",
+      "required": false,
+      "env_variable": "WIZARD_OWNER_TOKEN"
+    },
+    {
+      "type": "password",
+      "label": "External: MCP admin secret",
+      "hint": "Optional bearer for MCP from outside this box.",
+      "required": false,
+      "env_variable": "WIZARD_ADMIN_TOKEN"
+    }
+  ],
+  "no_gui": false
+}

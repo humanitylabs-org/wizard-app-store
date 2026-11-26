@@ -1,0 +1,56 @@
+{
+  "name": "Wizard Notes",
+  "id": "wizard-notes",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Your private, connected Markdown vault.",
+  "author": "Humanity Labs",
+  "port": 9257,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Private-by-default plain Markdown notes, nested folders, linked thoughts and search.",
+  "tipi_version": 11,
+  "version": "0.1.0-alpha.16",
+  "source": "https://github.com/humanitylabs-org/wizard-notes",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1792886400000,
+  "updated_at": 1795647888005,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "no_gui": false,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Trusted ingress hosts (optional)",
+      "env_variable": "WIZARD_TRUSTED_HOSTS",
+      "required": false,
+      "default": "",
+      "hint": "Comma-separated host:port values. Blank uses the owner-authenticated Wizard ingress."
+    },
+    {
+      "type": "text",
+      "label": "Additional trusted browser origins (optional)",
+      "env_variable": "WIZARD_TRUSTED_ORIGINS",
+      "required": false,
+      "default": "",
+      "hint": "Same-host origins work automatically. Add exact origins only if needed."
+    },
+    {
+      "type": "text",
+      "label": "Vault folder (optional)",
+      "env_variable": "NOTES_VAULT_FOLDER",
+      "required": false,
+      "default": "",
+      "hint": "Absolute path of an existing folder on this Wizard, for example a synced Obsidian vault. Notes opens it instead of its own vault and saves files as the folder's owner. Blank keeps Notes' own vault.",
+      "regex": "^(/[^:$\\n]*)?$",
+      "pattern_error": "Use an absolute folder path such as /home/you/Obsidian Vault, without ':' or '$'."
+    }
+  ]
+}

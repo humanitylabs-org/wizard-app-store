@@ -1,0 +1,76 @@
+{
+  "id": "movies",
+  "name": "Movies",
+  "wizard_type": "view",
+  "available": true,
+  "short_desc": "Private movie and series watch queue.",
+  "description": "Private test release: starts with Batman Begins (2005). Your queue, history and notes stay in the app data folder.",
+  "author": "Humanity Labs",
+  "port": 9234,
+  "categories": [
+    "media"
+  ],
+  "tipi_version": 9,
+  "version": "0.3.7",
+  "source": "https://github.com/humanitylabs-org/movies",
+  "exposable": false,
+  "supported_architectures": [
+    "arm64",
+    "amd64"
+  ],
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Where-to-watch country",
+      "env_variable": "CINEQUEUE_WATCH_REGION",
+      "required": false,
+      "default": "",
+      "hint": "Two-letter country code (e.g. TH, US) for JustWatch streaming availability. Empty hides it and makes no lookups."
+    },
+    {
+      "type": "text",
+      "label": "Watch-date timezone",
+      "env_variable": "CINEQUEUE_TIMEZONE",
+      "required": false,
+      "default": "UTC",
+      "hint": "IANA timezone used for 'watched today' dates, e.g. Asia/Bangkok."
+    },
+    {
+      "type": "text",
+      "label": "Agent request admission mode",
+      "env_variable": "CINEQUEUE_ADMIT",
+      "required": false,
+      "default": "disabled",
+      "hint": "Keep disabled unless explicitly opting into live Agent Service runs (value: live)."
+    },
+    {
+      "type": "text",
+      "label": "Optional Agent Service origin",
+      "env_variable": "CINEQUEUE_WIZARD_ORIGIN",
+      "required": false,
+      "default": "",
+      "hint": "Required together with live admission; requests otherwise stay local and the add sheet adds titles directly."
+    },
+    {
+      "type": "text",
+      "label": "Agent display name",
+      "env_variable": "CINEQUEUE_AGENT_NAME",
+      "required": false,
+      "default": "",
+      "hint": "Shown on the add sheet when agent requests are live, e.g. Archimedes."
+    },
+    {
+      "type": "text",
+      "label": "Trusted Wizard browser origin",
+      "env_variable": "CINEQUEUE_ORIGINS",
+      "required": false,
+      "default": "",
+      "hint": "Exact origin(s), comma separated, allowed to write from another host; no public direct backend."
+    }
+  ],
+  "no_gui": false
+}

@@ -1,0 +1,59 @@
+services:
+  movies:
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:movies-movies-df43432ffb78-ff74b9ec@sha256:0c75e2be535c7b4eeaf3101358dec7ae17a02e42a7506b7d04024f809b2800a9
+    working_dir: /app
+    command:
+      - python
+      - /app/start.py
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz',timeout=2)
+      interval: 15s
+      timeout: 3s
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    mem_limit: 256m
+    tmpfs:
+      - /tmp
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      CINEQUEUE_BASE_PATH: ""
+      CINEQUEUE_HOST: 0.0.0.0
+      CINEQUEUE_PORT: "8765"
+      CINEQUEUE_DATA: /data
+      CINEQUEUE_WATCH_REGION: ${CINEQUEUE_WATCH_REGION:-}
+      CINEQUEUE_TIMEZONE: ${CINEQUEUE_TIMEZONE:-UTC}
+      CINEQUEUE_ADMIT: ${CINEQUEUE_ADMIT:-disabled}
+      CINEQUEUE_WIZARD_ORIGIN: ${CINEQUEUE_WIZARD_ORIGIN:-}
+      CINEQUEUE_AGENT_NAME: ${CINEQUEUE_AGENT_NAME:-}
+      CINEQUEUE_AGENT_API_URL: ${CINEQUEUE_AGENT_API_URL:-}
+      CINEQUEUE_SHARED_ORIGIN: ${CINEQUEUE_SHARED_ORIGIN:-}
+      CINEQUEUE_ORIGINS: ${CINEQUEUE_ORIGINS:-}
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    x-runtipi:
+      is_main: true
+      internal_port: 8765
+    init: true
+    ports:
+      - 127.0.0.1:${APP_PORT}:8765
+x-runtipi:
+  schema_version: 2
+  overrides: []

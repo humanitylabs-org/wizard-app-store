@@ -1,0 +1,42 @@
+{
+  "id": "wizard-youtube-music",
+  "name": "YouTube Music",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Service: YouTube catalog, optional account library and playback for Music.",
+  "description": "An unofficial music source for Wizard. Try direct playback at home; cloud Wizards may need an always-on private home relay. Optional account library access requires an owner-configured Google TV/device OAuth client. Account authorization and playback are tested separately. No ad-free, unlimited, Premium or account-safety guarantees.",
+  "author": "Humanity Labs",
+  "port": 9206,
+  "categories": [
+    "utilities"
+  ],
+  "tipi_version": 8,
+  "version": "0.1.7",
+  "source": "https://github.com/humanitylabs-org/wizard-youtube-music",
+  "exposable": false,
+  "supported_architectures": [
+    "arm64",
+    "amd64"
+  ],
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "no_gui": false,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Trusted Wizard browser origin (scheme and port)",
+      "env_variable": "WIZARD_TRUSTED_ORIGINS",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Tailnet proxy for a cloud Wizard whose Tailscale runs in userspace mode (optional, e.g. socks5://host.docker.internal:1055)",
+      "env_variable": "WIZARD_TAILNET_PROXY",
+      "required": false,
+      "default": ""
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "name": "DeFleur Video",
+  "id": "defleur-video",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Service: Hermes-operated vertical-video editor running James DeFleur's full workflow (cuts, crops, motion graphics, captions).",
+  "author": "Humanity Labs; workflow contract informed by Wizard Modules",
+  "port": 8787,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Hermes drives it over MCP; no browser UI and no LLM calls. Put your video in the Files app (Files → Videos), then tell Hermes the file name; the finished video is saved to Files → Videos → Edited. Bundles James DeFleur's DeFleur Video helpers and runs his whole workflow: import (20 min, up to 4K, iPhone .mov/HDR converted, edited at 1080p), speech-to-text via the Transcriber app, local alignment, sample-exact cuts with evidence and the dialogue gate, fixed per-setup face crops, optional HTML/SVG/GSAP motion graphics captured in the shared Browser app, burned captions, his 1080x1920 encode and delivery gate. Upload links remain as a fallback. No token needed: keep it on your private network (e.g. Tailscale).",
+  "tipi_version": 15,
+  "version": "0.7.2",
+  "source": "https://github.com/humanitylabs-org/defleur-video",
+  "exposable": false,
+  "no_gui": true,
+  "supported_architectures": [
+    "amd64"
+  ],
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Transcriber URL",
+      "env_variable": "TRANSCRIBER_URL",
+      "required": false,
+      "default": "http://transcriber:8000",
+      "hint": "Where the Transcriber app answers inside Runtipi. Leave the default if the Transcriber app is installed on this same server."
+    },
+    {
+      "type": "url",
+      "label": "Browser address (for motion graphics)",
+      "env_variable": "BROWSER_URL",
+      "required": false,
+      "default": "http://browser:9222",
+      "hint": "Where the shared Browser app answers inside Runtipi (DevTools port 9222 on the Runtipi network; the Browser app's own Runtipi port is 8793, loopback only). Only motion graphics need it; plain captioned renders work without it."
+    },
+    {
+      "type": "text",
+      "label": "Transcriber model",
+      "env_variable": "TRANSCRIBER_MODEL",
+      "required": false,
+      "default": "Systran/faster-whisper-small",
+      "hint": "Must already be downloaded in the Transcriber app (its startup model)."
+    }
+  ],
+  "updated_at": 1794360907472
+}

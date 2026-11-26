@@ -1,0 +1,138 @@
+{
+  "name": "Connected accounts",
+  "id": "connected-accounts",
+  "wizard_type": "external",
+  "available": true,
+  "short_desc": "External: your Google accounts for Calendar and Music.",
+  "author": "Humanity Labs",
+  "port": 8799,
+  "categories": [
+    "network"
+  ],
+  "description": "Owner-managed Google app, account permissions, read-only Calendar source and simulated private chat.",
+  "tipi_version": 25,
+  "version": "0.9.1",
+  "source": "https://github.com/humanitylabs-org/wizard-connectors",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791500000000,
+  "updated_at": 1795673319711,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "password",
+      "env_variable": "CONNECTORS_OWNER_TOKEN",
+      "label": "Human unlock token",
+      "required": true,
+      "min": 32
+    },
+    {
+      "type": "password",
+      "env_variable": "CONNECTORS_MCP_TOKEN",
+      "label": "Content-free MCP token",
+      "required": true,
+      "min": 32
+    },
+    {
+      "type": "password",
+      "env_variable": "MUSIC_ADAPTER_TOKEN",
+      "label": "Typed Music catalog caller token",
+      "required": true,
+      "min": 32
+    },
+    {
+      "type": "password",
+      "env_variable": "BROKER_TOKEN",
+      "label": "Internal broker token",
+      "required": true,
+      "min": 32
+    },
+    {
+      "type": "password",
+      "env_variable": "PRIVATE_WORKER_TOKEN",
+      "label": "Internal private worker token",
+      "required": true,
+      "min": 32
+    },
+    {
+      "type": "password",
+      "env_variable": "MEDIA_WORKER_TOKEN",
+      "label": "Internal credential-free media worker token",
+      "required": true,
+      "min": 32
+    },
+    {
+      "type": "password",
+      "env_variable": "TINFOIL_API_KEY",
+      "label": "Tinfoil API key (synthetic chat only)",
+      "required": false
+    },
+    {
+      "type": "text",
+      "env_variable": "PRIVATE_ROUTE_CONFIGURED",
+      "label": "Private key configured (true/false)",
+      "default": "false",
+      "required": false
+    },
+    {
+      "type": "text",
+      "env_variable": "WIZARD_TRUSTED_HOSTS",
+      "label": "Trusted route hosts (comma separated)",
+      "default": "",
+      "hint": "Installer supplies the Wizard route host. Blank permits loopback and internal service hosts only; never trust arbitrary request hosts.",
+      "required": false
+    },
+    {
+      "type": "text",
+      "env_variable": "WIZARD_TRUSTED_ORIGINS",
+      "label": "Trusted HTTPS origins (comma separated)",
+      "default": "",
+      "required": false
+    },
+    {
+      "type": "text",
+      "env_variable": "GOOGLE_CLIENT_ID",
+      "label": "Google Web application client ID",
+      "required": false
+    },
+    {
+      "type": "password",
+      "env_variable": "GOOGLE_CLIENT_SECRET",
+      "label": "Google Web application client secret",
+      "required": false
+    },
+    {
+      "type": "text",
+      "env_variable": "GOOGLE_REDIRECT_URI",
+      "label": "Exact registered callback ending /api/google/callback",
+      "required": false
+    },
+    {
+      "type": "password",
+      "env_variable": "GOOGLE_STORE_KEY",
+      "label": "Fernet key (44-char URL-safe base64; provision, retain separately)",
+      "required": false
+    },
+    {
+      "type": "password",
+      "env_variable": "GOOGLE_STORE_SECRET",
+      "label": "Google encrypted store secret (auto-generated; keep for restores)",
+      "required": true,
+      "min": 32
+    },
+    {
+      "type": "text",
+      "env_variable": "GOOGLE_DISABLED",
+      "label": "Disable Google operations (true/false)",
+      "default": "false",
+      "required": false
+    }
+  ],
+  "no_gui": false
+}

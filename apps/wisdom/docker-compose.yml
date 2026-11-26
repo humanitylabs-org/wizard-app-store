@@ -1,0 +1,59 @@
+services:
+  wisdom:
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:wisdom-wisdom-a0e170479db8-fc541207@sha256:1ff6b9ecf042684d648a31514ad15d3f06cc7757907b2da45ebf9d5009dbad1c
+    working_dir: /app
+    command:
+      - python
+      - start.py
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:9200/healthz',timeout=2)
+      interval: 15s
+      timeout: 3s
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    mem_limit: 512m
+    tmpfs:
+      - /tmp
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      WISDOM_BASE: ""
+      WISDOM_CONTAINER: "1"
+      WISDOM_PORT: "9200"
+      WISDOM_DATA: /data
+      WISDOM_LIBRARY: /media/Wisdom
+      WISDOM_ADMIT: disabled
+      WISDOM_WIZARD_ORIGIN: ""
+      WISDOM_TIMEZONE: ${WISDOM_TIMEZONE:-UTC}
+      WISDOM_ORIGINS: ${WISDOM_ORIGINS:-}
+      WISDOM_COLLECTION_SOURCE: ${WISDOM_COLLECTION_SOURCE:-}
+      WISDOM_DISCUSS_URL: ${WISDOM_DISCUSS_URL:-}
+      WISDOM_DISCUSS_TOKEN: ${WISDOM_DISCUSS_TOKEN:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${ROOT_FOLDER_HOST}/media/Wisdom:/media/Wisdom
+      - ${APP_DATA_DIR}/sources:/sources:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    x-runtipi:
+      is_main: true
+      internal_port: 9200
+    init: true
+    ports:
+      - 127.0.0.1:${APP_PORT}:9200
+x-runtipi:
+  schema_version: 2
+  overrides: []

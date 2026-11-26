@@ -1,0 +1,126 @@
+{
+  "id": "wizard-search",
+  "name": "Search",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Free private web and image search, ready out of the box.",
+  "description": "Search works on install with a bundled SearXNG metasearch engine (free, no account). Have the Tinfoil app? Turn on private AI overviews from the Search page. Optionally add Firecrawl, Bright Data or a SOCKS egress for extra lanes. No history is saved.",
+  "author": "Humanity Labs",
+  "source": "https://github.com/humanitylabs-org/wizard-search",
+  "port": 9288,
+  "categories": [
+    "utilities"
+  ],
+  "tipi_version": 15,
+  "version": "0.3.14",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "no_gui": false,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "SearXNG endpoint (default: bundled; clear to disable)",
+      "env_variable": "SEARXNG_URL",
+      "required": false,
+      "default": "http://wizard-search-searxng:8080"
+    },
+    {
+      "type": "text",
+      "label": "SOCKS egress URL",
+      "env_variable": "WIZARD_SEARCH_SOCKS",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "password",
+      "label": "Firecrawl Cloud API key",
+      "env_variable": "FIRECRAWL_CLOUD_API_KEY",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Firecrawl Cloud origin",
+      "env_variable": "FIRECRAWL_CLOUD_URL",
+      "required": false,
+      "default": "https://api.firecrawl.dev"
+    },
+    {
+      "type": "text",
+      "label": "Private Firecrawl router search endpoint",
+      "env_variable": "FIRECRAWL_ROUTER_URL",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "password",
+      "label": "Bright Data API token",
+      "env_variable": "BRIGHTDATA_API_TOKEN",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Bright Data SERP zone",
+      "env_variable": "BRIGHTDATA_SERP_ZONE",
+      "required": false,
+      "default": "serp_api1"
+    },
+    {
+      "type": "text",
+      "label": "Bright Data unlocker zone",
+      "env_variable": "BRIGHTDATA_UNLOCK_ZONE",
+      "required": false,
+      "default": "mcp_unlocker"
+    },
+    {
+      "type": "text",
+      "label": "Tinfoil chat completions endpoint",
+      "env_variable": "TINFOIL_PROXY_URL",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "password",
+      "label": "Tinfoil API key",
+      "env_variable": "TINFOIL_API_KEY",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Overview model",
+      "env_variable": "WIZARD_SEARCH_MODEL",
+      "required": false,
+      "default": "gpt-oss-120b"
+    },
+    {
+      "type": "text",
+      "label": "Translation model",
+      "env_variable": "WIZARD_TRANSLATE_MODEL",
+      "required": false,
+      "default": "gemma4-31b"
+    },
+    {
+      "type": "text",
+      "label": "Translation fallback model",
+      "env_variable": "WIZARD_TRANSLATE_FALLBACK",
+      "required": false,
+      "default": "gpt-oss-120b"
+    },
+    {
+      "type": "text",
+      "label": "Vision model",
+      "env_variable": "WIZARD_VISION_MODEL",
+      "required": false,
+      "default": "gemma4-31b"
+    }
+  ]
+}

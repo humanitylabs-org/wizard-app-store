@@ -1,0 +1,94 @@
+services:
+  wizard-search:
+    image: ghcr.io/humanitylabs-org/wizard-search:sha-3d9cc92b75fa4bc1208cc15593e90c026737d3c5@sha256:c067854fb2b1540fa9e564e906c5f7fae362fe0623a0bdcaf0d7eeff48b2f4ef
+    user: 1000:1000
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    tmpfs:
+      - /tmp
+    volumes:
+      - ${APP_DATA_DIR}/volumes/search-data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    environment:
+      WIZARD_SEARCH_BASE: ""
+      WIZARD_SEARCH_DATA: /data
+      WIZARD_SEARCH_TINFOIL_APP: ${WIZARD_SEARCH_TINFOIL_APP:-http://wizard-tinfoil:18804}
+      SEARXNG_URL: ${SEARXNG_URL:-http://wizard-search-searxng:8080}
+      WIZARD_SEARCH_SOCKS: ${WIZARD_SEARCH_SOCKS:-}
+      FIRECRAWL_CLOUD_API_KEY: ${FIRECRAWL_CLOUD_API_KEY:-}
+      FIRECRAWL_CLOUD_URL: ${FIRECRAWL_CLOUD_URL:-https://api.firecrawl.dev}
+      FIRECRAWL_ROUTER_URL: ${FIRECRAWL_ROUTER_URL:-}
+      BRIGHTDATA_API_TOKEN: ${BRIGHTDATA_API_TOKEN:-}
+      BRIGHTDATA_SERP_ZONE: ${BRIGHTDATA_SERP_ZONE:-serp_api1}
+      BRIGHTDATA_UNLOCK_ZONE: ${BRIGHTDATA_UNLOCK_ZONE:-mcp_unlocker}
+      TINFOIL_PROXY_URL: ${TINFOIL_PROXY_URL:-}
+      TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
+      WIZARD_SEARCH_MODEL: ${WIZARD_SEARCH_MODEL:-gpt-oss-120b}
+      WIZARD_TRANSLATE_MODEL: ${WIZARD_TRANSLATE_MODEL:-gemma4-31b}
+      WIZARD_TRANSLATE_FALLBACK: ${WIZARD_TRANSLATE_FALLBACK:-gpt-oss-120b}
+      WIZARD_VISION_MODEL: ${WIZARD_VISION_MODEL:-gemma4-31b}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    depends_on:
+      - wizard-search-searxng
+    x-runtipi:
+      is_main: true
+      internal_port: 9288
+    ports:
+      - 127.0.0.1:${APP_PORT}:9288
+  wizard-search-searxng:
+    image: docker.io/searxng/searxng@sha256:64936ab0847aae6494d37edf688ce792b262e8467d48ad844c0bf3f899a45249
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    tmpfs:
+      - /etc/searxng
+      - /var/cache/searxng
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        printf '%s\n' \
+          'use_default_settings: true' \
+          'server:' \
+          "  secret_key: \"$$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')\"" \
+          '  limiter: false' \
+          '  image_proxy: false' \
+          '  public_instance: false' \
+          'search:' \
+          '  safe_search: 1' \
+          '  formats: [html, json]' \
+          'outgoing:' \
+          '  request_timeout: 4.0' \
+          'engines:' \
+          '  - name: bing' \
+          '    disabled: false' \
+          '  - name: mojeek' \
+          '    disabled: false' \
+          '  - name: startpage' \
+          '    disabled: false' \
+          '  - name: yahoo' \
+          '    disabled: false' \
+          > /etc/searxng/settings.yml
+        exec /usr/local/searxng/entrypoint.sh
+    volumes:
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+x-runtipi:
+  schema_version: 2
+  overrides: []

@@ -1,0 +1,29 @@
+{
+  "name": "TG style",
+  "id": "tg-style",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Your Wizard chats with Telegram's look.",
+  "author": "Oscar",
+  "port": 8799,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Your Wizard chats with Telegram's look.",
+  "tipi_version": 77,
+  "version": "0.8.47",
+  "source": "https://github.com/humanitylabs-org/telegram",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791500000000,
+  "updated_at": 1795676287424,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [],
+  "no_gui": false
+}

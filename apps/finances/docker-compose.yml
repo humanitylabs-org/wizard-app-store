@@ -1,0 +1,64 @@
+services:
+  finances:
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:finances-finances-4a3e403a2b22-bfbe6385@sha256:b6a0d0d4c899b584cb3ef8cadba3a6b272d3fb170db6e220d87a7a85b6b1aad9
+    pids_limit: 64
+    user: 1000:1000
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    tmpfs:
+      - /tmp
+    environment:
+      PORT: "8809"
+      BIND: 0.0.0.0
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATA_DIR: /data/private
+      WIZARD_NOTIFY_URL: ${WIZARD_NOTIFY_URL:-http://notifications:8080/mcp}
+      MONEY_ALERT_LARGE: ${MONEY_ALERT_LARGE:-500}
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+      MONEY_ACTUAL_URL: http://finances-actual:5006
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    working_dir: /app
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    read_only: true
+    command:
+      - python
+      - /app/app/server.py
+    init: true
+    x-runtipi:
+      is_main: true
+      internal_port: 8809
+    ports:
+      - 127.0.0.1:${APP_PORT}:8809
+  finances-actual:
+    image: actualbudget/actual-server:26.11.0@sha256:06cf186569cf58d93e12659ff1a517b65b5b0ebee7050a3991d4bd8a1d398da6
+    pids_limit: 128
+    user: 1000:1000
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      ACTUAL_PORT: "5006"
+      ACTUAL_SERVER_FILES: /data/actual-server
+      ACTUAL_USER_FILES: /data/actual-files
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+x-runtipi:
+  schema_version: 2
+  overrides: []

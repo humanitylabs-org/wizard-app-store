@@ -1,0 +1,677 @@
+services:
+  unified-init:
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:7170cc3225fe0f43d38bf12d3c29abe5ed441c8e12e4f976d84720a8f26a6980}
+    user: 0:0
+    entrypoint:
+      - python3
+      - /app/unified_setup.py
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    restart: no
+    labels:
+      runtipi.managed: "false"
+  messenger:
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:7170cc3225fe0f43d38bf12d3c29abe5ed441c8e12e4f976d84720a8f26a6980}
+    read_only: true
+    cap_drop:
+      - ALL
+    user: 1000:1000
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+      - /run/messenger:rw,noexec,nosuid,size=64m,mode=0700,uid=1000,gid=1000
+    environment:
+      MESSENGER_API_TOKEN: ${MESSENGER_API_TOKEN:?Messenger capability required}
+      MESSENGER_ALLOWED_ORIGINS: ${MESSENGER_ALLOWED_ORIGINS:-}
+      MESSENGER_PUBLIC_PATH: ${MESSENGER_PUBLIC_PATH:-/messenger/}
+      MESSENGER_COOKIE_SECURE: "1"
+      MESSENGER_DATA: /data
+      MESSENGER_PORT: "8765"
+      MESSENGER_AGENT_INBOX_TOKEN: ${MESSENGER_AGENT_INBOX_TOKEN:-}
+      MESSENGER_AGENT_SERVICE: ${MESSENGER_AGENT_SERVICE:-http://wizard-agent-service:8787}
+      MESSENGER_VERSION: 0.2.0-unified.16.128
+      UNIFIED_ENABLED: "1"
+      CONNECTORS_ENABLED: "1"
+      MESSENGER_CONNECTOR_SENDER_MODE: local-owner
+      MATRIX_URL: http://matrix:8008
+      TELEGRAM_BRIDGE_URL: http://telegram:29317
+      TRANSLATION_URL: http://translation:8766
+      TRANSLATION_MODEL: ${TRANSLATION_MODEL:-gemma4-31b}
+      MESSENGER_BROWSER_DEVTOOLS: http://signin-browser:9222
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+      connector-init:
+        condition: service_completed_successfully
+    networks:
+      - matrix-lane
+      - model-lane
+      - relay-egress
+      - signin-lane
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - 127.0.0.1:${APP_PORT}:8765
+    x-runtipi:
+      is_main: true
+      internal_port: 8765
+  matrix:
+    image: ghcr.io/element-hq/synapse@sha256:e98ab72138d90fa8b8876c6421fe78a9fdb181c0d7cc690ad740e5173e0c65e6
+    user: 1000:1000
+    entrypoint:
+      - python
+      - -m
+      - synapse.app.homeserver
+      - --config-path
+      - /data/homeserver.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 768m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/matrix:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+      connector-init:
+        condition: service_completed_successfully
+    networks:
+      - matrix-lane
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health', timeout=4)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  telegram:
+    image: ${TELEGRAM_IMAGE:-ghcr.io/humanitylabs-org/wizard-telegram-bridge:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:a41232b2e3f2b9786d5978540ede2e5bcfcde7de3309fa8178ec257a1cb5dc4b}
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - while [ ! -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-telegram -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/telegram:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - telegram-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || wget -q -O /dev/null http://127.0.0.1:29317/_matrix/mau/live
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  translation:
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:7170cc3225fe0f43d38bf12d3c29abe5ed441c8e12e4f976d84720a8f26a6980}
+    entrypoint:
+      - python3
+      - /app/translation.py
+    user: 1000:1000
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    pids_limit: 64
+    environment:
+      TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
+      TRANSLATION_MODEL: ${TRANSLATION_MODEL:-gemma4-31b}
+      TRANSLATION_MODELS: /models
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data/translation:/data:ro
+      - ${APP_DATA_DIR}/data/translation-models:/models
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+    networks:
+      - model-lane
+      - model-egress
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/healthz', timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+  connector-init:
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:7170cc3225fe0f43d38bf12d3c29abe5ed441c8e12e4f976d84720a8f26a6980}
+    user: 0:0
+    entrypoint:
+      - python3
+      - /app/connector_setup.py
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      MESSENGER_CONNECTORS: ${MESSENGER_CONNECTORS:-}
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+    restart: no
+    labels:
+      runtipi.managed: "false"
+  whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp@sha256:c807054cb015d0f5c90d20d85aac216d062b4a6f4ae834b931fd5e7f03e27391
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-whatsapp -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/whatsapp:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29318/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  signal:
+    image: dock.mau.dev/mautrix/signal@sha256:39afa721aa69472b2e91c75bd7d81a739e47f7e480fc0ff5ac8247af28eb2d0a
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-signal -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/signal:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29328/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  slack:
+    image: dock.mau.dev/mautrix/slack@sha256:0de822d47926b7077322a4fa9f349cd024af13107ab4bc63a0962dc53ef72a63
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-slack -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/slack:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29335/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  line:
+    image: ${MESSENGER_LINE_IMAGE:-ghcr.io/humanitylabs-org/wizard-line-bridge:sha-b1c581236bc09568bf781ab54b0d88da7576343e@sha256:b5a2e988bd87d28531834c10accc47911d48bdca5073a94c9316381e3cf24804}
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/matrix-line -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/line:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29322/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  instagram:
+    image: dock.mau.dev/mautrix/meta@sha256:cfba25bf06e97412c5ea60e3c237b6e07b17a8681d2d1c2f7c97db2608fa664d
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-meta -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/instagram:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29330/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  facebook:
+    image: dock.mau.dev/mautrix/meta@sha256:ddb17fb65f52e2166ed73643f47b95a4638521150f7434087f4e0423680b0b1e
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-meta -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/facebook:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29319/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  twitter:
+    image: dock.mau.dev/mautrix/twitter@sha256:7f70378b4bd00530f790c9282ff844cefd7900be955c998012b30ebbebc158cd
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-twitter -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/twitter:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29327/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  linkedin:
+    image: dock.mau.dev/mautrix/linkedin@sha256:db88d8c2c4a0397d00777f856771a7d3174ee4ec0436a1fd5f56330cb91cb6b0
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-linkedin -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/linkedin:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29341/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  gmessages:
+    image: dock.mau.dev/mautrix/gmessages@sha256:afeca2d14a01fac919c8fb94b04bf812db78e29425ceafe042508d7aea9e50a8
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/mautrix-gmessages -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/gmessages:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29336/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  dots:
+    image: ghcr.io/humanitylabs-org/wizard-dots-bridge:sha-9217753b7699ec3f259b00cdc56c79c63f61cc5f@sha256:ef02327c496a707e7aea242cc012673708a70b56664948f6c8352c75850cc326
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - until [ -f /data/configured ]; do sleep 2; done; exec /usr/bin/chatgpt-dots -c /data/config.yaml
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/dots:/data
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      connector-init:
+        condition: service_completed_successfully
+      matrix:
+        condition: service_healthy
+    networks:
+      - matrix-lane
+      - connector-egress
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test ! -f /data/configured || curl --fail --silent http://127.0.0.1:29349/_matrix/mau/live >/dev/null
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  signin-browser:
+    image: ghcr.io/humanitylabs-org/browser-engine:sha-cb0e16812e95ff1c064de9f0f0e74cd4db2ff63f@sha256:11ffb8c2c1d53c42ec178dbc1ca6f710863043311dc16f3b375cc67d857010f5
+    user: 1000:1000
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,size=1g
+    shm_size: 1g
+    mem_limit: 2g
+    pids_limit: 512
+    environment:
+      HOME: /tmp
+      BROWSER_SCREEN: 500x900
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    networks:
+      - signin-lane
+      - signin-egress
+    restart: unless-stopped
+    volumes:
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+networks:
+  matrix-lane:
+    internal: true
+  signin-lane:
+    internal: true
+  signin-egress: {}
+  model-lane:
+    internal: true
+  telegram-egress: {}
+  connector-egress: {}
+  model-egress: {}
+  relay-egress: {}
+x-runtipi:
+  schema_version: 2
+  overrides: []

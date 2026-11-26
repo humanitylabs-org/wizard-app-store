@@ -1,0 +1,53 @@
+{
+  "name": "Tinfoil",
+  "id": "wizard-tinfoil",
+  "wizard_type": "external",
+  "available": true,
+  "short_desc": "External: Private AI. Connect your Tinfoil API key; your agent gets a private model.",
+  "author": "Humanity Labs",
+  "port": 18804,
+  "categories": [
+    "network"
+  ],
+  "description": "Private AI inference for your Wizard. Paste a Tinfoil API key (from dash.tinfoil.sh) and your agent gets a private model choice: every request goes through Tinfoil's official SDK, which checks the secure enclave before anything is sent, with no unverified fallback. The key stays inside this app; the agent only gets a local token for this box. Needs the Hermes Agent app (or a Wizard installed alongside an existing Hermes).",
+  "tipi_version": 22,
+  "version": "0.3.21",
+  "source": "https://github.com/oscarhenrycollins/wizard-tinfoil",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "updated_at": 1795615909235,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard username",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
+      "required": true,
+      "default": "hermes",
+      "hint": "Filled in automatically from your Hermes Agent app. Used only to add Tinfoil to the agent's models."
+    },
+    {
+      "type": "password",
+      "label": "Hermes Agent dashboard password",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
+      "required": true,
+      "min": 16,
+      "hint": "Filled in automatically from your Hermes Agent app. The agent gets only a local token, never your Tinfoil key."
+    },
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard address (optional)",
+      "env_variable": "WIZARD_TINFOIL_HERMES_URL",
+      "required": false,
+      "hint": "Leave empty to use the Hermes Agent app (http://hermes-agent:9119)."
+    }
+  ],
+  "no_gui": false,
+  "created_at": 1791500000000
+}

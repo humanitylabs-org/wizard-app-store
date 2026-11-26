@@ -1,0 +1,59 @@
+{
+  "name": "ChatGPT",
+  "id": "wizard-chatgpt",
+  "wizard_type": "external",
+  "available": true,
+  "short_desc": "External: Connect one or more ChatGPT subscriptions; your agent on this server uses them.",
+  "author": "Humanity Labs",
+  "port": 8801,
+  "categories": [
+    "network"
+  ],
+  "description": "Connect your ChatGPT Plus or Pro subscriptions to your Wizard server. Each sign-in is your agent's own ChatGPT login (a short code you paste on ChatGPT; turn on Device code sign-in for Codex in ChatGPT Settings, Security first), so your agent keeps and renews it and this app never sees a token. The app shows each subscription with how much of its usage is left and reports them to Wizard's home screen. Works with the Hermes Agent app or your own Hermes on this server.",
+  "tipi_version": 2,
+  "version": "0.2.20",
+  "source": "https://github.com/oscarhenrycollins/chatgpt-connection",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1792088845863,
+  "updated_at": 1795090207000,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "password",
+      "label": "Page password (optional)",
+      "env_variable": "WIZARD_CHATGPT_PASSWORD",
+      "required": false,
+      "hint": "Leave empty on a Tailscale-only server. If set (use 16+ characters), your browser asks for it (any username) before showing this page."
+    },
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard username",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
+      "required": true,
+      "default": "hermes",
+      "hint": "Filled in automatically from your agent. Used only to list, add, reconnect or remove ChatGPT subscriptions inside the agent."
+    },
+    {
+      "type": "password",
+      "label": "Hermes Agent dashboard password",
+      "env_variable": "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
+      "required": true,
+      "min": 16,
+      "hint": "Filled in automatically from your Hermes Agent app (the same dashboard password). ChatGPT signs in inside Hermes, so this app never sees that token."
+    },
+    {
+      "type": "text",
+      "label": "Hermes Agent dashboard address (optional)",
+      "env_variable": "WIZARD_CHATGPT_HERMES_URL",
+      "required": false,
+      "hint": "Leave empty to use the Hermes Agent app (http://hermes-agent:9119). Set it only if your agent's dashboard runs elsewhere."
+    }
+  ]
+}

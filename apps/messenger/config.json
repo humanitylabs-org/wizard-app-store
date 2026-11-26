@@ -1,0 +1,77 @@
+{
+  "name": "Messenger",
+  "id": "messenger",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Encrypted text conversations with your peers, inside Wizard.",
+  "author": "Humanity Labs",
+  "port": 9245,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Private unified inbox with People, Groups, Telegram and optional Tinfoil translation. Matrix is internal plumbing; existing encrypted Marmot DMs remain available. Unified history is stored locally as plaintext; Telegram cloud chats are not end-to-end encrypted.",
+  "tipi_version": 159,
+  "version": "0.2.0-unified.16.128",
+  "source": "https://github.com/humanitylabs-org/wizard-messenger",
+  "exposable": false,
+  "no_gui": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "dynamic_config": true,
+  "private_data": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "password",
+      "label": "Integration capability",
+      "env_variable": "MESSENGER_API_TOKEN",
+      "required": true,
+      "hint": "Your Wizard generates this application-only capability. Use at least 32 characters; it is never pasted into the Messenger screen."
+    },
+    {
+      "type": "text",
+      "label": "Extra trusted Wizard web address (optional)",
+      "env_variable": "MESSENGER_ALLOWED_ORIGINS",
+      "required": false,
+      "default": "",
+      "hint": "Leave empty: Messenger accepts browser writes only from the address it is opened on. Add exact origins, comma-separated, only if your proxy rewrites the Host header."
+    },
+    {
+      "type": "text",
+      "label": "App path",
+      "env_variable": "MESSENGER_PUBLIC_PATH",
+      "required": false,
+      "default": "/messenger/",
+      "hint": "The standard Wizard app path. Keep the trailing slash."
+    },
+    {
+      "type": "text",
+      "label": "Telegram application API ID",
+      "env_variable": "TELEGRAM_API_ID",
+      "required": false
+    },
+    {
+      "type": "password",
+      "label": "Telegram application API hash",
+      "env_variable": "TELEGRAM_API_HASH",
+      "required": false
+    },
+    {
+      "type": "password",
+      "label": "Tinfoil translation API key",
+      "env_variable": "TINFOIL_API_KEY",
+      "required": false
+    },
+    {
+      "type": "text",
+      "label": "Tinfoil translation model",
+      "env_variable": "TRANSLATION_MODEL",
+      "required": false,
+      "default": "gemma4-31b"
+    }
+  ]
+}
