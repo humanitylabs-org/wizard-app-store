@@ -172,9 +172,12 @@ def with_legacy(result):
                 old = {k: v for k, v in old.items() if not k.startswith('signin_')}
                 old = {**old, 'status': 'connected', 'error': None}
             if old.get('signin_expires_at'):
-                # When the original sign-in itself ends (its fixed date, about four weeks after Connect).
+                # When the original sign-in itself ends (its fixed date, about four weeks after Connect; a year for a
+                # one-year sign-in, claude-connection#27, which warns from 14 days).
                 result['signin'] = {'expiresAt': old['signin_expires_at'], 'daysLeft': old.get('signin_days_left'),
-                                    'warnDays': usage.SIGNIN_WARN_DAYS}
+                                    'warnDays': old.get('signin_warn_days') or usage.SIGNIN_WARN_DAYS}
+                if old.get('signin_kind'):
+                    result['signin']['kind'] = old['signin_kind']
             duplicate = False
             if old.get('status') != 'not_connected':
                 # Hermes mirrors this same Claude Code login into its pool; show one row, not two.
@@ -195,6 +198,7 @@ def with_legacy(result):
                     'source': 'legacy-claude-code', 'email': old.get('account'), 'plan': old.get('plan'),
                     'status': old['status'], 'usage': old.get('usage'), 'error': old.get('error'),
                     'signinExpiresAt': old.get('signin_expires_at'), 'signinDaysLeft': old.get('signin_days_left'),
+                    **({'signinKind': old['signin_kind']} if old.get('signin_kind') else {}),
                     'credentials': [c for m in mirrors for c in m.get('credentials') or []],
                     # Its Hermes mirror carries the agent's try-first order; reordering never touches the login.
                     'priority': min((m['priority'] for m in mirrors if isinstance(m.get('priority'), int)), default=None),
@@ -236,6 +240,8 @@ def connection(result):
         # The original Claude Code sign-in's own end date, for Resources and other apps.
         answer['signin_expires_at'] = result['signin'].get('expiresAt')
         answer['signin_days_left'] = result['signin'].get('daysLeft')
+        if result['signin'].get('kind'):
+            answer['signin_kind'] = result['signin']['kind']
     ended = selected.get('source') == 'legacy-claude-code' and (selected.get('error') or {}).get('code') == 'signin_ended'
     if result.get('inventoryStatus') == 'unavailable' and not ended and not (rows and selected.get('status') in ('connected', 'ready') and not result.get('alongside')):
         # The agent could not be asked. An empty list here would read as "signed out" on Home; say the agent is
@@ -589,6 +595,28 @@ def use_first_begin(account):
     return target, str(old.get('account'))
 
 
+def one_year_inbox(signin, now):
+    """A one-year sign-in (claude-connection#27) warns twice: 14 days ahead (once) and 3 days ahead (a new item, then
+    back at most once a day), each opening its one-tap Reconnect. Ended: the same item as a four-week sign-in."""
+    ends = _epoch(signin['signin_expires_at'])
+    first, last = usage.ONE_YEAR_WARN_DAYS[0], usage.ONE_YEAR_WARN_DAYS[-1]
+    if signin['signin_ended'] or signin['signin_days_left'] > first:
+        return None
+    date = datetime.fromtimestamp(ends, timezone.utc).strftime('%-d %b %Y')
+    left = ends - now
+    when = ('in %d days' % signin['signin_days_left'] if left >= 2 * 86400 else
+            'in 1 day' if left >= 86400 else 'in 1 hour' if left < 1.5 * 3600 else 'in %d hours' % round(left / 3600))
+    text = ('Your one-year Claude sign-in ends on %s; then your agent stops answering with this Claude subscription. '
+            'Tap to reconnect Claude for another year.' % date)
+    if signin['signin_days_left'] <= last:
+        day = now - now % 86400
+        stamp, step, priority = int(max(day, ends - (last + 1) * 86400)), last, 4
+    else:
+        stamp, step, priority = int(ends - (first + 1) * 86400), first, 3
+    return {'key': 'claude-signin:%s:%d' % (signin['signin_expires_at'], step), 'title': 'Claude sign-in ends %s' % when,
+            'text': text, 'time': stamp, 'priority': priority, 'open': 'claude-code/?connect=1'}
+
+
 def signin_inbox(now=None):
     """WizardOS inbox feed (`GET /api/inbox`): one item while the original Claude Code sign-in ends within
     SIGNIN_WARN_DAYS days or has ended. Tapping it opens that sign-in's Connect (one-tap Reconnect). Its time is the
@@ -597,6 +625,9 @@ def signin_inbox(now=None):
     items = []
     if PROVIDER == 'claude' and not os.environ.get('CLAUDE_CODE_OAUTH_TOKEN'):
         signin = usage.read_signin(owner.CLAUDE_DIR, now)
+        if signin and signin.get('signin_kind') == usage.ONE_YEAR and not signin['signin_ended']:
+            item = one_year_inbox(signin, now)
+            return {'inbox': 1, 'items': [item] if item else []}
         if signin and (signin['signin_ended'] or signin['signin_days_left'] <= usage.SIGNIN_WARN_DAYS):
             ends = _epoch(signin['signin_expires_at'])
             day = now - now % 86400
@@ -748,6 +779,8 @@ class Handler(owner.Handler):
             if PROVIDER == 'claude' and path == '/api/accounts':
                 # A Use first sign-in that is running or just ended: a page opened after signing in picks it up.
                 result['useFirst'] = use_first_latest()
+                if owner.one_year_on():
+                    result['oneYearSignin'] = True  # claude-connection#27: Connect there signs in for one year
             if path == '/api/connection':
                 result = connection(result)
             return self.send(200, result)
@@ -836,6 +869,12 @@ class Handler(owner.Handler):
             return self.send(503, {'error': REASONS.get(error.code, REASONS['unreachable']), 'code': error.code})
         except Exception:
             return self.send(503, {'error': 'Operation unavailable; refresh inventory before retrying'})
+
+if PROVIDER == 'claude':
+    # The app's feature switches (wizard.app-switches/1, GET/POST /api/switches; Claude only).
+    import switches
+    switches.wizard_switches_install(Handler)
+
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
