@@ -169,6 +169,18 @@ describe("generator", () => {
       fetch: (git: string, _c: string, dest: string) => cpSync(path.join(repos, git.split("/").pop()!), dest, { recursive: true }),
     });
     expect(rep2.included[0].tipi_version).toBe(4);
+
+    // Same commit, same recipe: no update. Same commit, changed recipe (a new release image pin): an update.
+    const gen = (o: string) => generate({
+      out: path.join(root, o), previous: out, index: "https://index.test", only: "notes", release: null,
+      get: async () => ({ apps: [index[0]], next_offset: null }),
+      hermesLock: { agent_recipe: { repo: "oscarhenrycollins/hermes-agent", commit: HERMES } },
+      fetch: (git: string, _c: string, dest: string) => cpSync(path.join(repos, git.split("/").pop()!), dest, { recursive: true }),
+    });
+    expect((await gen("same")).included[0].tipi_version).toBe(3);
+    const f = path.join(repos, "notes", "runtipi", "docker-compose.yml");
+    writeFileSync(f, readFileSync(f, "utf8").replace("ghcr.io/humanitylabs-org/notes:1.0.0", "ghcr.io/humanitylabs-org/notes:1.0.1"));
+    expect((await gen("changed")).included[0].tipi_version).toBe(4);
   });
 
   test("the release's default apps go in at the release's commits; Hermes stays on the lock", async () => {

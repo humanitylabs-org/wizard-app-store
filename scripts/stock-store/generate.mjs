@@ -152,7 +152,11 @@ const readPrevious = (prevDir, id) => {
   try {
     const cfg = JSON.parse(readFileSync(path.join(prevDir, "apps", id, "config.json"), "utf8"));
     const commit = readFileSync(path.join(prevDir, "apps", id, ".wizard-commit"), "utf8").trim();
-    return { tipi_version: cfg.tipi_version, commit };
+    let compose = null;
+    try {
+      compose = readFileSync(path.join(prevDir, "apps", id, "docker-compose.yml"), "utf8");
+    } catch {}
+    return { tipi_version: cfg.tipi_version, commit, compose };
   } catch {
     return null;
   }
@@ -194,7 +198,10 @@ export function buildApp({ rec, src, dst, previous, publish = undefined }) {
     }
   }
   compose = loopbackMainPort(mountAppGrants(addStopInit(rewriteVolumes(compose, rec.id))));
-  const cfg = stockConfig(JSON.parse(readFileSync(cfgFile, "utf8")), d, commit, previous);
+  const composeOut = stringify(compose, { lineWidth: 0 });
+  // Same commit but a different recipe (e.g. a newly pinned release image) is an update too: count it as a new commit.
+  const prev = previous && previous.compose != null && previous.compose !== composeOut ? { ...previous, commit: null } : previous;
+  const cfg = stockConfig(JSON.parse(readFileSync(cfgFile, "utf8")), d, commit, prev);
   const errs = schemaErrors(cfg, compose);
   if (errs.length) throw new Error(`stock Runtipi rejects it: ${errs.join("; ")}`);
 
@@ -202,7 +209,7 @@ export function buildApp({ rec, src, dst, previous, publish = undefined }) {
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(path.join(tmp, "metadata"), { recursive: true });
   writeFileSync(path.join(tmp, "config.json"), `${JSON.stringify(cfg, null, 2)}\n`);
-  writeFileSync(path.join(tmp, "docker-compose.yml"), stringify(compose, { lineWidth: 0 }));
+  writeFileSync(path.join(tmp, "docker-compose.yml"), composeOut);
   const desc = body(wizardText);
   writeFileSync(path.join(tmp, "metadata", "description.md"), `${desc.startsWith("# ") ? "" : `# ${String(d.name ?? rec.id)}\n\n`}${desc}\n`);
   writeFileSync(path.join(tmp, "wizard.md"), wizardText);
