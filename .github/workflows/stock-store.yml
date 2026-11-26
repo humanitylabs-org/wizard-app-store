@@ -1,0 +1,72 @@
+name: Stock store (generated)
+# humanitylabs-org/wizard-os#822: a plain Runtipi app store, generated from the Wizard App Index, on the `stock`
+# branch. Stock Runtipi reads it as https://github.com/humanitylabs-org/wizard-app-store/tree/stock.
+# `main` (the legacy store some boxes still read) is never touched. Only boxes installed with the off-by-default
+# switch WIZARD_STOCK_RUNTIPI=1 read the `stock` branch.
+on:
+  schedule:
+    - cron: "23,53 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["scripts/stock-store/**", "__tests__/stock-store.test.ts", ".github/workflows/stock-store.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["scripts/stock-store/**", "__tests__/stock-store.test.ts", ".github/workflows/stock-store.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: stock-store-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: false
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Generator tests
+        run: npx bun test __tests__/stock-store.test.ts
+      - name: Last published store (for tipi_version)
+        run: |
+          if git fetch --depth=1 origin stock; then git worktree add -q ../stock-prev FETCH_HEAD; else mkdir -p ../stock-prev; fi
+      - name: Generate from the index
+        run: node scripts/stock-store/generate.mjs --out ../stock-out --previous ../stock-prev
+      - name: Every published app passes stock Runtipi's own schemas
+        run: |
+          node --input-type=module -e '
+          import { readdirSync, readFileSync } from "node:fs";
+          import { parse } from "yaml";
+          import { appInfoSchema, dynamicComposeSchemaYaml } from "@runtipi/common/schemas";
+          import { type } from "arktype";
+          let bad = 0;
+          const ids = readdirSync("../stock-out/apps");
+          for (const id of ids) {
+            const a = appInfoSchema.omit("urn")(JSON.parse(readFileSync(`../stock-out/apps/${id}/config.json`, "utf8")));
+            const c = dynamicComposeSchemaYaml(parse(readFileSync(`../stock-out/apps/${id}/docker-compose.yml`, "utf8")));
+            for (const r of [a, c]) if (r instanceof type.errors) { bad++; console.log(`${id}: ${r.summary}`); }
+          }
+          if (!ids.length || bad) process.exit(1);
+          console.log(`${ids.length} apps valid`);'
+      - name: Publish to the stock branch
+        if: github.event_name != 'pull_request'
+        run: |
+          set -eu
+          git config --global user.name "wizard-app-store stock generator"
+          git config --global user.email "actions@users.noreply.github.com"
+          mkdir -p ../stock-pub && cd ../stock-pub && git init -q
+          if git fetch -q --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" stock 2>/dev/null; then git checkout -q -B stock FETCH_HEAD; else git checkout -q --orphan stock; fi
+          git rm -rq --ignore-unmatch . >/dev/null
+          cp -a ../stock-out/. .
+          cp "$GITHUB_WORKSPACE/scripts/stock-store/STOCK_README.md" README.md
+          git add -A
+          if git diff --cached --quiet; then echo "No change"; exit 0; fi
+          git commit -qm "Stock store from the index (main ${GITHUB_SHA::12})"
+          git push -q "https://x-access-token:${{ github.token }}@${GITHUB_SERVER_URL#https://}/$GITHUB_REPOSITORY" HEAD:stock
+          echo "Published $(ls apps | wc -l) apps to stock"
