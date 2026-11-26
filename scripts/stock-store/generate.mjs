@@ -44,6 +44,27 @@ export async function latestRelease(get = getJson, text = getText, base = RELEAS
   return get(`${base}/${version}.json`);
 }
 
+// A release also pins the shell and Agent Service images (built from those same commits). Their recipes name them as
+// ${WIZARD_UX_IMAGE:-...}; the fork's App Manager fills that variable, stock Runtipi can't, so the store writes it in.
+export const IMAGE_VARS = { "wizard-shell": "WIZARD_SHELL_IMAGE", "wizard-ux": "WIZARD_UX_IMAGE", "wizard-agent-service": "WIZARD_AGENT_SERVICE_IMAGE" };
+
+/** repo@digest for a release image pin (wam release_pins.image_ref), or null. */
+export function releaseImage(im) {
+  const digest = String(im?.digest ?? "");
+  const repo = String(im?.ref ?? "").replace(/(@.*|:[^/:]*)$/, "");
+  if (!/^sha256:[0-9a-f]{64}$/.test(digest) || !/^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)+$/.test(repo)) return null;
+  return `${repo}@${digest}`;
+}
+
+/** Recipe images spelled ${<var>:-...} (or ${<var>}) become the pinned image. */
+export function pinImages(compose, pins) {
+  for (const svc of Object.values(compose?.services ?? {})) {
+    const m = /^\$\{([A-Z_][A-Z0-9_]*)(?::?-[^}]*)?\}$/.exec(String(svc?.image ?? ""));
+    if (m && pins?.[m[1]]) svc.image = pins[m[1]];
+  }
+  return compose;
+}
+
 /** Release default apps replace (or add) index records, at the release's commit. hermes-agent is left to the lock. */
 export function applyRelease(apps, release) {
   const pinned = [];
@@ -53,10 +74,12 @@ export function applyRelease(apps, release) {
     if (!ID.test(String(app ?? "")) || !SHA.test(String(commit ?? "")) || !/^[\w.-]+\/[\w.-]+$/.test(String(repo ?? ""))) continue;
     if (app === "hermes-agent") continue;
     const rec = { id: app, repo, install: { git: `https://github.com/${repo}`, commit } };
+    const img = IMAGE_VARS[app] ? releaseImage(release?.images?.[app]) : null;
+    if (img) rec.imagePins = { [IMAGE_VARS[app]]: img };
     const at = apps.findIndex((a) => a.id === app);
     if (at >= 0) apps[at] = { ...apps[at], ...rec };
     else apps.push(rec);
-    pinned.push({ id: app, repo, commit });
+    pinned.push({ id: app, repo, commit, ...(img ? { image: img } : {}) });
   }
   return pinned;
 }
@@ -156,6 +179,7 @@ export function buildApp({ rec, src, dst, previous, publish = undefined }) {
   let compose = parse(composeText);
   const risks = composeRisks(compose);
   if (risks.length) throw new Error(`asks for host-level access: ${risks.join("; ")}`);
+  if (rec.imagePins) pinImages(compose, rec.imagePins);
   const packaged = publish ? packageImages(compose, d, rec.id, commit) : { compose, images: [] };
   compose = packaged.compose;
   const images = [];

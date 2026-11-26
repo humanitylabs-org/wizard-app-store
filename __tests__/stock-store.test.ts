@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import {
   addStopInit, allowedPublisher, chatsModule, composeRisks, forkOnlyNeeds, imageTag, loopbackMainPort, mountAppGrants, packageImages, rewriteVolumes, stockConfig,
 } from "../scripts/stock-store/compile.mjs";
-import { applyRelease, args, buildApp, generate as generateJs, latestRelease, pickApps } from "../scripts/stock-store/generate.mjs";
+import { applyRelease, args, buildApp, generate as generateJs, latestRelease, pickApps, pinImages, releaseImage } from "../scripts/stock-store/generate.mjs";
 import { dockerPublisher } from "../scripts/stock-store/images.mjs";
 
 const generate: (o: Record<string, unknown>) => Promise<any> = generateJs as never;
@@ -182,7 +182,15 @@ describe("generator", () => {
       voice: { app: "wizard-voice-service", repo: "humanitylabs-org/wizard-voice-service", commit: C2 },
       "agent-history": null, old: { app: "x", index_version: "1" },
     } };
+    const D = `sha256:${"d".repeat(64)}`;
+    (rel as any).images = { "wizard-ux": { ref: "ghcr.io/humanitylabs-org/wizard-ux:sha-x", digest: D } };
     const pinned = applyRelease(apps, rel);
+    expect(apps.find((a) => a.id === "wizard-ux").imagePins).toEqual({ WIZARD_UX_IMAGE: `ghcr.io/humanitylabs-org/wizard-ux@${D}` });
+    const compose = pinImages({ services: { ux: { image: "${WIZARD_UX_IMAGE:-ghcr.io/humanitylabs-org/wizard-ux:old}" }, side: { image: "redis:7" } } },
+      { WIZARD_UX_IMAGE: `ghcr.io/humanitylabs-org/wizard-ux@${D}` });
+    expect(compose.services.ux.image).toBe(`ghcr.io/humanitylabs-org/wizard-ux@${D}`);
+    expect(compose.services.side.image).toBe("redis:7");
+    expect(releaseImage({ ref: "x", digest: "nope" })).toBeNull();
     expect(pinned.map((p: any) => p.id)).toEqual(["wizard-ux", "wizard-voice-service"]);
     expect(apps.find((a) => a.id === "wizard-ux").install.commit).toBe(C2);
     expect(apps.find((a) => a.id === "hermes-agent").install.commit).toBe(HERMES);
