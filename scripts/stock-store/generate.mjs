@@ -6,7 +6,9 @@
 // Apps that still need the fork are left out and named, with the reason, in <out>/stock-store.json.
 // hermes-agent is taken at the commit the App Manager's Hermes lock pins today (wam/hermes-lock.json), never newer.
 //
-//   node scripts/stock-store/generate.mjs --out <dir> [--previous <dir>] [--index URL] [--only id,id]
+//   node scripts/stock-store/generate.mjs --out <dir> [--previous <dir>] [--index URL] [--only id,id] [--images <repo> [--push]]
+//
+// --images ships source/build apps as images built from their approved commit (images.mjs); --push publishes them.
 //
 // Nothing reads this output unless a box is pointed at the `stock` branch, which only the off-by-default
 // installer switch WIZARD_STOCK_RUNTIPI=1 does.
@@ -18,16 +20,17 @@ import { parse, stringify } from "yaml";
 import { appInfoSchema, dynamicComposeSchemaYaml } from "@runtipi/common/schemas";
 import { type } from "arktype";
 import {
-  ID, SHA, addStopInit, allowedPublisher, body, chatsModule, composeRisks, forkOnlyNeeds, frontMatter, loopbackMainPort,
-  rewriteVolumes, stockConfig,
+  ID, SHA, addStopInit, allowedPublisher, body, chatsModule, composeRisks, forkOnlyNeeds, frontMatter, imageTag, loopbackMainPort,
+  packageImages, rewriteVolumes, stockConfig,
 } from "./compile.mjs";
+import { dockerPublisher } from "./images.mjs";
 
 export const DEFAULT_INDEX = "https://apps.aiwizards.com";
 export const HERMES_LOCK_URL = "https://raw.githubusercontent.com/humanitylabs-org/wizard-app-manager/main/wam/hermes-lock.json";
 
-const args = (argv) => {
+export const args = (argv) => {
   const o = {};
-  for (let i = 0; i < argv.length; i++) if (argv[i].startsWith("--")) o[argv[i].slice(2)] = argv[i + 1]?.startsWith("--") ? true : argv[++i];
+  for (let i = 0; i < argv.length; i++) if (argv[i].startsWith("--")) o[argv[i].slice(2)] = i + 1 >= argv.length || argv[i + 1].startsWith("--") ? true : argv[++i];
   return o;
 };
 
@@ -100,7 +103,9 @@ const readPrevious = (prevDir, id) => {
 };
 
 /** Turn one checked-out app repo into a stock Runtipi app folder at dst. Throws with a plain reason when it can't. */
-export function buildApp({ rec, src, dst, previous }) {
+// `publish` (images.mjs dockerPublisher) builds the images that replace source/build packaging; without it such apps
+// stay fork-only and are left out.
+export function buildApp({ rec, src, dst, previous, publish }) {
   const commit = rec.install.commit;
   const wizardPath = path.join(src, "wizard.md");
   if (!existsSync(wizardPath)) throw new Error("no wizard.md");
@@ -113,11 +118,24 @@ export function buildApp({ rec, src, dst, previous }) {
   const composeFile = path.join(src, rt.compose);
   if (!existsSync(cfgFile) || !existsSync(composeFile)) throw new Error(`runtime files missing at ${commit}`);
   const composeText = readFileSync(composeFile, "utf8");
-  const needs = forkOnlyNeeds(d, composeText);
+  const needs = forkOnlyNeeds(d, composeText, !!publish);
   if (needs.length) throw Object.assign(new Error(`needs the fork: ${needs.join("; ")}`), { forkOnly: true });
   let compose = parse(composeText);
   const risks = composeRisks(compose);
   if (risks.length) throw new Error(`asks for host-level access: ${risks.join("; ")}`);
+  const packaged = publish ? packageImages(compose, d, rec.id, commit) : { compose, images: [] };
+  compose = packaged.compose;
+  const images = [];
+  if (packaged.images.length) {
+    // The fork copies the source without .git (packaging.ts copySource); so does the image.
+    rmSync(path.join(src, ".git"), { recursive: true, force: true });
+    for (const img of packaged.images) {
+      const dfText = img.kind === "build" ? readFileSync(path.join(src, img.dockerfile), "utf8") : "";
+      const ref = publish({ appId: rec.id, img, tag: imageTag(rec.id, img, commit, dfText), src, commit });
+      compose.services[img.service].image = ref;
+      images.push({ service: img.service, kind: img.kind, image: ref });
+    }
+  }
   compose = loopbackMainPort(addStopInit(rewriteVolumes(compose, rec.id)));
   const cfg = stockConfig(JSON.parse(readFileSync(cfgFile, "utf8")), d, commit, previous);
   const errs = schemaErrors(cfg, compose);
@@ -156,10 +174,10 @@ export function buildApp({ rec, src, dst, previous }) {
   mkdirSync(path.dirname(dst), { recursive: true });
   cpSync(tmp, dst, { recursive: true });
   rmSync(tmp, { recursive: true, force: true });
-  return { id: rec.id, repo: rec.repo, commit, version: cfg.version, tipi_version: cfg.tipi_version };
+  return { id: rec.id, repo: rec.repo, commit, version: cfg.version, tipi_version: cfg.tipi_version, ...(images.length ? { images } : {}) };
 }
 
-export async function generate({ out, previous, index = DEFAULT_INDEX, only, get = getJson, fetch: fetchRepo = fetchCommit, hermesLock }) {
+export async function generate({ out, previous, index = DEFAULT_INDEX, only, get = getJson, fetch: fetchRepo = fetchCommit, hermesLock, publish }) {
   const lock = hermesLock ?? (await get(HERMES_LOCK_URL));
   const recipe = lock?.agent_recipe;
   if (!recipe || !SHA.test(String(recipe.commit)) || !recipe.repo) throw new Error("Hermes lock has no agent_recipe pin");
@@ -178,7 +196,7 @@ export async function generate({ out, previous, index = DEFAULT_INDEX, only, get
       const src = path.join(work, rec.id);
       try {
         fetchRepo(rec.install.git, rec.install.commit, src);
-        included.push(buildApp({ rec, src, dst: path.join(out, "apps", rec.id), previous: readPrevious(previous, rec.id) }));
+        included.push(buildApp({ rec, src, dst: path.join(out, "apps", rec.id), previous: readPrevious(previous, rec.id), publish }));
       } catch (e) {
         left_out.push({ id: rec.id, repo: rec.repo, commit: rec.install.commit, reason: String(e?.message ?? e), fork_only: !!e?.forkOnly });
         rmSync(path.join(out, "apps", rec.id), { recursive: true, force: true });
@@ -202,10 +220,11 @@ export async function generate({ out, previous, index = DEFAULT_INDEX, only, get
 if (import.meta.url === `file://${process.argv[1]}`) {
   const o = args(process.argv.slice(2));
   if (!o.out) {
-    console.error("usage: generate.mjs --out <dir> [--previous <dir>] [--index URL] [--only id,id]");
+    console.error("usage: generate.mjs --out <dir> [--previous <dir>] [--index URL] [--only id,id] [--images <image repo> [--push]]");
     process.exit(2);
   }
-  const report = await generate({ out: path.resolve(o.out), previous: o.previous ? path.resolve(o.previous) : undefined, index: o.index || DEFAULT_INDEX, only: o.only });
+  const report = await generate({ out: path.resolve(o.out), previous: o.previous ? path.resolve(o.previous) : undefined, index: o.index || DEFAULT_INDEX, only: o.only,
+    publish: o.images ? dockerPublisher({ repo: o.images, push: !!o.push, platforms: process.env.STOCK_IMAGE_PLATFORMS || undefined }) : undefined });
   console.log(`stock store: ${report.included.length} apps written, ${report.left_out.length} left out`);
   for (const a of report.included) console.log(`  + ${a.id} ${a.version ?? ""} (${a.repo}@${a.commit.slice(0, 12)})`);
   for (const a of report.left_out) console.log(`  - ${a.id} (${a.repo}): ${a.reason}`);

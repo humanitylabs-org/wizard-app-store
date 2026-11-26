@@ -46,12 +46,14 @@ export const composeRisks = (doc) => {
 };
 
 /** Things only the fork can run today. Each is a reason the app is left out of the stock store (listed in the report). */
-export const forkOnlyNeeds = (manifest, composeText) => {
+// With `images` (a publisher that can build and push), source/build apps are packaged as images instead (packageImages).
+export const forkOnlyNeeds = (manifest, composeText, images = false) => {
   const needs = [];
   const pkg = manifest?.runtime?.package;
+  if (images && (pkg === "source" || pkg === "build")) return needs;
   if (pkg === "source" || pkg === "build") needs.push(`runtime.package ${pkg} (the fork copies or builds the source at install; ship an image package)`);
   if (/\$\{?APP_SOURCE_DIR\b/.test(composeText)) needs.push("uses ${APP_SOURCE_DIR}, which only the fork sets");
-  if (/^\s*build\s*:/m.test(composeText)) needs.push("builds an image on the box");
+  if (/^\s*build\s*:/m.test(composeText) || /"build"\s*:/.test(composeText)) needs.push("builds an image on the box");
   return needs;
 };
 
@@ -169,3 +171,84 @@ export const frontMatter = (text) => {
   return m[1];
 };
 export const body = (text) => String(text).replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
+
+// source/build packaging (spec/WIZARD_MD.md "Packaging", DECISIONS #76) without the fork: the fork copies the pinned
+// source to the box at install and mounts it as ${APP_SOURCE_DIR}, or builds the repo's Dockerfile on the box.
+// Stock Runtipi does neither, so the generator ships each such service as an image, built once at publish time
+// from exactly the approved commit (images.mjs builds and pushes them).
+export const SOURCE_MOUNT = /^\$\{APP_SOURCE_DIR\}((?:\/[^:$]*)?):(\/[^:]*)(?::(ro|rw))?$/;
+
+const safeRel = (p) => {
+  const raw = String(p ?? ".");
+  if (raw.startsWith("/") || raw.includes("$")) return null;
+  const out = [];
+  for (const seg of raw.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (!out.length) return null;
+      out.pop();
+    } else out.push(seg);
+  }
+  return out.join("/");
+};
+const quote = (s) => JSON.stringify(s);
+
+/**
+ * Turn a source/build app's compose into an image one. Returns { compose, images: [...] }: each image says how to
+ * build it from the app's checkout (context + Dockerfile text). The compose names each image by `ref(image)`,
+ * which the caller resolves to a pinned reference once it is built (or found already built).
+ * Throws with a plain reason when the recipe can't be packaged this way.
+ */
+export function packageImages(input, manifest, appId, commit) {
+  const pkg = manifest?.runtime?.package;
+  const doc = structuredClone(input);
+  const images = [];
+  if (pkg !== "source" && pkg !== "build") return { compose: doc, images };
+  for (const [name, s] of Object.entries(doc.services ?? {})) {
+    if (!s || typeof s !== "object") continue;
+    if (s.build) {
+      if (pkg !== "build") throw new Error(`${name}: ${pkg} apps build nothing`);
+      const b = typeof s.build === "string" ? { context: s.build } : s.build;
+      const extra = Object.keys(b).filter((k) => !["context", "dockerfile"].includes(k));
+      if (extra.length) throw new Error(`${name}: build.${extra[0]} is not supported`);
+      const ctx = safeRel(b.context);
+      if (ctx === null) throw new Error(`${name}: build.context must be a path inside the repo`);
+      const df = safeRel(`${ctx || "."}/${b.dockerfile ?? "Dockerfile"}`);
+      if (df === null || (ctx && !df.startsWith(`${ctx}/`))) throw new Error(`${name}: build.dockerfile must stay inside the context`);
+      images.push({ service: name, kind: "build", context: ctx, dockerfile: df });
+      delete s.build;
+      delete s.pull_policy;
+      continue;
+    }
+    const vols = Array.isArray(s.volumes) ? s.volumes : [];
+    const copies = [];
+    const keep = [];
+    for (const v of vols) {
+      const text = typeof v === "string" ? v : JSON.stringify(v);
+      if (!/APP_SOURCE_DIR/.test(text)) {
+        keep.push(v);
+        continue;
+      }
+      const m = typeof v === "string" ? v.match(SOURCE_MOUNT) : null;
+      if (!m || m[3] === "rw") throw new Error(`${name}: source mount ${text} must be "\${APP_SOURCE_DIR}[/path]:/target[:ro]"`);
+      const from = safeRel((m[1] || "").replace(/^\//, "") || ".");
+      if (from === null) throw new Error(`${name}: source mount ${text} climbs out of the repo`);
+      copies.push({ from: from || ".", to: m[2] });
+    }
+    if (!copies.length) continue;
+    if (typeof s.image !== "string" || !s.image) throw new Error(`${name}: a source service needs a base image`);
+    const lines = [`FROM ${s.image}`];
+    for (const c of copies) lines.push(`COPY ${quote(c.from === "." ? "." : c.from)} ${quote(c.to)}`);
+    lines.push(`LABEL org.opencontainers.image.source="https://github.com/humanitylabs-org/wizard-app-store" org.opencontainers.image.revision="${commit}" org.opencontainers.image.title="${appId} ${name}"`);
+    images.push({ service: name, kind: "source", context: "", dockerfileText: `${lines.join("\n")}\n` });
+    if (keep.length) s.volumes = keep;
+    else delete s.volumes;
+  }
+  if (!images.length) throw new Error(`runtime.package ${pkg} but nothing to package`);
+  if (/APP_SOURCE_DIR/.test(JSON.stringify(doc))) throw new Error("uses ${APP_SOURCE_DIR} outside a plain source mount");
+  return { compose: doc, images };
+}
+
+/** Image tag: app, service, commit and a hash of how it is built, so a changed recipe never reuses an old image. */
+export const imageTag = (appId, img, commit, dockerfileText = "") =>
+  `${appId}-${img.service}-${commit.slice(0, 12)}-${createHash("sha256").update(JSON.stringify([img.kind, img.context, img.dockerfile ?? "", img.dockerfileText ?? "", dockerfileText])).digest("hex").slice(0, 8)}`;

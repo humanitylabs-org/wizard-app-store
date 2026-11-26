@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parse } from "yaml";
 import {
-  addStopInit, allowedPublisher, chatsModule, composeRisks, forkOnlyNeeds, loopbackMainPort, rewriteVolumes, stockConfig,
+  addStopInit, allowedPublisher, chatsModule, composeRisks, forkOnlyNeeds, imageTag, loopbackMainPort, packageImages, rewriteVolumes, stockConfig,
 } from "../scripts/stock-store/compile.mjs";
-import { buildApp, generate as generateJs, pickApps } from "../scripts/stock-store/generate.mjs";
+import { args, buildApp, generate as generateJs, pickApps } from "../scripts/stock-store/generate.mjs";
+import { dockerPublisher } from "../scripts/stock-store/images.mjs";
 
 const generate: (o: Record<string, unknown>) => Promise<any> = generateJs as never;
 
@@ -159,5 +160,77 @@ describe("generator", () => {
     const root = tmp();
     fixtureRepo(path.join(root, "src"), "other");
     expect(() => buildApp({ rec: { id: "notes", repo: "humanitylabs-org/notes", install: { git: "g", commit: C1 } }, src: path.join(root, "src"), dst: path.join(root, "dst"), previous: null })).toThrow("wizard.md id");
+  });
+
+  test("a source app ships as an image built from its approved commit, with no ${APP_SOURCE_DIR} left", () => {
+    const root = tmp();
+    const src = path.join(root, "src");
+    fixtureRepo(src, "router", { pkg: "source", compose: "services:\n  router:\n    image: python:3.12-alpine@sha256:" + "a".repeat(64) + "\n    command: [python3, server.py]\n    working_dir: /app\n    volumes:\n      - ${APP_SOURCE_DIR}:/app:ro\n      - ${APP_DATA_DIR}/data:/data\n    x-runtipi:\n      is_main: true\n      internal_port: 8802\nx-runtipi:\n  schema_version: 2\n  overrides: []\n" });
+    mkdirSync(path.join(src, ".git"));
+    const calls: any[] = [];
+    const publish = (o: any) => (calls.push(o), `ghcr.io/humanitylabs-org/wizard-stock-apps:${o.tag}@sha256:${"b".repeat(64)}`);
+    const res = buildApp({ rec: { id: "router", repo: "humanitylabs-org/router", install: { git: "g", commit: C1 } }, src, dst: path.join(root, "dst"), previous: null, publish } as never) as any;
+    expect(calls).toHaveLength(1);
+    expect(calls[0].img.dockerfileText).toBe(`FROM python:3.12-alpine@sha256:${"a".repeat(64)}\nCOPY "." "/app"\nLABEL org.opencontainers.image.source="https://github.com/humanitylabs-org/wizard-app-store" org.opencontainers.image.revision="${C1}" org.opencontainers.image.title="router router"\n`);
+    expect(calls[0].tag).toStartWith(`router-router-${C1.slice(0, 12)}-`);
+    expect(existsSync(path.join(src, ".git"))).toBe(false);
+    const text = readFileSync(path.join(root, "dst", "docker-compose.yml"), "utf8");
+    expect(text).not.toContain("APP_SOURCE_DIR");
+    const compose = parse(text);
+    expect(compose.services.router.image).toBe(`ghcr.io/humanitylabs-org/wizard-stock-apps:${calls[0].tag}@sha256:${"b".repeat(64)}`);
+    expect(compose.services.router.volumes).toEqual(["${APP_DATA_DIR}/data:/data"]);
+    expect(compose.services.router.init).toBe(true);
+    expect(res.images).toEqual([{ service: "router", kind: "source", image: compose.services.router.image }]);
+    // Without a publisher it stays fork-only, as before.
+    expect(() => buildApp({ rec: { id: "router", repo: "humanitylabs-org/router", install: { git: "g", commit: C1 } }, src, dst: path.join(root, "dst2"), previous: null })).toThrow("needs the fork");
+  });
+
+  test("build apps build their own Dockerfile; odd recipes are refused", () => {
+    const m = (pkg: string) => ({ runtime: { package: pkg } });
+    const b = packageImages({ services: { f: { build: { context: ".", dockerfile: "Dockerfile" }, user: "0:0" } } }, m("build"), "files", C1);
+    expect(b.images).toEqual([{ service: "f", kind: "build", context: "", dockerfile: "Dockerfile" }]);
+    expect(b.compose.services.f.build).toBeUndefined();
+    expect(packageImages({ services: { f: { build: "sub" } } }, m("build"), "files", C1).images[0]).toMatchObject({ context: "sub", dockerfile: "sub/Dockerfile" });
+    expect(() => packageImages({ services: { f: { build: "../x" } } }, m("build"), "files", C1)).toThrow("inside the repo");
+    expect(() => packageImages({ services: { f: { build: { context: ".", args: { A: "1" } } } } }, m("build"), "files", C1)).toThrow("not supported");
+    expect(() => packageImages({ services: { f: { image: "x", volumes: ["${APP_SOURCE_DIR}:/app:rw"] } } }, m("source"), "a", C1)).toThrow("source mount");
+    expect(() => packageImages({ services: { f: { image: "x", volumes: ["${APP_SOURCE_DIR}/../etc:/app"] } } }, m("source"), "a", C1)).toThrow("climbs out");
+    expect(() => packageImages({ services: { f: { image: "x", environment: { S: "${APP_SOURCE_DIR}" } } } }, m("source"), "a", C1)).toThrow();
+    const sub = packageImages({ services: { f: { image: "x", volumes: ["${APP_SOURCE_DIR}/web:/srv:ro"] } } }, m("source"), "a", C1);
+    expect(sub.images[0].dockerfileText).toContain('COPY "web" "/srv"');
+    expect(sub.compose.services.f.volumes).toBeUndefined();
+    // An image app is untouched, and APP_SOURCE_DIR outside source packaging stays fork-only.
+    expect(packageImages({ services: { f: { image: "x" } } }, m("image"), "a", C1).images).toEqual([]);
+    expect(forkOnlyNeeds({ runtime: { package: "image" } }, "- ${APP_SOURCE_DIR}:/app", true)).toHaveLength(1);
+    expect(forkOnlyNeeds({ runtime: { package: "source" } }, "- ${APP_SOURCE_DIR}:/app", true)).toEqual([]);
+    // A changed recipe gets a new tag, the same one keeps its tag.
+    const img = sub.images[0];
+    expect(imageTag("a", img, C1)).toBe(imageTag("a", img, C1));
+    expect(imageTag("a", img, C1)).not.toBe(imageTag("a", { ...img, dockerfileText: "FROM y\n" }, C1));
+    expect(imageTag("a", img, C1, "FROM z")).not.toBe(imageTag("a", img, C1));
+  });
+
+  test("the publisher reuses an image already pushed and pins its digest", () => {
+    const D = `sha256:${"c".repeat(64)}`;
+    let priv = false;
+    const ran: string[][] = [];
+    const run = (_c: string, a: string[]) => {
+      ran.push(a);
+      if (a[1] === "imagetools") return JSON.stringify({ digest: D });
+      if (_c === "curl") return a.includes("-I") ? (priv ? "401" : "200") : JSON.stringify({ token: "t" });
+      return "";
+    };
+    const pub = dockerPublisher({ repo: "ghcr.io/humanitylabs-org/wizard-stock-apps", push: true, run, log: () => {} });
+    const ref = pub({ appId: "a", img: { service: "a", kind: "source", context: "", dockerfileText: "FROM x\n" }, tag: "a-a-111-x", src: tmp(), commit: C1 });
+    expect(ref).toBe(`ghcr.io/humanitylabs-org/wizard-stock-apps:a-a-111-x@${D}`);
+    expect(ran.some((a) => a[1] === "build")).toBe(false);
+    // A package boxes can't pull anonymously keeps the app out of the store.
+    priv = true;
+    expect(() => pub({ appId: "a", img: { service: "a", kind: "source", context: "", dockerfileText: "FROM x\n" }, tag: "a-a-111-x", src: tmp(), commit: C1 })).toThrow("not public");
+    expect(() => dockerPublisher({ repo: "bad repo" })).toThrow();
+  });
+
+  test("a trailing flag on the command line is a flag", () => {
+    expect(args(["--out", "o", "--images", "r", "--push"])).toEqual({ out: "o", images: "r", push: true });
   });
 });
