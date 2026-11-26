@@ -117,6 +117,30 @@ export function addStopInit(compose) {
   return doc;
 }
 
+/** DECISIONS #76 layer 2 (the fork's mountAppGrants, wizard-app-grants.ts): every service gets the app's grants file
+ * read-only at /wizard and its own connection-requests folder at /wizard-requests. On stock Runtipi wam writes both
+ * (wizard-app-manager wam/stock_grants.py). A recipe that mounts something else there is refused, as on the fork. */
+export function mountAppGrants(input) {
+  const doc = structuredClone(input);
+  const target = (v) => (typeof v === "string" ? v.split(":")[1] : v?.target);
+  const source = (v) => (typeof v === "string" ? v.split(":")[0] : v?.source);
+  for (const svc of Object.values(doc.services ?? {})) {
+    if ((svc.volumes ?? []).some((v) => target(v) === "/wizard" && source(v) !== "${APP_DATA_DIR}/wizard")) throw new Error("Reserved grants mount /wizard");
+    if ((svc.volumes ?? []).some((v) => target(v) === "/wizard-requests" && source(v) !== "${APP_DATA_DIR}/wizard-requests"))
+      throw new Error("Reserved connection requests mount /wizard-requests");
+    svc.volumes = [
+      ...(svc.volumes ?? []).filter((v) => target(v) !== "/wizard" && target(v) !== "/wizard-requests"),
+      "${APP_DATA_DIR}/wizard:/wizard:ro",
+      "${APP_DATA_DIR}/wizard-requests:/wizard-requests",
+    ];
+    const env = { WIZARD_GRANTS_FILE: "/wizard/grants.json", WIZARD_CONNECTION_REQUESTS: "/wizard-requests/connections.json" };
+    if (Array.isArray(svc.environment))
+      svc.environment = [...svc.environment.filter((e) => !Object.keys(env).some((k) => String(e).startsWith(`${k}=`))), ...Object.entries(env).map(([k, v]) => `${k}=${v}`)];
+    else svc.environment = { ...(svc.environment ?? {}), ...env };
+  }
+  return doc;
+}
+
 /** Box-only by default: the main port is published on loopback (Tailscale or a Cloudflare Tunnel carry it further). */
 export function loopbackMainPort(compose) {
   const doc = structuredClone(compose);

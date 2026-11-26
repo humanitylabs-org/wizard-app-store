@@ -21,7 +21,7 @@ import { appInfoSchema, dynamicComposeSchemaYaml } from "@runtipi/common/schemas
 import { type } from "arktype";
 import {
   ID, SHA, addStopInit, allowedPublisher, body, chatsModule, composeRisks, forkOnlyNeeds, frontMatter, imageTag, loopbackMainPort,
-  packageImages, rewriteVolumes, stockConfig,
+  mountAppGrants, packageImages, rewriteVolumes, stockConfig,
 } from "./compile.mjs";
 import { dockerPublisher } from "./images.mjs";
 
@@ -136,7 +136,7 @@ export function buildApp({ rec, src, dst, previous, publish = undefined }) {
       images.push({ service: img.service, kind: img.kind, image: ref });
     }
   }
-  compose = loopbackMainPort(addStopInit(rewriteVolumes(compose, rec.id)));
+  compose = loopbackMainPort(mountAppGrants(addStopInit(rewriteVolumes(compose, rec.id))));
   const cfg = stockConfig(JSON.parse(readFileSync(cfgFile, "utf8")), d, commit, previous);
   const errs = schemaErrors(cfg, compose);
   if (errs.length) throw new Error(`stock Runtipi rejects it: ${errs.join("; ")}`);

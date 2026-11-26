@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parse } from "yaml";
 import {
-  addStopInit, allowedPublisher, chatsModule, composeRisks, forkOnlyNeeds, imageTag, loopbackMainPort, packageImages, rewriteVolumes, stockConfig,
+  addStopInit, allowedPublisher, chatsModule, composeRisks, forkOnlyNeeds, imageTag, loopbackMainPort, mountAppGrants, packageImages, rewriteVolumes, stockConfig,
 } from "../scripts/stock-store/compile.mjs";
 import { args, buildApp, generate as generateJs, pickApps } from "../scripts/stock-store/generate.mjs";
 import { dockerPublisher } from "../scripts/stock-store/images.mjs";
@@ -50,6 +50,14 @@ describe("compile steps (same as the fork does at install/start)", () => {
     expect(() => rewriteVolumes({ services: {}, volumes: { v: { name: "someone-else" } } }, "a")).toThrow("Fixed volume name");
     // A pre-rule-15 app keeps its own fixed-name volume (wam#289).
     expect(rewriteVolumes({ services: {}, volumes: { v: { name: "wizard-a-config" } } }, "a").volumes).toEqual({ v: { name: "wizard-a-config" } });
+  });
+  test("every service gets the grants file read-only at /wizard and its requests folder (DECISIONS #76)", () => {
+    const out = mountAppGrants({ services: { a: { volumes: ["${APP_DATA_DIR}/data:/data"], environment: { X: "1" } }, b: { environment: ["Y=2", "WIZARD_GRANTS_FILE=/x"] } } });
+    expect(out.services.a.volumes).toEqual(["${APP_DATA_DIR}/data:/data", "${APP_DATA_DIR}/wizard:/wizard:ro", "${APP_DATA_DIR}/wizard-requests:/wizard-requests"]);
+    expect(out.services.a.environment).toEqual({ X: "1", WIZARD_GRANTS_FILE: "/wizard/grants.json", WIZARD_CONNECTION_REQUESTS: "/wizard-requests/connections.json" });
+    expect(out.services.b.environment).toEqual(["Y=2", "WIZARD_GRANTS_FILE=/wizard/grants.json", "WIZARD_CONNECTION_REQUESTS=/wizard-requests/connections.json"]);
+    expect(() => mountAppGrants({ services: { a: { volumes: ["/etc:/wizard"] } } })).toThrow("Reserved grants mount");
+    expect(() => mountAppGrants({ services: { a: { volumes: ["${APP_DATA_DIR}/x:/wizard-requests"] } } })).toThrow("Reserved connection requests");
   });
   test("Python as PID 1 gets Docker's init; an image's own init is left alone", () => {
     const out = addStopInit({ services: { p: { command: ["python3", "-c", "x"] }, q: { command: "python -m x", init: false }, r: { entrypoint: ["tini"], command: ["python"] }, s: { command: ["node"] } } });
@@ -136,7 +144,7 @@ describe("generator", () => {
     expect(report.left_out.find((a: any) => a.id === "root")?.reason).toContain("host-level access");
     expect(existsSync(path.join(out, "apps", "gone"))).toBe(false);
     const compose = parse(readFileSync(path.join(out, "apps", "notes", "docker-compose.yml"), "utf8"));
-    expect(compose.services.notes.volumes).toEqual(["${APP_DATA_DIR}/volumes/data:/data"]);
+    expect(compose.services.notes.volumes).toEqual(["${APP_DATA_DIR}/volumes/data:/data", "${APP_DATA_DIR}/wizard:/wizard:ro", "${APP_DATA_DIR}/wizard-requests:/wizard-requests"]);
     expect(compose.services.notes.init).toBe(true);
     expect(compose.services.notes.ports).toEqual(["127.0.0.1:${APP_PORT}:8000"]);
     const cfg = JSON.parse(readFileSync(path.join(out, "apps", "notes", "config.json"), "utf8"));
@@ -178,7 +186,7 @@ describe("generator", () => {
     expect(text).not.toContain("APP_SOURCE_DIR");
     const compose = parse(text);
     expect(compose.services.router.image).toBe(`ghcr.io/humanitylabs-org/wizard-stock-apps:${calls[0].tag}@sha256:${"b".repeat(64)}`);
-    expect(compose.services.router.volumes).toEqual(["${APP_DATA_DIR}/data:/data"]);
+    expect(compose.services.router.volumes).toEqual(["${APP_DATA_DIR}/data:/data", "${APP_DATA_DIR}/wizard:/wizard:ro", "${APP_DATA_DIR}/wizard-requests:/wizard-requests"]);
     expect(compose.services.router.init).toBe(true);
     expect(res.images).toEqual([{ service: "router", kind: "source", image: compose.services.router.image }]);
     // Without a publisher it stays fork-only, as before.
