@@ -40,7 +40,7 @@ import usage  # noqa: E402
 YEAR_CREDENTIAL = 'sk-ant-oat01-' + 'Q' * 93 + 'AA'
 TOKEN, REFRESH = 'sk-ant...CESS', 'sk-ant...RESH'
 DAY = 86400
-OWNER = {'Host': 'box.tail0000.ts.net', 'Origin': 'https://box.tail0000.ts.net', 'Tailscale-User-Login': 'owner@example.com',
+OWNER = {'Host': 'wizard.example.com', 'Origin': 'https://wizard.example.com', 'Tailscale-User-Login': 'owner@example.com',
          'X-Wizard-Switch': '1'}
 
 # The stand-in CLI: records its arguments, and draws the sign-in screens the way the real full-screen UI does
