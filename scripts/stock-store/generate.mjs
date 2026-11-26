@@ -27,6 +27,39 @@ import { dockerPublisher } from "./images.mjs";
 
 export const DEFAULT_INDEX = "https://apps.aiwizards.com";
 export const HERMES_LOCK_URL = "https://raw.githubusercontent.com/humanitylabs-org/wizard-app-manager/main/wam/hermes-lock.json";
+// The For testers release (wizard-os releases/latest): its default apps go in at the release's own commits, so a
+// stock box gets the same shell, Agent Service, connections and services a fork box of that release gets.
+export const RELEASES_URL = "https://raw.githubusercontent.com/humanitylabs-org/wizard-os/main/releases";
+
+async function getText(url) {
+  const res = await fetch(url, { headers: { "user-agent": "wizard-app-store-stock-generator" }, signal: AbortSignal.timeout(30000) });
+  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  return res.text();
+}
+
+/** The release whose default apps the store carries: releases/latest -> releases/<version>.json. */
+export async function latestRelease(get = getJson, text = getText, base = RELEASES_URL) {
+  const version = String(await text(`${base}/latest`)).trim();
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`releases/latest is not a version: ${version.slice(0, 40)}`);
+  return get(`${base}/${version}.json`);
+}
+
+/** Release default apps replace (or add) index records, at the release's commit. hermes-agent is left to the lock. */
+export function applyRelease(apps, release) {
+  const pinned = [];
+  for (const row of Object.values(release?.default_apps ?? {})) {
+    if (!row || typeof row !== "object") continue;
+    const { app, repo, commit } = row;
+    if (!ID.test(String(app ?? "")) || !SHA.test(String(commit ?? "")) || !/^[\w.-]+\/[\w.-]+$/.test(String(repo ?? ""))) continue;
+    if (app === "hermes-agent") continue;
+    const rec = { id: app, repo, install: { git: `https://github.com/${repo}`, commit } };
+    const at = apps.findIndex((a) => a.id === app);
+    if (at >= 0) apps[at] = { ...apps[at], ...rec };
+    else apps.push(rec);
+    pinned.push({ id: app, repo, commit });
+  }
+  return pinned;
+}
 
 export const args = (argv) => {
   const o = {};
@@ -177,7 +210,7 @@ export function buildApp({ rec, src, dst, previous, publish = undefined }) {
   return { id: rec.id, repo: rec.repo, commit, version: cfg.version, tipi_version: cfg.tipi_version, ...(images.length ? { images } : {}) };
 }
 
-export async function generate({ out, previous, index = DEFAULT_INDEX, only, get = getJson, fetch: fetchRepo = fetchCommit, hermesLock, publish }) {
+export async function generate({ out, previous, index = DEFAULT_INDEX, only, get = getJson, fetch: fetchRepo = fetchCommit, hermesLock, release, publish }) {
   const lock = hermesLock ?? (await get(HERMES_LOCK_URL));
   const recipe = lock?.agent_recipe;
   if (!recipe || !SHA.test(String(recipe.commit)) || !recipe.repo) throw new Error("Hermes lock has no agent_recipe pin");
@@ -185,6 +218,8 @@ export async function generate({ out, previous, index = DEFAULT_INDEX, only, get
   // hermes-agent: exactly today's pin (James's lock), whatever the index lists.
   const hermes = apps.find((a) => a.id === "hermes-agent");
   if (hermes) Object.assign(hermes, { repo: recipe.repo, install: { git: `https://github.com/${recipe.repo}`, commit: recipe.commit } });
+  const rel = release === undefined ? await latestRelease(get) : release;
+  const releasePins = applyRelease(apps, rel);
   const want = only ? new Set(String(only).split(",")) : null;
   const work = mkdtempSync(path.join(process.env.TMPDIR || tmpdir(), "stock-store-822-"));
   const included = [];
@@ -212,7 +247,8 @@ export async function generate({ out, previous, index = DEFAULT_INDEX, only, get
     const keep = new Set(included.map((a) => a.id));
     for (const name of readdirSync(path.join(out, "apps"))) if (!keep.has(name)) rmSync(path.join(out, "apps", name), { recursive: true, force: true });
   }
-  const report = { schema: 1, index, hermes_pin: { repo: recipe.repo, commit: recipe.commit }, included, left_out };
+  const report = { schema: 1, index, hermes_pin: { repo: recipe.repo, commit: recipe.commit },
+    release: rel ? { version: rel.version ?? null, default_apps: releasePins } : null, included, left_out };
   writeFileSync(path.join(out, "stock-store.json"), `${JSON.stringify(report, null, 2)}\n`);
   return report;
 }

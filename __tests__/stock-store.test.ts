@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import {
   addStopInit, allowedPublisher, chatsModule, composeRisks, forkOnlyNeeds, imageTag, loopbackMainPort, mountAppGrants, packageImages, rewriteVolumes, stockConfig,
 } from "../scripts/stock-store/compile.mjs";
-import { args, buildApp, generate as generateJs, pickApps } from "../scripts/stock-store/generate.mjs";
+import { applyRelease, args, buildApp, generate as generateJs, latestRelease, pickApps } from "../scripts/stock-store/generate.mjs";
 import { dockerPublisher } from "../scripts/stock-store/images.mjs";
 
 const generate: (o: Record<string, unknown>) => Promise<any> = generateJs as never;
@@ -135,6 +135,7 @@ describe("generator", () => {
       index: "https://index.test",
       get: async () => ({ apps: index, next_offset: null }),
       hermesLock: { agent_recipe: { repo: "oscarhenrycollins/hermes-agent", commit: HERMES } },
+      release: null,
       fetch: (git: string, commit: string, dest: string) => {
         fetched.push(`${git}@${commit}`);
         cpSync(path.join(repos, git.split("/").pop()!), dest, { recursive: true });
@@ -164,9 +165,33 @@ describe("generator", () => {
       out: next, previous: out, index: "https://index.test",
       get: async () => ({ apps: [{ ...index[0], install: { ...index[0].install, commit: C2 } }], next_offset: null }),
       hermesLock: { agent_recipe: { repo: "oscarhenrycollins/hermes-agent", commit: HERMES } },
+      release: null,
       fetch: (git: string, _c: string, dest: string) => cpSync(path.join(repos, git.split("/").pop()!), dest, { recursive: true }),
     });
     expect(rep2.included[0].tipi_version).toBe(4);
+  });
+
+  test("the release's default apps go in at the release's commits; Hermes stays on the lock", async () => {
+    const apps: any[] = [
+      { id: "wizard-ux", repo: "humanitylabs-org/wizard-ux", install: { git: "https://github.com/humanitylabs-org/wizard-ux", commit: C1 } },
+      { id: "hermes-agent", repo: "oscarhenrycollins/hermes-agent", install: { git: "x", commit: HERMES } },
+    ];
+    const rel = { version: "0.3.437", default_apps: {
+      shell: { app: "wizard-ux", repo: "humanitylabs-org/wizard-ux", commit: C2 },
+      agent: { app: "hermes-agent", repo: "oscarhenrycollins/hermes-agent", commit: C2 },
+      voice: { app: "wizard-voice-service", repo: "humanitylabs-org/wizard-voice-service", commit: C2 },
+      "agent-history": null, old: { app: "x", index_version: "1" },
+    } };
+    const pinned = applyRelease(apps, rel);
+    expect(pinned.map((p: any) => p.id)).toEqual(["wizard-ux", "wizard-voice-service"]);
+    expect(apps.find((a) => a.id === "wizard-ux").install.commit).toBe(C2);
+    expect(apps.find((a) => a.id === "hermes-agent").install.commit).toBe(HERMES);
+    expect(apps.find((a) => a.id === "wizard-voice-service").install.git).toBe("https://github.com/humanitylabs-org/wizard-voice-service");
+    const asked: string[] = [];
+    const got = await latestRelease(async (u: string) => { asked.push(u); return rel; }, async () => "0.3.437\n", "https://r.test");
+    expect(got).toBe(rel);
+    expect(asked).toEqual(["https://r.test/0.3.437.json"]);
+    await expect(latestRelease(async () => rel, async () => "<html>", "https://r.test")).rejects.toThrow("not a version");
   });
 
   test("an app whose wizard.md id differs from the index is left out", () => {
