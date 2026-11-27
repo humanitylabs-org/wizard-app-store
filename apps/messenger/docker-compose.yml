@@ -1,6 +1,6 @@
 services:
   unified-init:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-a2c7dc3360a53d3c8c505096f890593182ca144a@sha256:594b5292a105eb939851132aa8240d56d1a4ca20ffcec94f75a452bc00afd665}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
     user: 0:0
     entrypoint:
       - python3
@@ -28,7 +28,7 @@ services:
     labels:
       runtipi.managed: "false"
   messenger:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-a2c7dc3360a53d3c8c505096f890593182ca144a@sha256:594b5292a105eb939851132aa8240d56d1a4ca20ffcec94f75a452bc00afd665}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
     read_only: true
     cap_drop:
       - ALL
@@ -49,7 +49,7 @@ services:
       MESSENGER_PORT: "8765"
       MESSENGER_AGENT_INBOX_TOKEN: ${MESSENGER_AGENT_INBOX_TOKEN:-}
       MESSENGER_AGENT_SERVICE: ${MESSENGER_AGENT_SERVICE:-http://wizard-agent-service:8787}
-      MESSENGER_VERSION: 0.2.0-unified.16.138
+      MESSENGER_VERSION: 0.2.0-unified.16.143
       UNIFIED_ENABLED: "1"
       CONNECTORS_ENABLED: "1"
       MESSENGER_CONNECTOR_SENDER_MODE: local-owner
@@ -76,6 +76,8 @@ services:
       - model-lane
       - relay-egress
       - signin-lane
+      - call-lane
+      - tunnel-lane
     extra_hosts:
       - host.docker.internal:host-gateway
     ports:
@@ -165,6 +167,110 @@ services:
       - postgres-lane
     stop_grace_period: 30s
     restart: unless-stopped
+  livekit:
+    image: livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - trap "kill $$p 2>/dev/null; exit 0" TERM INT; while :; do until [ -f /calls/enabled ]; do sleep 2 & wait $$!; done; g=$$(cat /calls/livekit.gen 2>/dev/null); /livekit-server --config /calls/livekit.yaml & p=$$!; while [ -f /calls/enabled ] && [ "$$(cat /calls/livekit.gen 2>/dev/null)" = "$$g" ] && kill -0 $$p 2>/dev/null; do sleep 2 & wait $$!; done; kill $$p 2>/dev/null; wait $$p; done
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,uid=1000,gid=1000
+    mem_limit: 512m
+    pids_limit: 128
+    volumes:
+      - ${APP_DATA_DIR}/data/calls:/calls:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+    networks:
+      - call-lane
+      - call-egress
+    stop_grace_period: 10s
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  call-auth:
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - trap "kill $$p 2>/dev/null; exit 0" TERM INT; while :; do until [ -f /calls/enabled ]; do sleep 2 & wait $$!; done; /usr/local/bin/lk-jwt-service & p=$$!; while [ -f /calls/enabled ] && kill -0 $$p 2>/dev/null; do sleep 2 & wait $$!; done; kill $$p 2>/dev/null; wait $$p; done
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,uid=1000,gid=1000
+    mem_limit: 128m
+    pids_limit: 64
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_KEY_FILE: /calls/livekit-keys.yaml
+      LIVEKIT_JWT_BIND: :8080
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: messenger.internal
+      LIVEKIT_AS_REGISTRATION_FILE: /calls/lk-jwt-registration.yaml
+      LIVEKIT_HS_SERVER_NAME: messenger.internal
+      LIVEKIT_CS_API_URL_OVERRIDES: messenger.internal=http://matrix:8008
+      LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS: "30"
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data/calls:/calls:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+    networks:
+      - call-lane
+      - matrix-lane
+    stop_grace_period: 10s
+    restart: unless-stopped
+  call-tunnel:
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - trap "kill $$p 2>/dev/null; exit 0" TERM INT; while :; do until [ -f /calls/enabled ] && [ -s /calls/tunnel-token ]; do sleep 2 & wait $$!; done; /usr/local/bin/cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:0 run --token-file /calls/tunnel-token & p=$$!; while [ -f /calls/enabled ] && [ -s /calls/tunnel-token ] && kill -0 $$p 2>/dev/null; do sleep 2 & wait $$!; done; kill $$p 2>/dev/null; wait $$p; done
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,uid=1000,gid=1000
+    mem_limit: 128m
+    pids_limit: 64
+    volumes:
+      - ${APP_DATA_DIR}/data/calls:/calls:ro
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+    networks:
+      - tunnel-lane
+      - call-egress
+    stop_grace_period: 10s
+    restart: unless-stopped
+    environment:
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
   telegram:
     image: ${TELEGRAM_IMAGE:-ghcr.io/humanitylabs-org/wizard-telegram-bridge:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:a41232b2e3f2b9786d5978540ede2e5bcfcde7de3309fa8178ec257a1cb5dc4b}
     user: 1000:1000
@@ -206,7 +312,7 @@ services:
       WIZARD_GRANTS_FILE: /wizard/grants.json
       WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
   translation:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-a2c7dc3360a53d3c8c505096f890593182ca144a@sha256:594b5292a105eb939851132aa8240d56d1a4ca20ffcec94f75a452bc00afd665}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
     entrypoint:
       - python3
       - /app/translation.py
@@ -246,7 +352,7 @@ services:
       retries: 3
     restart: unless-stopped
   connector-init:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-a2c7dc3360a53d3c8c505096f890593182ca144a@sha256:594b5292a105eb939851132aa8240d56d1a4ca20ffcec94f75a452bc00afd665}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
     user: 0:0
     entrypoint:
       - python3
@@ -704,6 +810,11 @@ networks:
   matrix-lane:
     internal: true
   postgres-lane:
+    internal: true
+  call-lane:
+    internal: true
+  call-egress: {}
+  tunnel-lane:
     internal: true
   signin-lane:
     internal: true

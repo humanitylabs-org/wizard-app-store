@@ -3,22 +3,22 @@
   "index": "https://apps.aiwizards.com",
   "hermes_pin": {
     "repo": "oscarhenrycollins/hermes-agent",
-    "commit": "5876502ead6abd5d242ad812a1f1fc57356e8155"
+    "commit": "63df40f03ebbb80040932328835be596f7974c6a"
   },
   "release": {
-    "version": "0.3.459",
+    "version": "0.3.466",
     "default_apps": [
       {
         "id": "wizard-ux",
         "repo": "humanitylabs-org/wizard-ux",
-        "commit": "bc03c032b10a8fb49152ceb47bd7d3d906f18437",
-        "image": "ghcr.io/humanitylabs-org/wizard-ux@sha256:c3464e4569645c7d46a914101f4bcccbabbc25b18e8d3d2a0ce5a36038b7fe2c"
+        "commit": "bd02301349ddfb7b7f181c4b4c520d2a991f5f35",
+        "image": "ghcr.io/humanitylabs-org/wizard-ux@sha256:fab3d4e04774757785ea74b861fca5634755e6450fa28f9d4142fa07a55c92b2"
       },
       {
         "id": "wizard-agent-service",
         "repo": "humanitylabs-org/wizard-agent-service",
-        "commit": "d7c00f29b37b02b2027e7f2167cf733df91b513c",
-        "image": "ghcr.io/humanitylabs-org/wizard-agent-service@sha256:4be218472cf567c484ee01453f063a7cb72012c5ccc950e5a8e4d563c84f02e2"
+        "commit": "d36b371fd883c68877ea5ff5db425f282208027f",
+        "image": "ghcr.io/humanitylabs-org/wizard-agent-service@sha256:0cd311b04e1a2970c8a16d8e25a8833ae24ae3b19027b0b9e08c58b308a4b4bc"
       },
       {
         "id": "wizard-chatgpt",
@@ -85,14 +85,14 @@
     {
       "id": "wizard-calendar",
       "repo": "humanitylabs-org/wizard-calendar",
-      "commit": "b784f738fb0b168fe008ee2414f7ba8331affd36",
-      "version": "0.3.31",
-      "tipi_version": 32,
+      "commit": "c7c9d19b986e27a2923bc7609bd941ddb65dcdb0",
+      "version": "0.3.32",
+      "tipi_version": 33,
       "images": [
         {
           "service": "wizard-calendar",
           "kind": "source",
-          "image": "ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-calendar-wizard-calendar-b784f738fb0b-cbf840f4@sha256:de2fe69fcceb79645d51791967b32666ec4d865f711a1ba0b7b913a5ce9fdf44"
+          "image": "ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-calendar-wizard-calendar-c7c9d19b986e-f30d2dfe@sha256:28959265f32ff0b171a106006b7844adf9148fe2b360f64496ee245709c89afb"
         }
       ]
     },
@@ -148,9 +148,9 @@
     {
       "id": "defleur-video",
       "repo": "humanitylabs-org/defleur-video",
-      "commit": "f6f7b68f4dba513118acfeb79956dd08f5edc9db",
-      "version": "0.7.2",
-      "tipi_version": 15
+      "commit": "86ee9865ae2700a2d652b06d245980197b639708",
+      "version": "0.8.0",
+      "tipi_version": 16
     },
     {
       "id": "feedback",
@@ -169,14 +169,14 @@
     {
       "id": "finances",
       "repo": "humanitylabs-org/money",
-      "commit": "35892c2a68bfbf6e04f1cdc6a716353c48c6fb73",
-      "version": "0.16.15",
-      "tipi_version": 17,
+      "commit": "2dc43d680afab0bf36a18a498ad395475475628c",
+      "version": "0.16.16",
+      "tipi_version": 18,
       "images": [
         {
           "service": "finances",
           "kind": "source",
-          "image": "ghcr.io/humanitylabs-org/wizard-stock-apps:finances-finances-35892c2a68bf-d750f738@sha256:3081cfb1f51e4815f3558ea07678c7258b48747e2c2b8f6349e68b201aa8a62f"
+          "image": "ghcr.io/humanitylabs-org/wizard-stock-apps:finances-finances-2dc43d680afa-23e3502e@sha256:de02a1e7de920d02852f62db4456447dc2babb886e064542cd89e020957b6423"
         }
       ]
     },
@@ -211,9 +211,9 @@
     {
       "id": "hermes-agent",
       "repo": "oscarhenrycollins/hermes-agent",
-      "commit": "5876502ead6abd5d242ad812a1f1fc57356e8155",
-      "version": "v2026.9.24-wizard3",
-      "tipi_version": 8
+      "commit": "63df40f03ebbb80040932328835be596f7974c6a",
+      "version": "v0.23.3-wizard3",
+      "tipi_version": 9
     },
     {
       "id": "hermes-frontend-3",
@@ -239,9 +239,9 @@
     {
       "id": "wizard-mail",
       "repo": "humanitylabs-org/wizard-mail",
-      "commit": "fa0c740431db2f0b6103e7d8d12a08746290439b",
-      "version": "0.12.1",
-      "tipi_version": 29
+      "commit": "8b0bbdf54a2f03c803c5fe4f459cbee0d5d756b7",
+      "version": "0.13.0",
+      "tipi_version": 30
     },
     {
       "id": "wizard-manager",
@@ -260,9 +260,9 @@
     {
       "id": "messenger",
       "repo": "humanitylabs-org/wizard-messenger",
-      "commit": "e8fef6c147f3eca5bbfd1d10a0002c4eea5c7f08",
-      "version": "0.2.0-unified.16.138",
-      "tipi_version": 169
+      "commit": "4bb9202aa96f4e81bd869ab0d1e1023a94611b92",
+      "version": "0.2.0-unified.16.143",
+      "tipi_version": 392
     },
     {
       "id": "wizard-microsoft",
@@ -309,9 +309,9 @@
     {
       "id": "wizard-music",
       "repo": "humanitylabs-org/wizard-music",
-      "commit": "e71bf29848fa7d67df61cbf6cd5b02360416f785",
-      "version": "0.2.0-test.30",
-      "tipi_version": 30
+      "commit": "ce3a9f98a30320e0e6f8f338fa4387ba663a8059",
+      "version": "0.2.0-test.32",
+      "tipi_version": 32
     },
     {
       "id": "notifications",
@@ -400,9 +400,9 @@
     {
       "id": "tg-style",
       "repo": "humanitylabs-org/telegram",
-      "commit": "6257d93144a389ec8f01e801b7e328513da33f12",
-      "version": "0.8.47",
-      "tipi_version": 77
+      "commit": "1efb1781008cbdf5b204b6ee79bbf560a78fa6a1",
+      "version": "0.8.48",
+      "tipi_version": 79
     },
     {
       "id": "wizard-tinfoil",
@@ -463,9 +463,9 @@
     {
       "id": "wizard-agent-service",
       "repo": "humanitylabs-org/wizard-agent-service",
-      "commit": "d7c00f29b37b02b2027e7f2167cf733df91b513c",
+      "commit": "d36b371fd883c68877ea5ff5db425f282208027f",
       "version": "0.3.0-candidate.20261012",
-      "tipi_version": 4
+      "tipi_version": 5
     },
     {
       "id": "wizard-files",
@@ -491,16 +491,16 @@
     {
       "id": "wizard-ux",
       "repo": "humanitylabs-org/wizard-ux",
-      "commit": "bc03c032b10a8fb49152ceb47bd7d3d906f18437",
+      "commit": "bd02301349ddfb7b7f181c4b4c520d2a991f5f35",
       "version": "0.3.0-candidate.20261012",
-      "tipi_version": 4
+      "tipi_version": 5
     },
     {
       "id": "wizardos-tracker",
       "repo": "humanitylabs-org/wizardos-tracker",
-      "commit": "53ba21bfbf02f904b2af27ce677b77e28fb55ddc",
-      "version": "0.63.0",
-      "tipi_version": 36
+      "commit": "48068470df522a7806fbe61cc639a9efbc9c951f",
+      "version": "0.64.0",
+      "tipi_version": 37
     },
     {
       "id": "wizard-youtube-music",

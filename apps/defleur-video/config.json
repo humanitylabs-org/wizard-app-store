@@ -10,13 +10,14 @@
     "utilities"
   ],
   "description": "Hermes drives it over MCP; no browser UI and no LLM calls. Put your video in the Files app (Files → Videos), then tell Hermes the file name; the finished video is saved to Files → Videos → Edited. Bundles James DeFleur's DeFleur Video helpers and runs his whole workflow: import (20 min, up to 4K, iPhone .mov/HDR converted, edited at 1080p), speech-to-text via the Transcriber app, local alignment, sample-exact cuts with evidence and the dialogue gate, fixed per-setup face crops, optional HTML/SVG/GSAP motion graphics captured in the shared Browser app, burned captions, his 1080x1920 encode and delivery gate. Upload links remain as a fallback. No token needed: keep it on your private network (e.g. Tailscale).",
-  "tipi_version": 15,
-  "version": "0.7.2",
+  "tipi_version": 16,
+  "version": "0.8.0",
   "source": "https://github.com/humanitylabs-org/defleur-video",
   "exposable": false,
   "no_gui": true,
   "supported_architectures": [
-    "amd64"
+    "amd64",
+    "arm64"
   ],
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
@@ -48,5 +49,5 @@
       "hint": "Must already be downloaded in the Transcriber app (its startup model)."
     }
   ],
-  "updated_at": 1794360907472
+  "updated_at": 1795782928674
 }

@@ -10,7 +10,7 @@
     "utilities"
   ],
   "description": "Headless Wizard API; independently installed shell. Host Hermes in alongside mode.",
-  "tipi_version": 4,
+  "tipi_version": 5,
   "version": "0.3.0-candidate.20261012",
   "source": "https://github.com/humanitylabs-org/wizard-agent-service",
   "exposable": false,

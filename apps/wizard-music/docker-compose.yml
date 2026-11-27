@@ -1,6 +1,6 @@
 services:
   wizard-music:
-    image: ghcr.io/humanitylabs-org/wizard-music:sha-927da80210eeefdf74c30a3e7e0eada2f0a744ef@sha256:d3cbc685275a4ad48e407b5d1a187e86541e59b62272795ad5fec83464cd5396
+    image: ghcr.io/humanitylabs-org/wizard-music:sha-c9a399939a3521b0e2131e11c13aa066ef8fb524@sha256:442ecd3aa6789c4806e8f7c14d62832fccce7c3dd191099d4a383c4e5474b9e1
     restart: unless-stopped
     ports:
       - 127.0.0.1:${APP_PORT}:9205

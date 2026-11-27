@@ -163,20 +163,19 @@ Settings › Appearance › Try new features lists unfinished features to try, A
 
 - **Add an app: search the App Store too**: Add an app's search also finds App Store apps.
 - **Agent access under the browser boundary**: Connected accounts' Agent access, boundary on.
-- **Agents run code without asking**: Container agents run code without an approval nobody sees (Agents: Just run, Ask me, Refuse); prompts wait an hour.
 - **Archive on top**: Archive is the first section of the Chats list in both By day and By status, so switching layouts never moves it.
 - **Ask before sharing feature counts**: Shared only after you say Share.
 - **Automatic chat tags**: Chats are tagged from what they are about; a channel's What goes here… edits its list.
 - **Backup health in Resources**: Resources shows your backup's health.
 - **Bottom app bar on desktop**: Apps bar at the bottom on any width.
+- **Buttons that tick things off in apps**: Reply buttons that tick something off in an app (a checklist step) with no agent reply; a failure shows Retry.
 - **Calm offline card**: The can't-reach-your-Wizard card shows one dotted path (Internet · Tailscale · Wizard), one short next step and a small Check again with the automatic re-check time.
-- **Channels: a fitting emoji for new channels**: New channels get a fitting emoji.
+- **Catch me up clears Sent**: Catch me up clears finished Sent chats, any age.
 - **Channels: an AI-picked emoji for new channels**: New channels with no emoji get one picked by your Wizard's fast model.
 - **Chat replies as Chats notifications**: Android app: your agent's chat replies reach the phone as Notifications items under Chats; tap opens the chat.
 - **Five-choice first chat**: Five picks, then a first win.
 - **Get set up list in Setup**: Setup lists optional accounts to connect.
 - **Icons on the attach menu**: Android app: the + menu in a chat (and the orb's Attach) shows icons before Photo or video, Camera and File, on bigger rows. (Android app only).
-- **Inbox: alerts as chat rows**: Alerts look like chats.
 - **Inbox: pin threads to the top**: Pin threads on top.
 - **Install apps your agent builds**: Apps I build install with one tap.
 - **Install sheet recommends private AI**: Installing a personal-data app suggests private AI.
@@ -191,13 +190,10 @@ Settings › Appearance › Try new features lists unfinished features to try, A
 - **Phone Apps tile: Favorites panel and quick switcher**: On the phone, tapping Apps opens a slim Favorites panel (search, Favorites, Recent with an x to take an app off) and holding Apps shows nine big bubbles of your recent apps: slide onto one and let go. With an app in front, swipe the bar sideways to step through Recent. (phone only).
 - **Phone media player for Music and Podcasts**: Android and iPhone: Music and Podcasts play through the phone's media player (lock screen, Control Center, headset buttons), and keep playing locked.
 - **Phone recovery mode**: Android: a frozen start reopens in recovery mode.
-- **Phone tester builds**: Phones get the newest tester build.
 - **Private first setup**: New installs start private: Welcome leads with Tinfoil; Claude and ChatGPT are optional extras.
-- **Private mode switch-over**: Settings › Privacy: Private mode, Privacy check.
 - **Private routing**: Orb opens the named agent's thread; a chip moves it.
 - **Repair the agent's Wizard connection**: If the agent's app tools fail (unauthorized), `wizard link` restores the box's token; `wizard doctor` checks it.
 - **Result reader**: A private model files each finished background task.
-- **Running view in the AI apps sidebar**: AI apps: Running view in the sidebar.
 - **Send and go**: On desktop, sending opens a fresh chat.
 - **Share feature counts**: Sends features you tried and your thumbs, plus a random box id.
 - **Share to people in any window**: Share's People row shows Messenger's recent chats in every window.

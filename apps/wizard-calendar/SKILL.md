@@ -20,9 +20,9 @@ there. Only the owner approves, dismisses or changes the level; a refusal (`agen
 / `_update` / `_delete` add, change and delete its events (repeat: none, daily, weekly, monthly, yearly; for one repeat
 pass its id, `scope: series` for all). Changes work only when the owner set Calendar > Settings > This Wizard's
 calendar > Agents to Can edit (default Read-only); `agent_access_denied` is final, tell the owner where to change it.
-Prefer it when the owner has no Google or Microsoft calendar connected or asks for it. With the owner's Radicale switch
-on, the same tools work unchanged (the events are kept in the bundled Radicale server and phones sync them); never ask
-for or repeat the phone sync password.
+Prefer it when the owner has no Google or Microsoft calendar connected or asks for it. Its events are kept in the
+bundled Radicale server, so the owner's phones can sync them (Calendar > Settings > Phone sync); never ask for or repeat
+the phone sync password.
 
 Fresh installs start empty and show Connect Google / Connect Microsoft. The owner connects inside Calendar (one sign-in
 window, no instructions to follow); never ask for passwords or keys in chat. A read-only alternative is Calendar →

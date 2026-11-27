@@ -1,6 +1,6 @@
 services:
   finances:
-    image: ghcr.io/humanitylabs-org/wizard-stock-apps:finances-finances-35892c2a68bf-d750f738@sha256:3081cfb1f51e4815f3558ea07678c7258b48747e2c2b8f6349e68b201aa8a62f
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:finances-finances-2dc43d680afa-23e3502e@sha256:de02a1e7de920d02852f62db4456447dc2babb886e064542cd89e020957b6423
     pids_limit: 64
     user: 1000:1000
     cap_drop:

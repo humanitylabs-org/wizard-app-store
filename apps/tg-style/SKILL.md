@@ -1,7 +1,7 @@
 ---
 name: tg-style
 description: Use when the owner asks about the Telegram look for his chats.
-version: 0.8.47
+version: 0.8.48
 author: Oscar (Hermes Agent)
 license: GPL-3.0-only
 platforms: [linux, macos]
@@ -16,7 +16,7 @@ A Chats view: the owner's Wizard chats drawn like Telegram (chat list with folde
 
 ## Ready sweep
 
-The Sweep button in the Ready folder (switch `ready-sweep`) saves the Ready list the owner saw and opens a new chat starting "Sweep my Ready list: N chats (sw_…)". In that chat, help him clear the list in bulk, the way a backlog review works: you sort, he decides with one-word replies.
+The Sweep button in the Ready folder saves the Ready list the owner saw and opens a new chat starting "Sweep my Ready list: N chats (sw_…)". In that chat, help him clear the list in bulk, the way a backlog review works: you sort, he decides with one-word replies.
 
 1. Call this app's `sweep_list` with the sweep id from the first message (call it directly, no tool search needed). Leave out other "Ready sweep" chats. Before planning, drop any chat that has since been archived or is running again.
 2. Hermes sessions API: `http://127.0.0.1:8642` (API_SERVER_PORT is usually not set in ~/.hermes/.env; 8642 is the default), header `Authorization: Bearer $API_SERVER_KEY` from that file, never printed. `GET /api/sessions/<id>` returns `{session: {...}}`; messages are `GET /api/sessions/<id>/messages?order=latest&limit=8`, rows under `data` (order is `oldest` or `latest` only).

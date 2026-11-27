@@ -5,7 +5,7 @@ renamed_from: [board, wizard-os-tracker]
 name: WizardOS Tracker
 type: view
 category: app
-version: 0.63.0
+version: 0.64.0
 summary: "The WizardOS team's build line: goals, features and bugs on GitHub. Install, sign in with GitHub, done."
 tags: [developer, productivity]
 license: GPL-3.0-only
@@ -32,7 +32,7 @@ view:
     dist: web
 provides: [project-board]
 system: false
-uses: []
+uses: [notifications]
 needs: []
 health: /healthz
 switches:
@@ -166,6 +166,8 @@ Try it (0.14.0, Miguel): the **Try it** switch on a Human review row is the chan
 **0.36.5** (Miguel, 16 Nov) **Approve a core idea while it is still being sorted.** A Report or request idea about WizardOS sits under Waiting for approval from the start, but while the builder was still sorting it (label triage) its card had no Approve button, only Mark done. It now shows Approve / Decline there too for James or Miguel; once approved it says 'Approved · the builder files it in the right place, then starts', and the label carries over when the builder moves it.
 
 **0.36.6** (James, 17 Nov) **Building is back on Core features, and one way to finish a check.** The Core strip shows Build queue (approved, waiting for the builder) and **Building** (the builder is on it) as two stages again, so you can see whether the builder is working (its stats: approved → the builder starts, and the builder starts → handed off). In an item's sheet, the confirm popover (e.g. Works) stays inside the sheet at every panel width instead of running past its left edge (wizardos-tracker#102). An open bug or feature waiting for its check now has one finishing action, **Works**, which tags it Checked by you and closes it; Mark done is no longer shown next to it there (it stays for goals and items with no check question), and Works' confirm says it closes (wizardos-tracker#103).
+
+**0.64.0** (Oscar for Miguel and Jan, 27 Nov) **All, Created by me, a refresh in the item's sheet, and Try it counts.** An **All** tab left of Core · Apps · Bugs lists the three in one (built on the page from the tabs' own answers; no Stats there; #70). A **Created by me** pill in the tools row ('By me' on phones) keeps only the items you filed, your own agents' filings included, on every list tab at once, remembered on the device (#69; split answers carry `agents_of`). The item's sheet has its own **refresh** button next to the item number and reads itself again every 30 s while open (description, comments, its line and its stage; the reply box is never touched; #68). Items behind a feature switch show **Tried by N · 👍 N · 👎 N** on the card and in the sheet, from the anonymous Try new features counts (`GET /api/switch-counts`, read through the Feedback relay's `/v1/switch-counts` with your own token, kept 5 min; nothing shows until someone tried it; #86). A stale **Update** offer for the Tracker or an app is checked against fresh facts on tap (the App Manager's list and the Tracker's own /healthz): when it is already current the offer goes away instead of failing with 'already the latest', and a self-update that looked stuck is cleared once the box runs the new version (#74). **Needs you notification** (#87; 0.34.1 had dropped it): while `needs-you-badge` is on, a 10-minute background round sends ONE Notifications alert when the badge's count rises above the last count it told about ("3 things wait for you in the Tracker", the new ones named); the same or a lower count sends nothing, the first round only sets the mark, and an alert Notifications didn't take is tried once more on the next round (`needs-you-notified.json`; `uses: [notifications]`, `WIZARD_NOTIFY_URL`).
 
 **0.63.0** (Oscar for Miguel, 27 Nov) **The builder's pace and Claude allowance read true.** The measured pace counts only working hours (at least one job running): time paused or held for the Claude allowance no longer drags the average down (`server.pace_hours` = working hours, `pace_span_hours` = the clock hours they took; the pop-up row reads 'Done per hour (last 12 working h)'). The builder now reads every Claude account in its pool, so `quota_used_pct` is the account it can use now and the Claude allowance row names every account (`server.quota_accounts`: label, used_pct, resets_at, in_use).
 

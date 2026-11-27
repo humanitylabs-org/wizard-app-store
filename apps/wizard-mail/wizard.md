@@ -4,7 +4,7 @@ id: wizard-mail
 name: Mail
 type: service
 category: app
-version: 0.12.1
+version: 0.13.0
 icon: icon.png
 summary: One inbox for the Google and Microsoft accounts on your Wizard. Connect from inside Mail; read, search, write and send.
 personal_data: reads your email   # holds the owner's personal data (wizard-os spec/WIZARD_MD.md "Personal data"); a label only
@@ -52,7 +52,7 @@ Your email in Wizard: one inbox for every Google and Microsoft account you conne
 - **Connect Gmail from inside Mail** (on for everyone since 0.9.0; wizard-connectors#21, wizard-mail#29). Connect your email → Google opens one sheet: Continue to Google, tap Allow on Google's screen, and the Gmail shows up. It goes through your Google app in Connected accounts (0.4.0 or later), which turns its Gmail for Mail on by itself; no switch. Gmail then reads through Connected accounts: one Google app, one sign-in. Quick connect and your own Google app stay under Other ways.
 - **Tell your agent about new mail** (on for everyone since 0.12.0; wizard-mail#26). Each new email goes to your agent's inbox as a short note (sender, subject, one line of text, never the whole email), where the Agent Service's alert rules decide what reaches Alerts and what waits for the next sweep. Needs the agent inbox (`wizard/agent-inbox`) on. Mail already waiting when Mail first checks, and mail older than two days, is never sent.
 - **Drafts waiting for you** (switch, off by default: Tracker Try it, `drafts-waiting`). A Drafts count in the side list and a strip on top of the Inbox with the drafts your agent wrote.
-- **Keep your mail on your Wizard** (since 0.11.0; switch, off by default: Tracker Try it, `on-box-store`; wizard-mail#35). Mail copies your Gmail and Outlook mail (Inbox, Archive, Sent, Trash, with every file and photo) into a mail store on your Wizard, the stock Stalwart server that comes with Mail and is reachable only inside your Wizard, and keeps it in step. Once an account is fully copied, your lists and the reader come from there; the screens stay the same. Gmail and Outlook still send and receive, and keep their own copy. Off: Mail reads them directly again.
+- **Keep your mail on your Wizard** (on for everyone since 0.13.0; wizard-mail#35). Mail copies your Gmail and Outlook mail (Inbox, Archive, Sent, Trash, with every file and photo) into a mail store on your Wizard, the stock Stalwart server that comes with Mail and is reachable only inside your Wizard, and keeps it in step. Once an account is fully copied, your lists and the reader come from there; the screens stay the same. Gmail and Outlook still send and receive, and keep their own copy. If the store does not answer, Mail reads them directly.
 - **Mark all as read.** One button at the top of the list marks every unread message in what you are looking at (all inboxes or one account, Inbox or Archive, and your search) as read in Gmail or Outlook itself. Undo puts them back.
 - **Phone and desktop.** One column on a phone; list and reader side by side, plus mailboxes, on a wide window.
 - **Settings, like Messenger's.** Connected accounts as tiles (tap one to see or disconnect it, + to connect another) and Agent access: No access, Read-only or Draft only (recommended, the default).

@@ -5,7 +5,7 @@ name: Hermes Agent
 type: agent
 category: agent
 tags: [productivity, automation]
-version: 2026.9.24-wizard3
+version: 0.23.3-wizard3
 summary: The AI agent itself (Nous Research), with Claude subscription support built in.
 icon: icon.png
 license: MIT
