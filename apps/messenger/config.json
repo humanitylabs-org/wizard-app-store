@@ -10,8 +10,8 @@
     "utilities"
   ],
   "description": "Private unified inbox with People, Groups, Telegram and optional Tinfoil translation. Matrix is internal plumbing; existing encrypted Marmot DMs remain available. Unified history is stored locally as plaintext; Telegram cloud chats are not end-to-end encrypted.",
-  "tipi_version": 166,
-  "version": "0.2.0-unified.16.135",
+  "tipi_version": 169,
+  "version": "0.2.0-unified.16.138",
   "source": "https://github.com/humanitylabs-org/wizard-messenger",
   "exposable": false,
   "no_gui": false,

@@ -1,6 +1,6 @@
 services:
   unified-init:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-2a3eaa29bf4a5aebc66580ea48f2dd7530bed911@sha256:a025467d2cebbeea737599ca660acd014dbd44bc7696afc6320a16ebd715111b}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-a2c7dc3360a53d3c8c505096f890593182ca144a@sha256:594b5292a105eb939851132aa8240d56d1a4ca20ffcec94f75a452bc00afd665}
     user: 0:0
     entrypoint:
       - python3
@@ -28,7 +28,7 @@ services:
     labels:
       runtipi.managed: "false"
   messenger:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-2a3eaa29bf4a5aebc66580ea48f2dd7530bed911@sha256:a025467d2cebbeea737599ca660acd014dbd44bc7696afc6320a16ebd715111b}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-a2c7dc3360a53d3c8c505096f890593182ca144a@sha256:594b5292a105eb939851132aa8240d56d1a4ca20ffcec94f75a452bc00afd665}
     read_only: true
     cap_drop:
       - ALL
@@ -49,7 +49,7 @@ services:
       MESSENGER_PORT: "8765"
       MESSENGER_AGENT_INBOX_TOKEN: ${MESSENGER_AGENT_INBOX_TOKEN:-}
       MESSENGER_AGENT_SERVICE: ${MESSENGER_AGENT_SERVICE:-http://wizard-agent-service:8787}
-      MESSENGER_VERSION: 0.2.0-unified.16.135
+      MESSENGER_VERSION: 0.2.0-unified.16.138
       UNIFIED_ENABLED: "1"
       CONNECTORS_ENABLED: "1"
       MESSENGER_CONNECTOR_SENDER_MODE: local-owner
@@ -206,7 +206,7 @@ services:
       WIZARD_GRANTS_FILE: /wizard/grants.json
       WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
   translation:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-2a3eaa29bf4a5aebc66580ea48f2dd7530bed911@sha256:a025467d2cebbeea737599ca660acd014dbd44bc7696afc6320a16ebd715111b}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-a2c7dc3360a53d3c8c505096f890593182ca144a@sha256:594b5292a105eb939851132aa8240d56d1a4ca20ffcec94f75a452bc00afd665}
     entrypoint:
       - python3
       - /app/translation.py
@@ -246,7 +246,7 @@ services:
       retries: 3
     restart: unless-stopped
   connector-init:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-2a3eaa29bf4a5aebc66580ea48f2dd7530bed911@sha256:a025467d2cebbeea737599ca660acd014dbd44bc7696afc6320a16ebd715111b}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-a2c7dc3360a53d3c8c505096f890593182ca144a@sha256:594b5292a105eb939851132aa8240d56d1a4ca20ffcec94f75a452bc00afd665}
     user: 0:0
     entrypoint:
       - python3

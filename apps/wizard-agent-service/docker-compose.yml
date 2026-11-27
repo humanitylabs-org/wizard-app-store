@@ -1,6 +1,6 @@
 services:
   wizard-agent-service:
-    image: ghcr.io/humanitylabs-org/wizard-agent-service@sha256:06237e645d5c888d6711a5f8dc5519f4047fbe4b649b215c9da652348ef82db7
+    image: ghcr.io/humanitylabs-org/wizard-agent-service@sha256:4be218472cf567c484ee01453f063a7cb72012c5ccc950e5a8e4d563c84f02e2
     user: 1000:1000
     read_only: true
     cap_drop:

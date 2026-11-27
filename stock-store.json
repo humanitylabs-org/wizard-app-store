@@ -6,23 +6,23 @@
     "commit": "5876502ead6abd5d242ad812a1f1fc57356e8155"
   },
   "release": {
-    "version": "0.3.444",
+    "version": "0.3.459",
     "default_apps": [
       {
         "id": "wizard-ux",
         "repo": "humanitylabs-org/wizard-ux",
-        "commit": "2bb0e1bd9fe2da24d07f73493bbb7b66483d932a",
-        "image": "ghcr.io/humanitylabs-org/wizard-ux@sha256:fde921df476369f581182bb255d8fde979f9e73b919d9b285c442bfb2244af5c"
+        "commit": "bc03c032b10a8fb49152ceb47bd7d3d906f18437",
+        "image": "ghcr.io/humanitylabs-org/wizard-ux@sha256:c3464e4569645c7d46a914101f4bcccbabbc25b18e8d3d2a0ce5a36038b7fe2c"
       },
       {
         "id": "wizard-agent-service",
         "repo": "humanitylabs-org/wizard-agent-service",
-        "commit": "ec9204001d5a7b7a4a7507a9e24a40f1479efc0d",
-        "image": "ghcr.io/humanitylabs-org/wizard-agent-service@sha256:06237e645d5c888d6711a5f8dc5519f4047fbe4b649b215c9da652348ef82db7"
+        "commit": "d7c00f29b37b02b2027e7f2167cf733df91b513c",
+        "image": "ghcr.io/humanitylabs-org/wizard-agent-service@sha256:4be218472cf567c484ee01453f063a7cb72012c5ccc950e5a8e4d563c84f02e2"
       },
       {
         "id": "wizard-chatgpt",
-        "repo": "oscarhenrycollins/chatgpt-connection",
+        "repo": "humanitylabs-org/chatgpt-connection",
         "commit": "f0de194e144f4c8c2981a75448eebc078aa5e1de"
       },
       {
@@ -98,7 +98,7 @@
     },
     {
       "id": "wizard-chatgpt",
-      "repo": "oscarhenrycollins/chatgpt-connection",
+      "repo": "humanitylabs-org/chatgpt-connection",
       "commit": "f0de194e144f4c8c2981a75448eebc078aa5e1de",
       "version": "0.2.20",
       "tipi_version": 2
@@ -260,9 +260,9 @@
     {
       "id": "messenger",
       "repo": "humanitylabs-org/wizard-messenger",
-      "commit": "7d92ed6cb94c47424b295c6210ad6aee86aa5218",
-      "version": "0.2.0-unified.16.135",
-      "tipi_version": 166
+      "commit": "e8fef6c147f3eca5bbfd1d10a0002c4eea5c7f08",
+      "version": "0.2.0-unified.16.138",
+      "tipi_version": 169
     },
     {
       "id": "wizard-microsoft",
@@ -463,9 +463,9 @@
     {
       "id": "wizard-agent-service",
       "repo": "humanitylabs-org/wizard-agent-service",
-      "commit": "ec9204001d5a7b7a4a7507a9e24a40f1479efc0d",
+      "commit": "d7c00f29b37b02b2027e7f2167cf733df91b513c",
       "version": "0.3.0-candidate.20261012",
-      "tipi_version": 3
+      "tipi_version": 4
     },
     {
       "id": "wizard-files",
@@ -491,9 +491,9 @@
     {
       "id": "wizard-ux",
       "repo": "humanitylabs-org/wizard-ux",
-      "commit": "2bb0e1bd9fe2da24d07f73493bbb7b66483d932a",
+      "commit": "bc03c032b10a8fb49152ceb47bd7d3d906f18437",
       "version": "0.3.0-candidate.20261012",
-      "tipi_version": 3
+      "tipi_version": 4
     },
     {
       "id": "wizardos-tracker",
