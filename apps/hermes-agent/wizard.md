@@ -4,7 +4,7 @@ id: hermes-agent
 name: Hermes Agent
 type: agent
 category: agent
-version: v0.23.3-wizard2
+version: v0.23.3-wizard3
 summary: The self-improving AI agent by Nous Research, with the optional Claude app sign-in share.
 license: MIT
 source: https://github.com/humanitylabs-org/wizard-app-store

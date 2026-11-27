@@ -2,3 +2,4 @@
 !Dockerfile
 !fetch-claude-code.py
 !fetch-directsdk-plugin.py
+!fetch-holographic-plugin.py
