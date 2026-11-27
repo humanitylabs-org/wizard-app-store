@@ -2,10 +2,11 @@
 
 The self-improving AI agent by [Nous Research](https://github.com/NousResearch/hermes-agent), packaged for Runtipi with its native dashboard.
 
-**Wizard build (v0.23.3-wizard2).** The official `nousresearch/hermes-agent:v0.23.3` image, pinned by digest, with two official add-ons and nothing else changed:
+**Wizard build (v0.23.3-wizard3).** The official `nousresearch/hermes-agent:v0.23.3` image, pinned by digest, with these add-ons and nothing else changed:
 
 - **Claude Code 2.1.296**, Anthropic's official CLI (integrity-checked, auto-update off).
 - **Claude Subscription DirectSDK (Experimental)**, NousResearch's official provider plugin (MIT, version 0.4.1 from NousResearch/hermes-official-plugins, pinned commit `968160c`), built into Hermes' provider folder.
+- **Holographic memory 0.30.0**, the local fact-store memory provider that moved out of Hermes core into a catalog plugin (MIT, itpartypattaya/hermes-plugin-holographic at commit `ed73195`, the commit Hermes' own catalog pins), built in where it lived in core. Agents that use it start with their memory working, also without internet, and nothing is downloaded at first start.
 
 Together they let Hermes use the Claude subscription you connect in the **Claude app**. Your current model and provider stay exactly as they are until you choose Claude yourself.
 

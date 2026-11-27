@@ -1,6 +1,6 @@
 services:
   hermes-agent:
-    image: ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard2
+    image: ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard3
     command: ["gateway", "run"]
     stop_grace_period: 1m
     volumes:
