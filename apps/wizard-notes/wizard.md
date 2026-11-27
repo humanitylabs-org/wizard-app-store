@@ -5,7 +5,8 @@ name: Wizard Notes
 type: service
 category: app
 privacy: private
-version: 0.1.0-alpha.16
+personal_data: reads your notes   # holds the owner's personal data (wizard-os spec/WIZARD_MD.md "Personal data"); a label only
+version: 0.1.0-alpha.17
 summary: A private Markdown vault with nested folders, linked thoughts and fast full-text search.
 license: GPL-3.0-only
 source: https://github.com/humanitylabs-org/wizard-notes

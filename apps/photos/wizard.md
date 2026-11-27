@@ -5,8 +5,9 @@ name: Photos
 type: view
 category: app
 tags: [photos]
-version: 0.5.2
+version: 0.5.3
 summary: Your own Google Photos on your Wizard (Immich). Import from Google Takeout, group faces, clean up, back up your phone.
+personal_data: reads your photos   # holds the owner's personal data (wizard-os spec/WIZARD_MD.md "Personal data"); a label only
 icon: icon.png
 license: AGPL-3.0-only
 source: https://github.com/humanitylabs-org/photos

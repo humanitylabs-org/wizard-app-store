@@ -10,8 +10,8 @@
     "media"
   ],
   "description": "Unmodified Immich, the open-source Google Photos replacement, on your own box. Import your whole Google Photos library from Google Takeout (dates, places, descriptions and albums come across), let Immich group faces and index what is in each photo, then clean up: find photos by person, date, place or meaning, and move the ones you don't want to the trash. Back up your Android phone from the Wizard OS app (Photos › Phone backup: one switch, Wi-Fi only, choose albums), or any phone with the official Immich app. Photos live in Files > Photos > Library; drop Takeout .zip files in Files > Photos > Import. No account or password: your Tailscale is the lock, on the Wizard screen and in the Immich phone app. Your agent is connected by itself and can count, find, import and move to trash (never a permanent delete). Face recognition and search run on this box's CPU. Needs about 4 GB of RAM and disk for your whole library.",
-  "tipi_version": 14,
-  "version": "0.5.2",
+  "tipi_version": 15,
+  "version": "0.5.3",
   "source": "https://github.com/humanitylabs-org/photos",
   "website": "https://immich.app",
   "exposable": true,
@@ -20,7 +20,7 @@
     "arm64"
   ],
   "created_at": 1794789382991,
-  "updated_at": 1795650145126,
+  "updated_at": 1795740481860,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "form_fields": []

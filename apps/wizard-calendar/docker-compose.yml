@@ -1,6 +1,6 @@
 services:
   wizard-calendar:
-    image: ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-calendar-wizard-calendar-1b03af2108f4-47d51fa6@sha256:3169207d7b6d3fbcda1ba4be3254c9265030a4ca60c9a72edda819011186895d
+    image: ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-calendar-wizard-calendar-b784f738fb0b-cbf840f4@sha256:de2fe69fcceb79645d51791967b32666ec4d865f711a1ba0b7b913a5ce9fdf44
     user: 0:0
     working_dir: /app
     cap_drop:

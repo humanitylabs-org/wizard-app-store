@@ -1,6 +1,6 @@
 services:
   mizel:
-    image: ghcr.io/humanitylabs-org/wizard-recorder-app:0.2.10
+    image: ghcr.io/humanitylabs-org/wizard-recorder-app:0.2.11
     restart: unless-stopped
     user: 0:0
     cap_drop:

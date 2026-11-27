@@ -3,22 +3,22 @@
   "index": "https://apps.aiwizards.com",
   "hermes_pin": {
     "repo": "oscarhenrycollins/hermes-agent",
-    "commit": "e8ae558f26bf4b981e0cad60e387386a1ad7b869"
+    "commit": "5876502ead6abd5d242ad812a1f1fc57356e8155"
   },
   "release": {
-    "version": "0.3.438",
+    "version": "0.3.444",
     "default_apps": [
       {
         "id": "wizard-ux",
         "repo": "humanitylabs-org/wizard-ux",
-        "commit": "7089984787ecc8ca64fd15d31977c4dcac69f0c9",
-        "image": "ghcr.io/humanitylabs-org/wizard-ux@sha256:a7cf5391cf34f6526c5df70c44d08b541cf56d4377eddb728ab79e3cc778a4bc"
+        "commit": "2bb0e1bd9fe2da24d07f73493bbb7b66483d932a",
+        "image": "ghcr.io/humanitylabs-org/wizard-ux@sha256:fde921df476369f581182bb255d8fde979f9e73b919d9b285c442bfb2244af5c"
       },
       {
         "id": "wizard-agent-service",
         "repo": "humanitylabs-org/wizard-agent-service",
-        "commit": "aef5a91407b2eb01e6f6e36651cb6b963341f002",
-        "image": "ghcr.io/humanitylabs-org/wizard-agent-service@sha256:7baf000b7cde8fa261a5a68e959aa7fd3d1a9597003a811b4beecd09d99145fd"
+        "commit": "ec9204001d5a7b7a4a7507a9e24a40f1479efc0d",
+        "image": "ghcr.io/humanitylabs-org/wizard-agent-service@sha256:06237e645d5c888d6711a5f8dc5519f4047fbe4b649b215c9da652348ef82db7"
       },
       {
         "id": "wizard-chatgpt",
@@ -85,14 +85,14 @@
     {
       "id": "wizard-calendar",
       "repo": "humanitylabs-org/wizard-calendar",
-      "commit": "1b03af2108f4186c77c2c4574d7ec41581eb275b",
-      "version": "0.3.30",
-      "tipi_version": 31,
+      "commit": "b784f738fb0b168fe008ee2414f7ba8331affd36",
+      "version": "0.3.31",
+      "tipi_version": 32,
       "images": [
         {
           "service": "wizard-calendar",
           "kind": "source",
-          "image": "ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-calendar-wizard-calendar-1b03af2108f4-47d51fa6@sha256:3169207d7b6d3fbcda1ba4be3254c9265030a4ca60c9a72edda819011186895d"
+          "image": "ghcr.io/humanitylabs-org/wizard-stock-apps:wizard-calendar-wizard-calendar-b784f738fb0b-cbf840f4@sha256:de2fe69fcceb79645d51791967b32666ec4d865f711a1ba0b7b913a5ce9fdf44"
         }
       ]
     },
@@ -134,9 +134,9 @@
     {
       "id": "contacts",
       "repo": "humanitylabs-org/contacts",
-      "commit": "58e2c575225c105bd1d5cc9c19dba7948c3aa3bd",
-      "version": "0.4.4",
-      "tipi_version": 7
+      "commit": "546ea11850a70511c71e8543860b75161ce1b892",
+      "version": "0.4.5",
+      "tipi_version": 8
     },
     {
       "id": "wizard-coros",
@@ -169,14 +169,14 @@
     {
       "id": "finances",
       "repo": "humanitylabs-org/money",
-      "commit": "4a3e403a2b226a1f72d8e8fc3361b8424c367d3d",
-      "version": "0.16.14",
-      "tipi_version": 16,
+      "commit": "35892c2a68bfbf6e04f1cdc6a716353c48c6fb73",
+      "version": "0.16.15",
+      "tipi_version": 17,
       "images": [
         {
           "service": "finances",
           "kind": "source",
-          "image": "ghcr.io/humanitylabs-org/wizard-stock-apps:finances-finances-4a3e403a2b22-bfbe6385@sha256:b6a0d0d4c899b584cb3ef8cadba3a6b272d3fb170db6e220d87a7a85b6b1aad9"
+          "image": "ghcr.io/humanitylabs-org/wizard-stock-apps:finances-finances-35892c2a68bf-d750f738@sha256:3081cfb1f51e4815f3558ea07678c7258b48747e2c2b8f6349e68b201aa8a62f"
         }
       ]
     },
@@ -211,9 +211,9 @@
     {
       "id": "hermes-agent",
       "repo": "oscarhenrycollins/hermes-agent",
-      "commit": "e8ae558f26bf4b981e0cad60e387386a1ad7b869",
-      "version": "v2026.9.24-wizard2",
-      "tipi_version": 6
+      "commit": "5876502ead6abd5d242ad812a1f1fc57356e8155",
+      "version": "v2026.9.24-wizard3",
+      "tipi_version": 8
     },
     {
       "id": "hermes-frontend-3",
@@ -232,16 +232,16 @@
     {
       "id": "importer",
       "repo": "humanitylabs-org/wizard-importer",
-      "commit": "c2d8a5c08d5ba55bb959852998fc19c5a616b1c0",
-      "version": "0.1.12",
-      "tipi_version": 13
+      "commit": "73aa95660573259350aa4e3905abbef9d21e89ab",
+      "version": "0.1.13",
+      "tipi_version": 14
     },
     {
       "id": "wizard-mail",
       "repo": "humanitylabs-org/wizard-mail",
-      "commit": "3e614f67f4ce285ff99d9580bc65c5377049be62",
-      "version": "0.12.0",
-      "tipi_version": 28
+      "commit": "fa0c740431db2f0b6103e7d8d12a08746290439b",
+      "version": "0.12.1",
+      "tipi_version": 29
     },
     {
       "id": "wizard-manager",
@@ -260,9 +260,9 @@
     {
       "id": "messenger",
       "repo": "humanitylabs-org/wizard-messenger",
-      "commit": "551e767a575d0432bbfd7c952f4bcbea4188c90e",
-      "version": "0.2.0-unified.16.128",
-      "tipi_version": 159
+      "commit": "7d92ed6cb94c47424b295c6210ad6aee86aa5218",
+      "version": "0.2.0-unified.16.135",
+      "tipi_version": 166
     },
     {
       "id": "wizard-microsoft",
@@ -337,9 +337,9 @@
     {
       "id": "photos",
       "repo": "humanitylabs-org/photos",
-      "commit": "f02304408f9ad2e3d81ba9287c16d40aaacc4b40",
-      "version": "0.5.2",
-      "tipi_version": 14
+      "commit": "d1c2556c7fe3ed8b3764cc0b0058c8c82c494eb3",
+      "version": "0.5.3",
+      "tipi_version": 15
     },
     {
       "id": "wizard-podcasts",
@@ -365,16 +365,16 @@
     {
       "id": "mizel",
       "repo": "humanitylabs-org/wizard-recorder",
-      "commit": "1314a684571bf2ae96966a1bfe3e79517e80175e",
-      "version": "0.2.10",
-      "tipi_version": 8
+      "commit": "0b3d00f5c5a46829c47974a4592d43b5ec74e6ff",
+      "version": "0.2.11",
+      "tipi_version": 9
     },
     {
       "id": "wizard-search",
       "repo": "humanitylabs-org/wizard-search",
-      "commit": "243e618fb1fd6a1a9290a39d0ce93a784e89cde1",
-      "version": "0.3.14",
-      "tipi_version": 15
+      "commit": "26f4620746de077ea134af32fe67331d4c647fec",
+      "version": "0.3.16",
+      "tipi_version": 17
     },
     {
       "id": "secret-drop",
@@ -463,9 +463,9 @@
     {
       "id": "wizard-agent-service",
       "repo": "humanitylabs-org/wizard-agent-service",
-      "commit": "aef5a91407b2eb01e6f6e36651cb6b963341f002",
+      "commit": "ec9204001d5a7b7a4a7507a9e24a40f1479efc0d",
       "version": "0.3.0-candidate.20261012",
-      "tipi_version": 2
+      "tipi_version": 3
     },
     {
       "id": "wizard-files",
@@ -484,16 +484,16 @@
     {
       "id": "wizard-notes",
       "repo": "humanitylabs-org/wizard-notes",
-      "commit": "41026cd7b56b6b781c0d68c3887b8f966903a75b",
-      "version": "0.1.0-alpha.16",
-      "tipi_version": 11
+      "commit": "ecd1503c1a30b310c66b9b1e91eaf4c2f3abcaa8",
+      "version": "0.1.0-alpha.17",
+      "tipi_version": 12
     },
     {
       "id": "wizard-ux",
       "repo": "humanitylabs-org/wizard-ux",
-      "commit": "7089984787ecc8ca64fd15d31977c4dcac69f0c9",
+      "commit": "2bb0e1bd9fe2da24d07f73493bbb7b66483d932a",
       "version": "0.3.0-candidate.20261012",
-      "tipi_version": 2
+      "tipi_version": 3
     },
     {
       "id": "wizardos-tracker",

@@ -1,6 +1,6 @@
 services:
   unified-init:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:7170cc3225fe0f43d38bf12d3c29abe5ed441c8e12e4f976d84720a8f26a6980}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-2a3eaa29bf4a5aebc66580ea48f2dd7530bed911@sha256:a025467d2cebbeea737599ca660acd014dbd44bc7696afc6320a16ebd715111b}
     user: 0:0
     entrypoint:
       - python3
@@ -28,7 +28,7 @@ services:
     labels:
       runtipi.managed: "false"
   messenger:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:7170cc3225fe0f43d38bf12d3c29abe5ed441c8e12e4f976d84720a8f26a6980}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-2a3eaa29bf4a5aebc66580ea48f2dd7530bed911@sha256:a025467d2cebbeea737599ca660acd014dbd44bc7696afc6320a16ebd715111b}
     read_only: true
     cap_drop:
       - ALL
@@ -49,7 +49,7 @@ services:
       MESSENGER_PORT: "8765"
       MESSENGER_AGENT_INBOX_TOKEN: ${MESSENGER_AGENT_INBOX_TOKEN:-}
       MESSENGER_AGENT_SERVICE: ${MESSENGER_AGENT_SERVICE:-http://wizard-agent-service:8787}
-      MESSENGER_VERSION: 0.2.0-unified.16.128
+      MESSENGER_VERSION: 0.2.0-unified.16.135
       UNIFIED_ENABLED: "1"
       CONNECTORS_ENABLED: "1"
       MESSENGER_CONNECTOR_SENDER_MODE: local-owner
@@ -84,14 +84,13 @@ services:
       is_main: true
       internal_port: 8765
   matrix:
-    image: ghcr.io/element-hq/synapse@sha256:e98ab72138d90fa8b8876c6421fe78a9fdb181c0d7cc690ad740e5173e0c65e6
+    image: ghcr.io/element-hq/synapse:v1.166.0@sha256:2cdc84f1de4687af89e4b7b1fe7b5f93e0ee7913243b63f79b05319cb6a8f525
     user: 1000:1000
     entrypoint:
-      - python
-      - -m
-      - synapse.app.homeserver
-      - --config-path
-      - /data/homeserver.yaml
+      - /bin/sh
+      - -c
+    command:
+      - if [ -f /data/synapse_start.py ]; then exec python /data/synapse_start.py; fi; exec python -m synapse.app.homeserver --config-path /data/homeserver.yaml
     read_only: true
     cap_drop:
       - ALL
@@ -110,8 +109,11 @@ services:
         condition: service_completed_successfully
       connector-init:
         condition: service_completed_successfully
+      postgres:
+        condition: service_started
     networks:
       - matrix-lane
+      - postgres-lane
     healthcheck:
       test:
         - CMD
@@ -121,10 +123,48 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
+      start_period: 20m
     restart: unless-stopped
     environment:
       WIZARD_GRANTS_FILE: /wizard/grants.json
       WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+  postgres:
+    image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+    user: 1000:1000
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - trap "exit 0" TERM INT; until [ -f /pg/enabled ]; do sleep 5 & wait $$!; done; exec docker-entrypoint.sh postgres
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+      - /var/run/postgresql:rw,noexec,nosuid,size=8m,uid=1000,gid=1000
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      PGDATA: /pg/db
+      POSTGRES_USER: synapse
+      POSTGRES_DB: synapse
+      POSTGRES_PASSWORD_FILE: /pg/password
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --lc-collate=C --lc-ctype=C
+      WIZARD_GRANTS_FILE: /wizard/grants.json
+      WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
+    volumes:
+      - ${APP_DATA_DIR}/data/postgres:/pg
+      - ${APP_DATA_DIR}/wizard:/wizard:ro
+      - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
+    depends_on:
+      unified-init:
+        condition: service_completed_successfully
+    networks:
+      - postgres-lane
+    stop_grace_period: 30s
+    restart: unless-stopped
   telegram:
     image: ${TELEGRAM_IMAGE:-ghcr.io/humanitylabs-org/wizard-telegram-bridge:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:a41232b2e3f2b9786d5978540ede2e5bcfcde7de3309fa8178ec257a1cb5dc4b}
     user: 1000:1000
@@ -166,7 +206,7 @@ services:
       WIZARD_GRANTS_FILE: /wizard/grants.json
       WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
   translation:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:7170cc3225fe0f43d38bf12d3c29abe5ed441c8e12e4f976d84720a8f26a6980}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-2a3eaa29bf4a5aebc66580ea48f2dd7530bed911@sha256:a025467d2cebbeea737599ca660acd014dbd44bc7696afc6320a16ebd715111b}
     entrypoint:
       - python3
       - /app/translation.py
@@ -206,7 +246,7 @@ services:
       retries: 3
     restart: unless-stopped
   connector-init:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-ca3f781e94cefe315adb464b6a37d84933d2bdb3@sha256:7170cc3225fe0f43d38bf12d3c29abe5ed441c8e12e4f976d84720a8f26a6980}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-2a3eaa29bf4a5aebc66580ea48f2dd7530bed911@sha256:a025467d2cebbeea737599ca660acd014dbd44bc7696afc6320a16ebd715111b}
     user: 0:0
     entrypoint:
       - python3
@@ -662,6 +702,8 @@ services:
       - ${APP_DATA_DIR}/wizard-requests:/wizard-requests
 networks:
   matrix-lane:
+    internal: true
+  postgres-lane:
     internal: true
   signin-lane:
     internal: true

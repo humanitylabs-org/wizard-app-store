@@ -10,8 +10,8 @@
     "media"
   ],
   "description": "People, phones, emails, accounts on each network, photos and notes. Import and export vCard.",
-  "tipi_version": 7,
-  "version": "0.4.4",
+  "tipi_version": 8,
+  "version": "0.4.5",
   "source": "https://github.com/oscarhenrycollins/contacts",
   "exposable": false,
   "supported_architectures": [
@@ -19,7 +19,7 @@
     "arm64"
   ],
   "created_at": 1793325837139,
-  "updated_at": 1795380216741,
+  "updated_at": 1795740935574,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,

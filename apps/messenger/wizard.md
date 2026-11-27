@@ -2,10 +2,11 @@
 wizard: 0.2
 id: messenger
 name: Messenger
-version: 0.2.0-unified.16.128
+version: 0.2.0-unified.16.135
 type: service
 category: app
 summary: Encrypted text conversations with your peers, inside Wizard.
+personal_data: reads your messages   # holds the owner's personal data (wizard-os spec/WIZARD_MD.md "Personal data"); a label only
 license: MIT
 # Listed in the official public Wizard App Index (Standard release only).
 source: https://github.com/humanitylabs-org/wizard-messenger

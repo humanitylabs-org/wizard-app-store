@@ -1,6 +1,6 @@
 services:
   wizard-ux:
-    image: ghcr.io/humanitylabs-org/wizard-ux@sha256:a7cf5391cf34f6526c5df70c44d08b541cf56d4377eddb728ab79e3cc778a4bc
+    image: ghcr.io/humanitylabs-org/wizard-ux@sha256:fde921df476369f581182bb255d8fde979f9e73b919d9b285c442bfb2244af5c
     user: 101:101
     read_only: true
     cap_drop:

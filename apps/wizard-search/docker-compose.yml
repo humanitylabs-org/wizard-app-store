@@ -1,6 +1,6 @@
 services:
   wizard-search:
-    image: ghcr.io/humanitylabs-org/wizard-search:sha-3d9cc92b75fa4bc1208cc15593e90c026737d3c5@sha256:c067854fb2b1540fa9e564e906c5f7fae362fe0623a0bdcaf0d7eeff48b2f4ef
+    image: ghcr.io/humanitylabs-org/wizard-search:sha-5ac8ebfb749d9004f4c1441f92c58bd02df6ef10@sha256:4d130f745df55d3215564d9927688532c3d30072b9a35f8fc49783492afe062d
     user: 1000:1000
     read_only: true
     cap_drop:

@@ -4,8 +4,9 @@ id: wizard-calendar
 name: Calendar
 type: view
 category: app
-version: 0.3.30
+version: 0.3.31
 summary: Your Google and Microsoft calendars in one view. Add, edit and answer invites; private iCal links and snapshots too.
+personal_data: reads your calendar   # holds the owner's personal data (wizard-os spec/WIZARD_MD.md "Personal data"); a label only
 license: MIT
 source: https://github.com/humanitylabs-org/wizard-calendar
 runtime:

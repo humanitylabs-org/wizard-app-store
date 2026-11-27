@@ -11,7 +11,7 @@ services:
     mem_limit: 256m
     environment:
       WIZARD_APP: hermes-agent
-      APP_VERSION: v2026.9.24-wizard2
+      APP_VERSION: v2026.9.24-wizard3
       FRONT_PORT: "9119"
       UPSTREAM_HOST: hermes-agent-engine
       UPSTREAM_PORT: "9119"
@@ -262,7 +262,7 @@ services:
     ports:
       - 127.0.0.1:${APP_PORT}:9119
   hermes-agent-engine:
-    image: ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard2@sha256:ac89f5f9fa16eda6c7aba3de3ba7235da3d867914e3ae2dcf13135ee078fd3b0
+    image: ghcr.io/humanitylabs-org/hermes-agent:v2026.9.24-wizard3@sha256:418566205540ac68a0ced01970972446f6b769d075341f23dae6b9dcf74aa99e
     command:
       - gateway
       - run

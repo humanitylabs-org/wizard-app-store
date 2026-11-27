@@ -10,8 +10,8 @@
     "utilities"
   ],
   "description": "Move to Wizard without losing your history. Pick where your AI lives now: the Importer shows you exactly how to get the export (with direct links), waits for it, then shows what it found. You choose what comes in and approve a short 'What I know about you' card before anything becomes memory. Chats become searchable files in Files › Imported, skills and personality come along, and every import can be undone. Claude Code and Hermes on this Wizard need no export. Everything stays on your Wizard.",
-  "tipi_version": 13,
-  "version": "0.1.12",
+  "tipi_version": 14,
+  "version": "0.1.13",
   "source": "https://github.com/humanitylabs-org/wizard-importer",
   "exposable": false,
   "supported_architectures": [
@@ -19,7 +19,7 @@
     "arm64"
   ],
   "created_at": 1791500000000,
-  "updated_at": 1795474362869,
+  "updated_at": 1795746880212,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,
