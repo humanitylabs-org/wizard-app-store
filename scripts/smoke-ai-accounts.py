@@ -115,9 +115,10 @@ def data_parity(tmp: Path):
         if trees["wizard"][rel] == hashlib.sha256(text.encode()).hexdigest():
             unchanged.append(rel)
     # Runtime state the gateway writes on its own schedule (SQLite DBs such as kanban.db appear a few seconds
-    # into a boot, so whether a 5 s boot has them is a race), plus caches and heartbeats.
+    # into a boot, so whether a 5 s boot has them is a race), plus caches and heartbeats (the cron
+    # ticker writes its heartbeat on its own schedule, so a boot may or may not have it).
     volatile = (".db", ".db-wal", ".db-shm", ".lock", ".pid", "gateway_state", "auth.json", ".tmp", "logs/", "cache/",
-                ".pyc", "spawn-ledger.json", "state/gateway.")
+                ".pyc", "spawn-ledger.json", "state/gateway.", "cron/ticker_")
     only = {k: sorted(p for p in set(trees[k]) - set(trees[o]) if not any(v in p for v in volatile))
             for k, o in (("official", "wizard"), ("wizard", "official"))}
     assert only == {"official": [], "wizard": []}, only
