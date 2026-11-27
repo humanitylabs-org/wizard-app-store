@@ -44,7 +44,8 @@ for (const id of readdirSync("apps", { withFileTypes: true }).filter(d => d.isDi
       expect(s.image).toBe(`ghcr.io/humanitylabs-org/hermes-agent:${config.version}`);
       const [upstream] = config.version.split("-wizard");
       const dockerfile = readFileSync("images/hermes-agent/Dockerfile", "utf8");
-      expect(dockerfile).toMatch(new RegExp(`^FROM nousresearch/hermes-agent:${upstream.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`, "m"));
+      expect(dockerfile).toMatch(/^FROM \$\{BASE_IMAGE\}$/m);
+      expect(dockerfile).toMatch(new RegExp(`^ARG BASE_IMAGE=nousresearch/hermes-agent:${upstream.replaceAll(".", "\\.")}@sha256:[a-f0-9]{64}$`, "m"));
       // Only additions: no entrypoint, user, cmd or HERMES_* override in the extended image.
       for (const directive of ["ENTRYPOINT", "CMD", "USER", "VOLUME", "WORKDIR"]) expect(dockerfile).not.toMatch(new RegExp(`^${directive}\\b`, "m"));
       expect(dockerfile).not.toMatch(/HERMES_[A-Z_]+=/);

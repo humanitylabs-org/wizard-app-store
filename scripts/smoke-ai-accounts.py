@@ -38,8 +38,11 @@ def run(*args, timeout=180, check=True, **kw):
 
 
 def official_image() -> str:
+    # HERMES_OFFICIAL_IMAGE: the BASE_IMAGE the image under test was built from (default: the Dockerfile's).
+    if os.environ.get("HERMES_OFFICIAL_IMAGE"):
+        return os.environ["HERMES_OFFICIAL_IMAGE"]
     text = (ROOT / "images/hermes-agent/Dockerfile").read_text()
-    return next(line.split()[1] for line in text.splitlines() if line.startswith("FROM nousresearch/hermes-agent"))
+    return next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("ARG BASE_IMAGE="))
 
 
 def tree(root: Path) -> dict:
@@ -112,9 +115,10 @@ def data_parity(tmp: Path):
         if trees["wizard"][rel] == hashlib.sha256(text.encode()).hexdigest():
             unchanged.append(rel)
     # Runtime state the gateway writes on its own schedule (SQLite DBs such as kanban.db appear a few seconds
-    # into a boot, so whether a 5 s boot has them is a race), plus caches and heartbeats.
+    # into a boot, so whether a 5 s boot has them is a race), plus caches and heartbeats (the cron
+    # ticker writes its heartbeat on its own schedule, so a boot may or may not have it).
     volatile = (".db", ".db-wal", ".db-shm", ".lock", ".pid", "gateway_state", "auth.json", ".tmp", "logs/", "cache/",
-                ".pyc", "spawn-ledger.json", "state/gateway.")
+                ".pyc", "spawn-ledger.json", "state/gateway.", "cron/ticker_")
     only = {k: sorted(p for p in set(trees[k]) - set(trees[o]) if not any(v in p for v in volatile))
             for k, o in (("official", "wizard"), ("wizard", "official"))}
     assert only == {"official": [], "wizard": []}, only
@@ -153,31 +157,44 @@ grep -c "Traceback" /tmp/out.txt || true
     report["hermes_provider"] = {"claude": out[0], **info, "logged_out_request": "plugin 'no usable login' message, no traceback"}
 
 
-# Two of the pinned plugin's tests probe Hermes core internals rather than the plugin, and core v0.23 moved
-# them: a user-installed plugin now loads from a staged copy under runtime/provider-plugins (this image
-# bundles the plugin instead, checked by hermes_provider above), and ContextCompressor's private
-# _truncate_tool_call_args_at helper is gone. Every other plugin test still runs against this core.
-CORE_INTERNAL_TESTS = (
-    "tests/test_directsdk_discovery.py::test_installed_plugin_registers_and_constructs_client_without_native_process",
-    "tests/test_directsdk_replay.py::test_host_history_edits_replay_canonical_visible_blocks",
+# The plugin's tests bring their own fake Claude Code and login folders, so the image's pointers at the real
+# ones are unset for them. `docker run --user 1000:1000` skips the entrypoint's uid remap, so uid 1000 has no
+# passwd name there (on a box the gateway runs as the named hermes user): give the tests that name.
+TEST_ENV = ("env -u CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR -u CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND "
+            "USER=hermes LOGNAME=hermes HERMES_HOME=/tmp/hh ")
+# On the boxes' locked core (Hermes v0.21.5, tag v2026.9.24) these tests call core helpers that later cores
+# added: multiplexed gateway profiles (agent.secret_scope.reset_multiplex_context), core's premature-close
+# wording in the error classifier, agent.prompt_cache_scope.sibling_cache_scope, the staged frozen plugin copy
+# and streaming dispatch for plugin providers. The plugin falls back on its own where a helper is missing (its
+# floor is Hermes 0.21.4); the tests prove the newer core path, which this core does not have.
+CORE_0_21_TESTS = (
+    "tests/test_directsdk_profile_credential.py",
+    "tests/test_transport_phrase.py",
+    "tests/test_directsdk_cache_ttl.py::test_the_hook_asks_for_5m_on_a_delegated_childs_requests_only",
+    "tests/test_frozen_copy_removed.py",
+    "tests/test_host_streaming.py",
 )
 
 
 def plugin_tests(tmp: Path):
     text = (ROOT / "images/hermes-agent/fetch-directsdk-plugin.py").read_text()
-    commit = text.split('COMMIT = "', 1)[1].split('"', 1)[0]
+    pin = {k: text.split(f'{k} = "', 1)[1].split('"', 1)[0] for k in ("REPO", "COMMIT", "SUBDIR")}
+    commit = pin["COMMIT"]
     tgz = tmp / "plugin.tgz"
-    url = f"https://codeload.github.com/NousResearch/hermes-plugin-claude-subscription-directsdk/tar.gz/{commit}"
+    url = f"https://codeload.github.com/{pin['REPO']}/tar.gz/{commit}"
     tgz.write_bytes(urllib.request.urlopen(url, timeout=120).read())
     os.chmod(tmp, 0o755)
     # Hermes v0.23+ ships no uv or pip to the runtime user (its venv is sealed): put pytest in a throwaway
     # folder with a scratch venv of the image's own Python, then run the tests on the sealed Hermes venv.
-    script = ("set -e; mkdir -p /tmp/p /tmp/home && tar xzf /w/plugin.tgz -C /tmp/p --strip-components=1 && cd /tmp/p && "
-              "export HOME=/tmp/home && /usr/local/bin/python3 -m venv /tmp/pipvenv && "
-              "/tmp/pipvenv/bin/python -m pip install -q --disable-pip-version-check --target /tmp/pt pytest==8.4.2 && "
-              "PYTHONPATH=/tmp/pt HERMES_AGENT_REPO=/opt/hermes "
+    script = ("set -e; mkdir -p /tmp/p /tmp/home /tmp/hh && tar xzf /w/plugin.tgz -C /tmp/p --strip-components=2 --wildcards '*/" + pin["SUBDIR"] + "/*' && cd /tmp/p && "
+              "export HOME=/tmp/home && if [ -x /usr/local/bin/python3 ]; then /usr/local/bin/python3 -m venv /tmp/pipvenv && "
+              "/tmp/pipvenv/bin/python -m pip install -q --disable-pip-version-check --target /tmp/pt pytest==8.4.2; "
+              # Hermes v2026.9.24 (the boxes' locked engine) has no /usr/local Python but ships uv.
+              "else UV_CACHE_DIR=/tmp/uv uv pip install -q --python /opt/hermes/.venv/bin/python --target /tmp/pt pytest==8.4.2; fi && "
+              + TEST_ENV + "PYTHONPATH=/tmp/pt HERMES_AGENT_REPO=/opt/hermes "
               "/opt/hermes/.venv/bin/python -m pytest -q -p no:cacheprovider "
-              + " ".join(f"--deselect {t}" for t in CORE_INTERNAL_TESTS) + " 2>&1 | tail -1")
+              + " ".join(f"--deselect {t}" for t in (CORE_0_21_TESTS if ":v2026.9.24@" in official_image() else ()))
+              + " 2>&1 | tail -1")
     out = run("docker", "run", "--rm", "--user", "1000:1000", "-v", f"{tmp}:/w:ro", "--entrypoint", "sh", HERMES, "-c",
               script, timeout=600)
     assert " passed" in out and "failed" not in out and "error" not in out, out

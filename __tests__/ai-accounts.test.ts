@@ -75,6 +75,22 @@ test("both images pin the same official Claude Code with the same integrity hash
   expect(plugin).toContain('"LICENSE":');
 });
 
+test("the DirectSDK plugin hands unoffered tool names to Hermes (0.3.3+, wizard-app-store#92)", () => {
+  const plugin = readFileSync("images/hermes-agent/fetch-directsdk-plugin.py", "utf8");
+  expect(plugin).toContain('REPO = "NousResearch/hermes-official-plugins"');
+  const [major = 0, minor = 0, patch = 0] = plugin.match(/^VERSION = "(\d+)\.(\d+)\.(\d+)"$/m)!.slice(1).map(Number);
+  expect(major * 1e6 + minor * 1e3 + patch).toBeGreaterThanOrEqual(3003);
+  // Every module the plugin imports ships, or Hermes cannot load it.
+  for (const f of ["concurrency.py", "extra_usage.py", "process_tree.py", "admission.py"]) expect(plugin).toContain(`"${f}":`);
+});
+
+test("the boxes' engine (locked Hermes v2026.9.24) is rebuilt and published with the same plugin", () => {
+  const text = readFileSync(".github/workflows/ai-accounts.yml", "utf8");
+  expect(text).toContain("BOX_HERMES_BASE: nousresearch/hermes-agent:v2026.9.24@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7");
+  expect(text).toMatch(/BOX_HERMES_TAG: v2026\.9\.24-wizard\d+/);
+  expect(text).toContain("build-args: BASE_IMAGE=${{ env.BOX_HERMES_BASE }}");
+});
+
 test("the server never reads or serves credential files", () => {
   const server = readFileSync(`images/${id}/server.py`, "utf8");
   expect(server).not.toContain(".credentials.json");
