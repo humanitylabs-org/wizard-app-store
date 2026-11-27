@@ -1,4 +1,4 @@
-"""One-year Claude sign-in (humanitylabs-org/claude-connection#27; switch `one-year-signin`, off by default).
+"""One-year Claude sign-in (humanitylabs-org/claude-connection#27; on for everyone, approved at show-and-tell).
 
 Claude Code's `setup-token` signs a Claude subscription in for one year instead of the about four weeks of
 `claude auth login`. It uses the same browser sign-in and paste-the-code step, but it only prints the new credential

@@ -32,12 +32,7 @@ import time as _sw_time
 from pathlib import Path as _SwPath
 from urllib.parse import urlsplit as _sw_urlsplit
 
-SWITCHES = [
-    {'id': 'one-year-signin', 'name': 'One-year Claude sign-in',
-     'description': 'Connect signs Claude in for one year (Claude Code setup-token) instead of about four weeks. '
-                    'Usage meters are not available for that sign-in.',
-     'default': False, 'issues': ['humanitylabs-org/claude-connection#27']},
-]
+SWITCHES = []
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
 _SW_LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}
@@ -227,3 +222,16 @@ def wizard_switches_install(handler_cls):
         setattr(handler_cls, method, wrapped)
     return handler_cls
 # ---- end wizard.app-switches/1 ---------------------------------------------------------------------------------------
+
+
+def forget_dropped():
+    """Clear what the box still keeps for switches that are gone (`one-year-signin`: on for everyone since
+    claude-connection#27), so a stale saved value can never come back. No saved file: nothing is written."""
+    ids, saved = {s['id'] for s in SWITCHES}, _sw_saved()
+    stale = [k for k in saved if k not in ids and k not in ('_tried', '_votes')]
+    stale += [k for m in ('_tried', '_votes') for k in _sw_map(saved, m) if k not in ids]
+    if stale:
+        try:
+            _sw_set(None)  # keeps only the switches still listed
+        except OSError:
+            pass

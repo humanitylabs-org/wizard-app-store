@@ -169,8 +169,8 @@ function renderAccount(a, i, all) {
     if (soon) {
       const again = el('a', 'link', 'Reconnect'); again.href = 'claude-code/?connect=1'; again.dataset.legacySignin = 'renew';
       li.append(again);
-    } else if (snapshot?.oneYearSignin === true && a.signinKind !== 'one_year') {
-      // Switch one-year-signin on: this four-week sign-in can be swapped for a one-year one in one tap.
+    } else if (a.signinKind !== 'one_year') {
+      // A four-week sign-in (from before claude-connection#27) can be swapped for a one-year one in one tap.
       const year = el('a', 'link', 'Sign in for a year'); year.href = 'claude-code/?connect=1&year=1'; year.dataset.legacySignin = 'year';
       li.append(year);
     }

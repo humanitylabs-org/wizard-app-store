@@ -1,10 +1,11 @@
-"""Claude: the one-year sign-in (Claude Code setup-token) behind the `one-year-signin` switch.
+"""Claude: Connect signs in for one year (Claude Code setup-token), on for everyone.
 
 humanitylabs-org/claude-connection#27. Loopback only: a temp shared login folder, a stand-in Claude Code CLI that
 behaves like the real one's sign-in screens (checked against Claude Code 2.1.296: link, "Paste code here if prompted",
 the one-year credential on screen after a good code, "OAuth error ... Press Enter to retry" after a bad one, and no
 exit in either case), a stand-in Anthropic usage server and a fake Hermes inventory. No provider access.
-The one-year credential must never appear in any answer, and with the switch off nothing may change.
+The one-year credential must never appear in any answer. Its `one-year-signin` switch is gone (approved at
+show-and-tell): none is listed, and a value a box still keeps for it is cleared.
 """
 import importlib.util
 import json
@@ -35,6 +36,7 @@ with patch.dict(os.environ, {'WIZARD_POOL_PROVIDER': 'claude'}):
     pool = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pool)
 import one_year  # noqa: E402
+import switches  # noqa: E402
 import usage  # noqa: E402
 
 YEAR_CREDENTIAL = 'sk-ant-oat01-' + 'Q' * 93 + 'AA'
@@ -67,14 +69,8 @@ FAKE = textwrap.dedent('''\
             out.write("OAuth\\x1b[1Cerror:\\x1b[1CRequest\\x1b[1Cfailed\\x1b[1Cwith\\x1b[1Cstatus\\x1b[1Ccode\\x1b[1C400\\r\\nPress\\x1b[1CEnter\\x1b[1Cto\\x1b[1Cretry.\\r\\n")
         out.flush()
         time.sleep(120)
-    elif argv[:2] == ["auth", "login"]:
-        out.write("If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&scope=user%3Aprofile\\r\\n")
-        out.write("Paste code here if prompted > ")
-        out.flush()
-        code = sys.stdin.readline().strip()
-        out.write("\\r\\nLogin successful.\\r\\n" if code == "good#state" else "\\r\\nLogin failed: bad code\\r\\n")
-        out.flush()
-        sys.exit(0 if code == "good#state" else 1)
+    else:
+        sys.exit("unexpected: " + " ".join(argv))
     ''').replace('@PY@', sys.executable).replace('@CREDENTIAL@', YEAR_CREDENTIAL)
 
 
@@ -160,11 +156,6 @@ class OneYearSignin(unittest.TestCase):
         self.assertEqual(code, 200, data)
         return data
 
-    def switch(self, on):
-        code, data = self.call('/api/switches', {'id': 'one-year-signin', 'on': on}, OWNER)
-        self.assertEqual(code, 200, data)
-        return data
-
     def four_week(self, ends_in_s=20 * DAY + 600):
         oauth = {'accessToken': TOKEN, 'refreshToken': REFRESH, 'expiresAt': (time.time() + 8 * 3600) * 1000,
                  'refreshTokenExpiresAt': (time.time() + ends_in_s) * 1000, 'scopes': ['user:profile', 'user:inference'],
@@ -184,35 +175,24 @@ class OneYearSignin(unittest.TestCase):
     def runs(self):
         return [json.loads(l) for l in self.log.read_text().splitlines()] if self.log.exists() else []
 
-    # ---- the switch ----
-    def test_switch_listed_off_by_default_owner_only_and_kept_on_the_box(self):
+    # ---- the switch is gone ----
+    def test_no_switch_listed_and_a_kept_value_is_cleared(self):
         doc = self.get('/api/switches', OWNER)
-        self.assertEqual(doc['contract'], 'wizard.app-switches/1')
-        row = next(s for s in doc['switches'] if s['id'] == 'one-year-signin')
-        self.assertEqual((row['on'], row['default']), (False, False))
-        self.assertEqual(row['issues'], ['humanitylabs-org/claude-connection#27'])
-        self.assertEqual(self.call('/api/switches', headers={'X-Wizard-Switch': '1'})[0], 403, 'a box-local caller is not the owner')
-        self.assertEqual(self.call('/api/switches', {'id': 'one-year-signin', 'on': True}, {**OWNER, 'Tailscale-User-Login': ''})[0], 403)
-        self.assertEqual(self.call('/api/switches', {'id': 'nope', 'on': True}, OWNER)[0], 404)
-        self.assertTrue(next(s for s in self.switch(True)['switches'] if s['id'] == 'one-year-signin')['on'])
-        self.assertTrue(json.loads(Path(STATE, 'switches.json').read_text())['one-year-signin'])
-        self.assertTrue(owner.one_year_on())
-        self.assertEqual(self.get('/claude-code/api/switches', OWNER)['switches'][0]['on'], True)
+        self.assertEqual((doc['contract'], doc['switches']), ('wizard.app-switches/1', []))
+        self.assertEqual(self.call('/api/switches', {'id': 'one-year-signin', 'on': False}, OWNER)[0], 404)
+        self.assertFalse(hasattr(owner, 'one_year_on'))
+        switches.forget_dropped()
+        self.assertFalse(Path(STATE, 'switches.json').exists(), 'nothing kept: nothing written')
+        Path(STATE, 'switches.json').write_text(json.dumps(
+            {'one-year-signin': False, '_tried': {'one-year-signin': True}, '_votes': {'one-year-signin': 'up'}}))
+        switches.forget_dropped()
+        self.assertEqual(json.loads(Path(STATE, 'switches.json').read_text()), {})
 
-    # ---- switch off: nothing changes ----
-    def test_switch_off_connect_is_the_normal_login_and_answers_are_unchanged(self):
+    # ---- a four-week sign-in from before reads as it did ----
+    def test_four_week_signin_still_reads_as_before_and_offers_the_year(self):
         self.four_week()
-        code, started = self.call('/claude-code/api/claude/connect', {})
-        self.assertEqual(code, 200, started)
-        self.assertNotIn('year', started)
-        self.assertEqual(self.runs()[-1]['argv'], ['auth', 'login', '--claudeai'])
-        self.assertEqual(self.runs()[-1]['config'], self.dir, 'the normal login signs in the shared folder itself')
-        code, done = self.call('/claude-code/api/claude/code', {'login_id': started['login_id'], 'code': 'good#state'})
-        self.assertEqual(code, 200, done)
-        self.assertNotIn('until', done)
         conn = self.get('/api/connection')
-        for key in ('signin_kind',):
-            self.assertNotIn(key, conn)
+        self.assertNotIn('signin_kind', conn)
         self.assertEqual(conn['signin_days_left'], 20)
         accounts = self.get('/api/accounts')
         self.assertNotIn('oneYearSignin', accounts)
@@ -223,17 +203,19 @@ class OneYearSignin(unittest.TestCase):
         for key in ('signin_kind', 'signin_warn_days', 'one_year_signin'):
             self.assertNotIn(key, page)
         self.assertTrue(any(h.endswith('/usage') for h in Anthropic.hits), 'a four-week sign-in still reads usage')
+        # Both pages offer the one-tap swap to a one-year sign-in for it, with no flag or switch to check.
+        pool_js = (ROOT / 'pool-static/app.js').read_text()
+        self.assertIn("} else if (a.signinKind !== 'one_year') {", pool_js)
+        self.assertNotIn('oneYearSignin', pool_js)
+        page_js = (ROOT / 'static/app.js').read_text()
+        self.assertIn('const swap = !soon && a.signin_kind !== "one_year";', page_js)
+        self.assertNotIn('one_year_signin', page_js)
 
-    # ---- switch on: Connect signs in for one year ----
-    def test_switch_on_connect_runs_the_one_year_signin_and_stores_it_in_the_shared_folder(self):
+    # ---- Connect signs in for one year ----
+    def test_connect_runs_the_one_year_signin_and_stores_it_in_the_shared_folder(self):
         self.four_week()
-        self.switch(True)
-        page = self.get('/claude-code/api/accounts')['accounts'][0]
-        self.assertTrue(page['one_year_signin'])
-        self.assertTrue(self.get('/api/accounts')['oneYearSignin'])
         code, started = self.call('/claude-code/api/claude/connect', {})
         self.assertEqual(code, 200, started)
-        self.assertTrue(started['year'])
         self.assertIn('scope=user%3Ainference', started['url'])
         run = self.runs()[-1]
         self.assertEqual(run['argv'], ['setup-token'])
@@ -272,9 +254,8 @@ class OneYearSignin(unittest.TestCase):
         self.assertEqual(self.get('/api/accounts')['signin']['warnDays'], 14)
         self.assertEqual(self.get('/api/inbox')['items'], [])
 
-    def test_switch_on_wrong_code_fails_cleanly_and_keeps_the_old_signin(self):
+    def test_wrong_code_fails_cleanly_and_keeps_the_old_signin(self):
         self.four_week()
-        self.switch(True)
         old = Path(self.dir, '.credentials.json').read_bytes()
         _, started = self.call('/claude-code/api/claude/connect', {})
         t = time.monotonic()
@@ -332,11 +313,6 @@ class OneYearSignin(unittest.TestCase):
         conn = self.get('/api/connection')
         self.assertNotIn('signin_kind', conn)
         self.assertEqual(conn['signin_days_left'], 20)
-
-    def test_one_year_signin_keeps_working_with_the_switch_off(self):
-        self.one_year(100 * DAY)
-        conn = self.get('/api/connection')
-        self.assertEqual((conn['status'], conn['signin_kind']), ('connected', 'one_year'))
 
 
 class Pieces(unittest.TestCase):
