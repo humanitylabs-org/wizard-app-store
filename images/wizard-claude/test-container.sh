@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the image, then prove the logged-out paths of the real official CLI inside it:
-# pinned version, not-connected status, a real claude sign-in URL from `claude auth login` in a pty,
+# pinned version, not-connected status, a real claude sign-in URL from `claude setup-token` (the one-year sign-in) in a pty,
 # a wrong code failing cleanly, logout and test on a logged-out dir, and no credential surface.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -91,7 +91,7 @@ c2 = json.loads(req("/api/claude/connect", {})[1]); assert c2["ok"]
 assert json.loads(req("/api/claude/cancel", {})[1])["ok"]
 time.sleep(0.5)
 procs = [pathlib.Path(f"/proc/{d}/cmdline").read_bytes() for d in os.listdir("/proc") if d.isdigit() and os.path.exists(f"/proc/{d}/cmdline")]
-assert not any(b"auth\x00login" in x for x in procs), "login process left running"
+assert not any(b"\x00setup-token" in x for x in procs), "login process left running"
 # A fake sign-in (usage URL points at a closed loopback port): the token never reaches any response.
 fake = "sk-ant-oat01-CONTAINER-TEST-TOKEN"
 pathlib.Path("/claude/.credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": fake,

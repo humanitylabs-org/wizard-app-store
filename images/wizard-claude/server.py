@@ -33,10 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inference
 
 import one_year
-import switches
 import usage
 
-VERSION = "0.2.29"
+VERSION = "0.2.30"
 APP = Path(__file__).resolve().parent
 CLAUDE = os.environ.get("WIZARD_CLAUDE_CLAUDE", "/usr/local/bin/claude")
 CLAUDE_DIR = os.environ.get("WIZARD_CLAUDE_CLAUDE_DIR", "/claude")
@@ -171,22 +170,13 @@ def with_signin(status: dict) -> dict:
     return out
 
 
-def one_year_on() -> bool:
-    """Switch `one-year-signin` (claude-connection#27, off by default): Connect signs in for one year."""
-    try:
-        return switches.switch_on("one-year-signin") is True
-    except Exception:
-        return False
-
-
 class Login:
-    """One official `claude auth login` running in a pseudo-terminal, waiting for the pasted code. year=True runs
-    Claude Code's one-year sign-in instead (one_year.py: scratch folder, and only it reads the new sign-in)."""
+    """Claude Code's one-year sign-in (claude-connection#27) running in a pseudo-terminal, waiting for the pasted
+    code (one_year.py: scratch folder, and only it reads the new sign-in)."""
 
-    def __init__(self, year: bool = False):
-        self.year = year
-        argv = [CLAUDE] + (one_year.ARGV if year else ["auth", "login", "--claudeai"])
-        env = one_year.scratch_env(claude_env(), WORK) if year else claude_env()
+    def __init__(self):
+        argv = [CLAUDE] + one_year.ARGV
+        env = one_year.scratch_env(claude_env(), WORK)
         master, slave = os.openpty()
         attrs = termios.tcgetattr(slave)
         attrs[3] &= ~termios.ECHO  # the pasted code is never echoed back into the captured output
@@ -234,7 +224,7 @@ class Login:
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             found = self.url()
-            if found and ("paste code" in self.text().lower() or (self.year and one_year.ready(self.raw()))):
+            if found and ("paste code" in self.text().lower() or one_year.ready(self.raw())):
                 return found
             if self.proc.poll() is not None:
                 return self.url()
@@ -242,27 +232,6 @@ class Login:
         return self.url()
 
     def submit(self, code: str, timeout=90) -> dict:
-        if self.year:
-            return self.submit_year(code, timeout)
-        self.code_sent = True
-        mark = len(self.text())
-        os.write(self.master, code.encode() + b"\r")
-        end = time.monotonic() + timeout
-        while time.monotonic() < end and self.proc.poll() is None:
-            time.sleep(0.25)
-        if self.proc.poll() is None:
-            self.close()
-            return {"ok": False, "message": "Claude did not answer in time. Try connecting again."}
-        tail = self.text()[mark:]
-        match = re.search(r"Login (successful[^\n]*|failed[^\n]*)", tail)
-        message = URL.sub("[link]", match.group(0).strip())[:200] if match else ""
-        ok = self.proc.returncode == 0
-        self.close()
-        if not message:
-            message = "Signed in." if ok else "Claude did not accept that code. Start again and paste the newest code."
-        return {"ok": ok, "message": message}
-
-    def submit_year(self, code: str, timeout=90) -> dict:
         """The one-year sign-in stays on its screen (and waits for Enter after a wrong code) instead of exiting, so
         the outcome is read from the screen. That screen holds the new sign-in: it is dropped right after."""
         self.code_sent = True
@@ -320,7 +289,7 @@ def connect() -> tuple[int, dict]:
     with State.lock:
         end_login()
         try:
-            login = Login(year=one_year_on())
+            login = Login()
         except OSError:
             return 500, {"ok": False, "message": "Could not start Claude Code."}
         url = login.wait_url()
@@ -328,7 +297,7 @@ def connect() -> tuple[int, dict]:
             login.close()
             return 502, {"ok": False, "message": "Claude Code did not show a sign-in link. Try again in a minute."}
         State.login, State.login_id = login, secrets.token_urlsafe(16)
-        return 200, {"ok": True, "login_id": State.login_id, "url": url, **({"year": True} if login.year else {})}
+        return 200, {"ok": True, "login_id": State.login_id, "url": url}
 
 
 def submit_code(login_id: str, code: str) -> tuple[int, dict]:
@@ -515,8 +484,6 @@ class Handler(BaseHTTPRequestHandler):
             claude = {"id": "claude-subscription", "name": "Claude subscription", "kind": "subscription",
                       "detail": "Pro or Max plan, signed in with the official Claude Code app.", **with_signin(claude_status()),
                       "signing_in": bool(login and login.alive())}
-            if one_year_on():
-                claude["one_year_signin"] = True
             return self.json(200, {"accounts": [claude], "version": VERSION})
         if path in STATIC:
             name, ctype = STATIC[path]

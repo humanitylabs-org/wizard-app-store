@@ -52,8 +52,8 @@ function render(accounts) {
       // A one-year sign-in (claude-connection#27) says until when and warns from 14 days.
       const soon = signinSoon(a);
       if (a.signin_expires_at) li.append(el("p", soon ? "state bad signin" : "state signin", signinText(a.signin_expires_at, a.signin_kind, soon) + (soon ? ": reconnect before then or your agent stops answering with it." : "")));
-      const swap = !soon && a.one_year_signin === true && a.signin_kind !== "one_year";
-      if (swap) li.append(el("p", "state signin", "One-year sign-in is on: press Reconnect to sign in for a year instead of about four weeks."));
+      const swap = !soon && a.signin_kind !== "one_year";
+      if (swap) li.append(el("p", "state signin", "Press Reconnect to sign in for a year instead of about four weeks."));
       const row = el("div", "buttons");
       if (soon || swap) row.append(button("Reconnect", connect, true));
       row.append(button("Test", test, !soon && !swap), button("Disconnect", disconnect));
@@ -99,7 +99,7 @@ async function refresh() {
   const data = await call("api/accounts");
   if (data.accounts) render(data.accounts);
   if (FOCUS && !started && !busy && (data.accounts || []).some((a) => a.status === "not_connected" || a.status === "expired" || (a.status === "connected" && signinSoon(a)) ||
-      (YEAR && a.status === "connected" && a.one_year_signin === true && a.signin_kind !== "one_year"))) {
+      (YEAR && a.status === "connected" && a.signin_kind !== "one_year"))) {
     started = true;
     connect();
   }
@@ -119,7 +119,7 @@ function connect() {
     loginId = data.login_id;
     const link = $("login-url");
     link.href = data.url;
-    link.textContent = data.year ? "Open the Claude sign-in page (one-year sign-in)" : "Open the Claude sign-in page";
+    link.textContent = "Open the Claude sign-in page (one-year sign-in)";
     $("code").value = "";
     $("login").hidden = false;
     say("");

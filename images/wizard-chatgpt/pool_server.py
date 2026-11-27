@@ -779,8 +779,6 @@ class Handler(owner.Handler):
             if PROVIDER == 'claude' and path == '/api/accounts':
                 # A Use first sign-in that is running or just ended: a page opened after signing in picks it up.
                 result['useFirst'] = use_first_latest()
-                if owner.one_year_on():
-                    result['oneYearSignin'] = True  # claude-connection#27: Connect there signs in for one year
             if path == '/api/connection':
                 result = connection(result)
             return self.send(200, result)
@@ -874,6 +872,7 @@ if PROVIDER == 'claude':
     # The app's feature switches (wizard.app-switches/1, GET/POST /api/switches; Claude only).
     import switches
     switches.wizard_switches_install(Handler)
+    switches.forget_dropped()
 
 
 class Server(ThreadingHTTPServer):
