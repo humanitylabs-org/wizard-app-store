@@ -5,10 +5,17 @@ on:
     paths: ['images/wizard-ai-accounts/**', 'images/hermes-agent/**', 'apps/wizard-ai-accounts/**', 'apps/hermes-agent/**',
             'scripts/smoke-ai-accounts.py', 'scripts/translate-video-recipe.mjs', '__tests__/ai-accounts.test.ts',
             '.github/workflows/ai-accounts.yml']
+  pull_request:
+    paths: ['images/wizard-ai-accounts/**', 'images/hermes-agent/**', 'apps/wizard-ai-accounts/**', 'apps/hermes-agent/**',
+            'scripts/smoke-ai-accounts.py', 'scripts/translate-video-recipe.mjs', '__tests__/ai-accounts.test.ts',
+            '.github/workflows/ai-accounts.yml']
   workflow_dispatch:
 permissions:
   contents: read
   packages: write
+env:
+  BOX_HERMES_BASE: nousresearch/hermes-agent:v2026.9.24@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7
+  BOX_HERMES_TAG: v2026.9.24-wizard3
 jobs:
   ai-accounts:
     runs-on: ubuntu-24.04
@@ -30,14 +37,26 @@ jobs:
         run: docker build -t wizard-hermes-agent:test images/hermes-agent
       - name: Provider discovery, plugin unit tests, two-app shared volume, /opt/data parity with the official image
         run: TMPDIR="$RUNNER_TEMP" python3 scripts/smoke-ai-accounts.py
+      # The engine App Manager boxes run (wizard-os releases/hermes-lock.json: Hermes v2026.9.24), rebuilt with the
+      # same add-ons so it gets the same plugin. Hermes itself stays as locked; only the plugin changes.
+      - name: Build Hermes Agent Wizard image on the boxes' locked Hermes (v2026.9.24)
+        run: docker build --build-arg BASE_IMAGE="$BOX_HERMES_BASE" -t wizard-hermes-agent:box-test images/hermes-agent
+      - name: Same checks on the boxes' engine
+        run: |
+          docker rmi -f wizard-hermes-agent:test
+          TMPDIR="$RUNNER_TEMP" HERMES_IMAGE=wizard-hermes-agent:box-test HERMES_OFFICIAL_IMAGE="$BOX_HERMES_BASE" python3 scripts/smoke-ai-accounts.py
       - uses: docker/setup-qemu-action@v3
+        if: github.event_name != 'pull_request'  # a pull request runs every check; only main publishes
       - uses: docker/setup-buildx-action@v3
+        if: github.event_name != 'pull_request'  # a pull request runs every check; only main publishes
       - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'  # a pull request runs every check; only main publishes
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish tested AI Accounts (amd64 and arm64)
+        if: github.event_name != 'pull_request'  # a pull request runs every check; only main publishes
         uses: docker/build-push-action@v6
         with:
           context: images/wizard-ai-accounts
@@ -46,6 +65,7 @@ jobs:
           provenance: false
           tags: ghcr.io/humanitylabs-org/wizard-ai-accounts:0.2.0
       - name: Publish tested Hermes Agent Wizard build (amd64 and arm64)
+        if: github.event_name != 'pull_request'  # a pull request runs every check; only main publishes
         uses: docker/build-push-action@v6
         with:
           context: images/hermes-agent
@@ -55,14 +75,35 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard1
+          tags: ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard2
+      - name: Publish tested Hermes Agent Wizard build on the boxes' Hermes (amd64 and arm64)
+        if: github.event_name != 'pull_request'  # a pull request runs every check; only main publishes
+        uses: docker/build-push-action@v6
+        with:
+          context: images/hermes-agent
+          build-args: BASE_IMAGE=${{ env.BOX_HERMES_BASE }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ghcr.io/humanitylabs-org/hermes-agent:${{ env.BOX_HERMES_TAG }}
       - name: Published images pass the same checks
+        if: github.event_name != 'pull_request'  # a pull request runs every check; only main publishes
         run: |
           docker pull ghcr.io/humanitylabs-org/wizard-ai-accounts:0.2.0
           SKIP_BUILD=1 AI_ACCOUNTS_IMAGE=ghcr.io/humanitylabs-org/wizard-ai-accounts:0.2.0 sh images/wizard-ai-accounts/test-container.sh
-          docker pull ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard1
-          docker run --rm --entrypoint sh ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard1 -c \
-            'claude --version | grep -q "^2.1.296 " && test -f /opt/hermes/plugins/model-providers/claude-subscription-directsdk-experimental/plugin.yaml'
-          docker run --rm --user 1000:1000 --entrypoint sh ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard1 -c \
+          P=/opt/hermes/plugins/model-providers/claude-subscription-directsdk-experimental/plugin.yaml
+          for img in ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard2 ghcr.io/humanitylabs-org/hermes-agent:$BOX_HERMES_TAG; do
+            docker pull "$img"
+            docker run --rm --entrypoint sh "$img" -c \
+              "claude --version | grep -q '^2.1.296 ' && grep -qx 'version: 0.4.1' $P"
+            docker buildx imagetools inspect "$img" | grep -q 'linux/arm64'
+          done
+          docker run --rm --user 1000:1000 --entrypoint sh ghcr.io/humanitylabs-org/hermes-agent:v0.23.3-wizard2 -c \
             'test -r /opt/hermes/install-stamp.json && hermes --version | grep -q "v0.23.3"'
+          docker run --rm --user 1000:1000 --entrypoint sh ghcr.io/humanitylabs-org/hermes-agent:$BOX_HERMES_TAG -c \
+            'hermes --version | grep -q "v0.21.5 (2026.9.24)"'
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/hermes-agent:$BOX_HERMES_TAG
 # Publishes only after store, container, provider, shared-volume and data-parity checks pass.
