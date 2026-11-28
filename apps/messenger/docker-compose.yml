@@ -1,6 +1,6 @@
 services:
   unified-init:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-6c185da6716e7e085ad3d2524b08753aa9ec665d@sha256:f7ce9b0c26b69f8f0d6e802c468a4df7a06bfb2e1fb60232210709f49eb6d880}
     user: 0:0
     entrypoint:
       - python3
@@ -28,7 +28,7 @@ services:
     labels:
       runtipi.managed: "false"
   messenger:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-6c185da6716e7e085ad3d2524b08753aa9ec665d@sha256:f7ce9b0c26b69f8f0d6e802c468a4df7a06bfb2e1fb60232210709f49eb6d880}
     read_only: true
     cap_drop:
       - ALL
@@ -49,7 +49,7 @@ services:
       MESSENGER_PORT: "8765"
       MESSENGER_AGENT_INBOX_TOKEN: ${MESSENGER_AGENT_INBOX_TOKEN:-}
       MESSENGER_AGENT_SERVICE: ${MESSENGER_AGENT_SERVICE:-http://wizard-agent-service:8787}
-      MESSENGER_VERSION: 0.2.0-unified.16.143
+      MESSENGER_VERSION: 0.2.0-unified.16.149
       UNIFIED_ENABLED: "1"
       CONNECTORS_ENABLED: "1"
       MESSENGER_CONNECTOR_SENDER_MODE: local-owner
@@ -200,7 +200,7 @@ services:
       WIZARD_GRANTS_FILE: /wizard/grants.json
       WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
   call-auth:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-6c185da6716e7e085ad3d2524b08753aa9ec665d@sha256:f7ce9b0c26b69f8f0d6e802c468a4df7a06bfb2e1fb60232210709f49eb6d880}
     user: 1000:1000
     entrypoint:
       - /bin/sh
@@ -240,7 +240,7 @@ services:
     stop_grace_period: 10s
     restart: unless-stopped
   call-tunnel:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-6c185da6716e7e085ad3d2524b08753aa9ec665d@sha256:f7ce9b0c26b69f8f0d6e802c468a4df7a06bfb2e1fb60232210709f49eb6d880}
     user: 1000:1000
     entrypoint:
       - /bin/sh
@@ -312,7 +312,7 @@ services:
       WIZARD_GRANTS_FILE: /wizard/grants.json
       WIZARD_CONNECTION_REQUESTS: /wizard-requests/connections.json
   translation:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-6c185da6716e7e085ad3d2524b08753aa9ec665d@sha256:f7ce9b0c26b69f8f0d6e802c468a4df7a06bfb2e1fb60232210709f49eb6d880}
     entrypoint:
       - python3
       - /app/translation.py
@@ -352,7 +352,7 @@ services:
       retries: 3
     restart: unless-stopped
   connector-init:
-    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-fd90ff849e927b7d7b9d5789a07d7046993db576@sha256:6df651f6304f865aef33f3b6d1c09caa4cfc5b0e929c3629a53167c414ae7246}
+    image: ${MESSENGER_IMAGE:-ghcr.io/humanitylabs-org/wizard-messenger:sha-6c185da6716e7e085ad3d2524b08753aa9ec665d@sha256:f7ce9b0c26b69f8f0d6e802c468a4df7a06bfb2e1fb60232210709f49eb6d880}
     user: 0:0
     entrypoint:
       - python3

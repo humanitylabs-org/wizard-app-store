@@ -6,19 +6,19 @@
     "commit": "63df40f03ebbb80040932328835be596f7974c6a"
   },
   "release": {
-    "version": "0.3.466",
+    "version": "0.3.471",
     "default_apps": [
       {
         "id": "wizard-ux",
         "repo": "humanitylabs-org/wizard-ux",
-        "commit": "bd02301349ddfb7b7f181c4b4c520d2a991f5f35",
-        "image": "ghcr.io/humanitylabs-org/wizard-ux@sha256:fab3d4e04774757785ea74b861fca5634755e6450fa28f9d4142fa07a55c92b2"
+        "commit": "45c110ea947319629f19722e3d241478ce4ed898",
+        "image": "ghcr.io/humanitylabs-org/wizard-ux@sha256:1610eac17fb308ce29d4ea0db33035c0398406101c88bdad5464dc2cdade66d0"
       },
       {
         "id": "wizard-agent-service",
         "repo": "humanitylabs-org/wizard-agent-service",
-        "commit": "d36b371fd883c68877ea5ff5db425f282208027f",
-        "image": "ghcr.io/humanitylabs-org/wizard-agent-service@sha256:0cd311b04e1a2970c8a16d8e25a8833ae24ae3b19027b0b9e08c58b308a4b4bc"
+        "commit": "62df5b53ab0527f1627e679d710a79981f1eef5b",
+        "image": "ghcr.io/humanitylabs-org/wizard-agent-service@sha256:05511969236489b22a1250ec58779029657af232478667fcdb122b43d90445b5"
       },
       {
         "id": "wizard-chatgpt",
@@ -148,9 +148,9 @@
     {
       "id": "defleur-video",
       "repo": "humanitylabs-org/defleur-video",
-      "commit": "86ee9865ae2700a2d652b06d245980197b639708",
-      "version": "0.8.0",
-      "tipi_version": 16
+      "commit": "db8ffaef54b8e17cf16360bcc222dcca75a43eb7",
+      "version": "0.10.1",
+      "tipi_version": 74
     },
     {
       "id": "feedback",
@@ -260,9 +260,9 @@
     {
       "id": "messenger",
       "repo": "humanitylabs-org/wizard-messenger",
-      "commit": "4bb9202aa96f4e81bd869ab0d1e1023a94611b92",
-      "version": "0.2.0-unified.16.143",
-      "tipi_version": 392
+      "commit": "19ad5da53d42b39a43e2773ce4544f274b8db16d",
+      "version": "0.2.0-unified.16.149",
+      "tipi_version": 404
     },
     {
       "id": "wizard-microsoft",
@@ -309,9 +309,9 @@
     {
       "id": "wizard-music",
       "repo": "humanitylabs-org/wizard-music",
-      "commit": "ce3a9f98a30320e0e6f8f338fa4387ba663a8059",
-      "version": "0.2.0-test.32",
-      "tipi_version": 32
+      "commit": "7a58852af11544636059efc896a28d4e13c8b086",
+      "version": "0.2.0-test.33",
+      "tipi_version": 105
     },
     {
       "id": "notifications",
@@ -463,9 +463,9 @@
     {
       "id": "wizard-agent-service",
       "repo": "humanitylabs-org/wizard-agent-service",
-      "commit": "d36b371fd883c68877ea5ff5db425f282208027f",
+      "commit": "62df5b53ab0527f1627e679d710a79981f1eef5b",
       "version": "0.3.0-candidate.20261012",
-      "tipi_version": 5
+      "tipi_version": 6
     },
     {
       "id": "wizard-files",
@@ -491,9 +491,9 @@
     {
       "id": "wizard-ux",
       "repo": "humanitylabs-org/wizard-ux",
-      "commit": "bd02301349ddfb7b7f181c4b4c520d2a991f5f35",
+      "commit": "45c110ea947319629f19722e3d241478ce4ed898",
       "version": "0.3.0-candidate.20261012",
-      "tipi_version": 5
+      "tipi_version": 6
     },
     {
       "id": "wizardos-tracker",

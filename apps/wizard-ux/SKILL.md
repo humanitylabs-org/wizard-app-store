@@ -134,7 +134,7 @@ Schedules: jobs the agent runs on a timer (e.g. a daily summary), with their nex
 
 ### About & updates
 About & updates: update WizardOS (Automatic or Ask me), the release channel (For everyone or For testers), versions, connection status, and Gestures & help.
-- WizardOS (server): installed version, up to date or not. Updates: Automatic installs at night, not mid-chat; Ask me waits for Install. Channel: For everyone gets releases testers used for 3 days; For testers gets every release at once and shows Try new features in Appearance. A ready update shows Install at the top of Settings.
+- WizardOS (server): installed version, up to date or not. Updates: Automatic installs at night, not mid-chat; Ask me waits for Install. Channel: For everyone gets releases testers used for 3 days; For testers gets every release at once and shows Try new features in Appearance. A ready update shows Install at the top of Settings. Inside Wizard for Mac a Wizard for Mac group follows: the Mac app's own version, up to date or not, Check for updates, a new version downloading, Update and restart once it is ready (never while recording), or Download when a release needs a new download from the website.
   - Apps: every installed app with its version and the newest, Update now, Retry, Hold, and Automatic / Ask me for app updates (Automatic checks and updates apps every hour)
   - WizardOS (server) {version}: the installed server version
   - Automatic: updates install overnight, never during a chat
@@ -161,69 +161,65 @@ Phone: things only the Android app can do: Wizard Everywhere (floating orb), sid
 
 Settings › Appearance › Try new features lists unfinished features to try, A to Z, each 'by <author>'. It only shows on the For testers channel; on For everyone these switches stay hidden and off. The same switches are also in the WizardOS Tracker app (Try it). Choices follow the owner to every device.
 
-- **Add an app: search the App Store too**: Add an app's search also finds App Store apps.
-- **Agent access under the browser boundary**: Connected accounts' Agent access, boundary on.
 - **Archive on top**: Archive is the first section of the Chats list in both By day and By status, so switching layouts never moves it.
-- **Ask before sharing feature counts**: Shared only after you say Share.
 - **Automatic chat tags**: Chats are tagged from what they are about; a channel's What goes here… edits its list.
-- **Backup health in Resources**: Resources shows your backup's health.
 - **Bottom app bar on desktop**: Apps bar at the bottom on any width.
 - **Buttons that tick things off in apps**: Reply buttons that tick something off in an app (a checklist step) with no agent reply; a failure shows Retry.
 - **Calm offline card**: The can't-reach-your-Wizard card shows one dotted path (Internet · Tailscale · Wizard), one short next step and a small Check again with the automatic re-check time.
 - **Catch me up clears Sent**: Catch me up clears finished Sent chats, any age.
-- **Channels: an AI-picked emoji for new channels**: New channels with no emoji get one picked by your Wizard's fast model.
 - **Chat replies as Chats notifications**: Android app: your agent's chat replies reach the phone as Notifications items under Chats; tap opens the chat.
-- **Five-choice first chat**: Five picks, then a first win.
-- **Get set up list in Setup**: Setup lists optional accounts to connect.
-- **Icons on the attach menu**: Android app: the + menu in a chat (and the orb's Attach) shows icons before Photo or video, Camera and File, on bigger rows. (Android app only).
-- **Inbox: pin threads to the top**: Pin threads on top.
 - **Install apps your agent builds**: Apps I build install with one tap.
-- **Install sheet recommends private AI**: Installing a personal-data app suggests private AI.
-- **Instant home-screen apps**: Android: pinned app icons open at once on their last screen.
 - **Instant phone notifications**: Android app, with Phone notifications per app on: app notifications reach the phone within seconds, even locked (one Tailscale connection, no Google).
-- **Location for Maps**: Only apps whose wizard.md asks for location (today Maps) may use it, after your browser's or phone's own yes; others stay blocked.
 - **Machines on Home**: Home shows a slim strip (Wizard, AI fuel, chats, backup, network); Settings › System holds your network, AI, security and storage.
 - **New chat quick links**: A new chat shows Catch me up, What's waiting on me and Plan my day above the message box; one tap sends it.
 - **Now playing**: While an app plays audio or video, small moving bars sit on that app's icon in the AI apps view (the desktop apps column; the phone Home dock and grid); click or tap them to pause without opening the app. Option+P pauses or plays what played last on the desktop. Nothing shows while nothing plays.
-- **One UI icon count**: Android: Messenger icon count shows the exact number in a One UI-style corner badge.
 - **One-tap Snooze · bottom of Ready**: Snooze is one tap and the lowest priority: the thread waits at the bottom of Ready, below approvals, until you restore or reply.
-- **Phone Apps tile: Favorites panel and quick switcher**: On the phone, tapping Apps opens a slim Favorites panel (search, Favorites, Recent with an x to take an app off) and holding Apps shows nine big bubbles of your recent apps: slide onto one and let go. With an app in front, swipe the bar sideways to step through Recent. (phone only).
 - **Phone media player for Music and Podcasts**: Android and iPhone: Music and Podcasts play through the phone's media player (lock screen, Control Center, headset buttons), and keep playing locked.
 - **Phone recovery mode**: Android: a frozen start reopens in recovery mode.
 - **Private first setup**: New installs start private: Welcome leads with Tinfoil; Claude and ChatGPT are optional extras.
-- **Private routing**: Orb opens the named agent's thread; a chip moves it.
 - **Repair the agent's Wizard connection**: If the agent's app tools fail (unauthorized), `wizard link` restores the box's token; `wizard doctor` checks it.
-- **Result reader**: A private model files each finished background task.
 - **Send and go**: On desktop, sending opens a fresh chat.
 - **Share feature counts**: Sends features you tried and your thumbs, plus a random box id.
-- **Share to people in any window**: Share's People row shows Messenger's recent chats in every window.
 - **Short answer first**: A long agent reply shows only its one-line plain answer; tap it for the full reply. Choose whether replies start collapsed and how long the short answer is. Where: Settings › Appearance › Try new features › Short answer first; its options show under it when on.
-- **Shorter app updates**: App updates stop an app once.
 - **Side button opens the Agent chat**: Android app: the side button opens Messenger's Agent chat for a note instead of a new Wizard chat.
 - **Skins are look only**: Skins become a look only: only feature switches decide what runs. Your skin's own choices come back when you switch this off.
 - **Smart inbox: only what needs you**: Inbox: only what blocks you.
-- **Tap to answer in replies**: Tap-to-answer buttons in agent replies.
 - **Tell the team about failed updates**: When an app or WizardOS update fails on this box, the App Manager files a bug for the team (or adds to the open one) with the box, versions, failing step and error, using this box's GitHub login. Your notification then says the team was told.
 - **Why a reply failed**: When a reply fails and Wizard knows why (subscription ended, usage limit, signed out, network), Chats > Errors and the thread say so plainly, with Choose another model first when Retry can't work.
-- **Wizard for Mac in About & updates**: Wizard for Mac: About & updates gets a Wizard for Mac group: its version, up to date or not, Check for updates, Update and restart, Download. (Wizard for Mac only).
 
 Switches that are ordinary settings or views, not tester switches:
 - **Notifications in Chats**: Chats is the inbox: Notifications’ alerts and every app with an inbox feed are yellow threads in Chats, labelled with their app; several from one app fold into one row. They open in the chat window with Open, Done, Snooze and Resolve this (the rest from that app listed under, with Done all); done ones under Archive. Where: Settings › Chats & app screens › Notifications › Notifications in Chats (on for everyone).
 - **Different shell view - AI apps**: The AI apps view: chats in a left sidebar that folds to a slim rail, the chat in a centred column, your apps in a right column; an app opens beside the chat. Where: desktop: Settings › Appearance › Shell view › AI apps (the standard desktop view; Desks is the other choice). (desktop only).
 
 No longer switches (owners and old chats may still name them):
+- **Phone Apps panel**: on for everyone: tap Apps for Favorites and Recent, hold it for nine bubbles.
+- **Pin to top**: on for everyone: pins stay first in Inbox.
+- **Get set up list in Setup**: on for everyone: Setup lists optional accounts to connect.
+- **Reply buttons**: on for everyone: a tap answers.
+- **Five-choice first chat**: on for everyone: a first chat opens with five choices to tap.
+- **Backup health in Resources**: on for everyone: Home › Resources › Health.
+- **Ask before sharing feature counts**: on for everyone: Share feature counts stays off until you tap Share on a prompt naming what is sent; it opens on your first thumb.
+- **Add an app: search the App Store too**: on for everyone, nothing to turn on: on the AI apps desktop, typing in Add an app (the Apps column's +, or ⌥A) also lists App Store apps you don't have yet under In the App Store, each with Get; picking one opens its App Store page.
+- **Result reader**: on for everyone, nothing to turn on: a private model reads how each finished background task ended and files it in the inbox (waiting on you, a result, or a quiet note); the agent's status line is only a hint.
+- **Install sheet recommends private AI**: on for everyone, nothing to turn on: installing an app that holds personal data on a Wizard with no private agent shows a Private AI recommended card with Set up private AI, Use Claude (your standard AI) for now and Why it matters.
+- **Agent access under the browser boundary**: on for everyone, nothing to turn on: with the browser boundary on, Connected accounts' Agent access screen shows which agents may use each account app, and a tap there changes it.
 - **Channels in Chats**: on for everyone now, nothing to turn on: open Chats and use the tabs at the bottom: Inbox (what needs you), Tags (your channels) and Sent. Tags lists your Spaces one per line, plus General; open one to see its chats as posts with a reply line.
 - **Thread tracker**: retired: Needs you now shows in the thread itself, on the reply that needs the owner (with Mark done), and in Inbox; Reply works on any message.
 - **Stop write loops**: on for everyone, nothing to turn on: an identical save within 10 s is not resent, and over 20 saves a minute to one place pauses.
 - **Apps in Updates**: on for everyone: Settings › About & updates › Apps.
+- **Shorter app updates**: on for everyone, nothing to turn on: an app update stops the app once, for seconds.
+- **Wizard for Mac in About & updates**: on for everyone, nothing to turn on: inside Wizard for Mac, Settings › About & updates shows a Wizard for Mac group under WizardOS.
 - **Reply to Telegram and Slack chats**: on for everyone: reply in Chats to a chat started on Telegram or Slack; it goes through that app's own connection and shows there too.
 - **Models from your connectors**: removed: the model menu in Chats lists the models of every AI connection you connected.
+- **One UI icon count**: on for everyone, nothing to turn on: in the Android app, the Messenger home-screen icon, its widget and the Unread notification show the exact unread count (up to 999, then 999+) in a One UI-style orange-red badge at the icon's top-right corner.
+- **Instant home-screen apps**: on for everyone: Android home-screen app icons open at once on their last screen, without Connecting.
 
 ## How do I…
 
 - **Turn on a new feature (or get them first)?** Settings › About & updates › Channel › For testers (if not already), then Settings › Appearance › Try new features › the feature's switch.
 - **Turn on Channels?** Nothing to turn on any more: open Chats and tap Tags in the tabs at the bottom (Inbox · Tags · Sent); your channels and General are listed there. (A box whose Agent Service has no Sent log shows Channels / Activity tabs at the top instead.)
 - **Make Wizard update automatically?** Settings › About & updates › Updates › Automatic (installs overnight, never during a chat). For apps: Settings › About & updates › Apps › Automatic (checks and updates apps every hour).
+- **Is my Mac app (Wizard for Mac) up to date?** Inside Wizard for Mac: Settings › About & updates › Wizard for Mac shows its version and Up to date, or the new version downloading; Check for updates looks now, Update and restart installs a ready one, Download gets a release that needs a new download. Not shown in a browser or on the phone.
 - **Update now?** When an update is ready, the card at the top of Settings shows Install (or Install now); tap it. 'Interface updated · Reload' just reloads the screen.
 - **Use Wizard on my phone?** Settings › Phones & devices: scan the QR code with the Wizard phone app (needs Tailscale; the page walks you through it).
 - **Change the look?** Settings › Appearance › Skin and Colors; + New skin to make your own.

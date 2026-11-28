@@ -30,12 +30,28 @@ this full edit, in James' house style, with no style questions.
   words, the spoken word green only while it is spoken, black stroke and shadow, no boxes. Chunks break at sentence ends, real
   pauses and long words. Mark ONE key term per chunk in yellow by listing its edited-timeline second in
   `plan.caption_emphasis` (the claim word: the number, the named idea, the contrast) - a few per minute, not every chunk.
+- **Names spelled right** (only when the owner's DeFleur Video switch "Caption spellings for names" is on; otherwise the app
+  refuses these arguments). Read the transcript for misheard names before rendering. Pass the show's and the project's names to
+  `start_edit(vocabulary=[...])` so the recogniser expects them, and fix any still wrong with
+  `caption_spellings: {"pug wudgies": "Pukwudgies", "novair|nover": "Novaire"}` in `apply_cuts` or `render_final` options
+  ('|' = alternatives; case and punctuation are ignored; it may join words split across caption chunks). Check
+  `captions.spellings` in the render report: `unmatched` patterns were not heard anywhere.
 - **Visuals are full-frame storytelling, not a dashboard.** Each beat owns the whole 1080x1920 canvas (full-bleed background,
   illustration or diagram scaled to fill), then cuts back to the speaker full-frame. Never shrink the speaker into a corner tile or
   park one split-screen layout over most of the video. Speaker-only stretches between beats are part of the rhythm.
 - **Captions stay on for the whole video**, beats included. Every beat uses `caption_treatment: 'show'` and `caption_suppress`
   stays empty; the app refuses plans that switch captions off. Graphics carry labels, numbers and diagrams in big type
   (labels >= 44 px, headline >= 72 px at 1080 wide), not a second copy of the spoken sentence.
+
+## Editing styles (style packs)
+
+James' house style is the default and needs nothing. A Short can also be made in another editing style (`capabilities.styles`,
+`workflow_guide(style=<id>)`): Clips picks it when it starts the edit (`start_edit(..., style=<id>)`), and the project keeps it.
+When `start_edit`'s result has `style_guide`, that style's `STYLE.md` and the rules it replaces (`style_rules`) win over the house
+text wherever they differ: follow its approval line (for example title and tagline with alternates, and the image plan, shown with
+the cuts in the ONE approval question), its insert pacing (checked by `submit_motion`), and pass the approved slot text in
+`render_final(project_id, {'motion': true, 'slots': {...}})`. A window-layout style needs no `capture_motion`: the app draws its
+window, image box, text layers and captions itself.
 
 ## 0. Agent check (before anything else)
 
